@@ -5,7 +5,30 @@ namespace Flagon;
 /// <summary>Flagon configuration, supplied via <c>services.AddFlagon(opts =&gt; ...)</c>.</summary>
 public sealed class FlagonOptions
 {
+    private TimeSpan _refreshInterval = TimeSpan.FromSeconds(10);
+
     internal Func<IServiceProvider, IFlagStore>? StoreFactory { get; private set; }
+
+    /// <summary>
+    /// How often the background refresher polls the store's change version (default 10 seconds). The full flag set is
+    /// reloaded only when the version has changed, so changes made by any app sharing the store are seen within one interval.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
+    public TimeSpan RefreshInterval
+    {
+        get => _refreshInterval;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
+            _refreshInterval = value;
+        }
+    }
+
+    /// <summary>
+    /// When true, host startup fails if the initial flag load from the store fails. When false (the default) the app
+    /// starts with an empty snapshot (code defaults apply) and keeps retrying every <see cref="RefreshInterval"/>.
+    /// </summary>
+    public bool FailFastOnStartup { get; set; }
 
     /// <summary>
     /// Uses the store built by <paramref name="factory"/>. Storage packages wrap this in their own extension

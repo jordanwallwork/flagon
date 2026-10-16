@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using Flagon.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace Flagon.Internal;
 
@@ -20,34 +21,94 @@ internal sealed class FlagSnapshot
     public FrozenDictionary<string, FlagRecord> Flags { get; }
 }
 
-/// <summary>Owns the current <see cref="FlagSnapshot"/> and reloads it from the store.</summary>
-internal sealed class FlagSnapshotManager(IFlagStore store)
+/// <summary>
+/// Owns the current <see cref="FlagSnapshot"/>, reloads it from the store and tracks its freshness.
+/// A failed refresh leaves the last-known-good snapshot in place.
+/// </summary>
+internal sealed partial class FlagSnapshotManager(
+    IFlagStore store,
+    FlagonOptions options,
+    TimeProvider time,
+    ILogger<FlagSnapshotManager> logger) : IFlagonSnapshotStatus
 {
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private volatile FlagSnapshot _current = FlagSnapshot.Empty;
+    private volatile FlagonSnapshotStatus _status = new(
+        Version: 0, IsLoaded: false, IsStoreReachable: false, LastRefreshedAt: null, LastAttemptAt: null,
+        ConsecutiveFailures: 0, LastError: null, RefreshInterval: options.RefreshInterval);
 
     public FlagSnapshot Current => _current;
 
-    /// <summary>Reloads all flags if the store's change version moved past the current snapshot's.</summary>
+    FlagonSnapshotStatus IFlagonSnapshotStatus.Current => _status;
+
+    /// <summary>
+    /// Reloads all flags if the store's change version moved past the current snapshot's.
+    /// On failure the snapshot is kept, the failure is recorded and logged, and the exception is rethrown.
+    /// </summary>
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var version = await store.GetChangeVersionAsync(cancellationToken).ConfigureAwait(false);
-            if (version == _current.Version && version != 0)
+            try
             {
-                return;
+                await ReloadIfChangedAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            {
+                var failures = _status.ConsecutiveFailures + 1;
+                _status = _status with
+                {
+                    IsStoreReachable = false,
+                    LastAttemptAt = time.GetUtcNow(),
+                    ConsecutiveFailures = failures,
+                    LastError = ex,
+                };
+                LogRefreshFailed(logger, ex, failures, _current.Version);
+                throw;
             }
 
-            var flags = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
-            // Stamp with the version read *before* loading: a write racing the load then just causes one extra reload,
-            // whereas stamping with the highest loaded version could skip a lower-numbered write that commits late.
-            _current = new FlagSnapshot(version, flags.ToFrozenDictionary(f => f.Key, StringComparer.Ordinal));
+            var previous = _status;
+            _status = previous with
+            {
+                Version = _current.Version,
+                IsLoaded = true,
+                IsStoreReachable = true,
+                LastRefreshedAt = time.GetUtcNow(),
+                LastAttemptAt = time.GetUtcNow(),
+                ConsecutiveFailures = 0,
+                LastError = null,
+            };
+            if (previous.ConsecutiveFailures > 0)
+            {
+                LogRefreshRecovered(logger, previous.ConsecutiveFailures, _current.Version);
+            }
         }
         finally
         {
             _refreshGate.Release();
         }
     }
+
+    private async Task ReloadIfChangedAsync(CancellationToken cancellationToken)
+    {
+        var version = await store.GetChangeVersionAsync(cancellationToken).ConfigureAwait(false);
+        if (version == _current.Version && _status.IsLoaded)
+        {
+            return;
+        }
+
+        var flags = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
+        // Stamp with the version read *before* loading: a write racing the load then just causes one extra reload,
+        // whereas stamping with the highest loaded version could skip a lower-numbered write that commits late.
+        _current = new FlagSnapshot(version, flags.ToFrozenDictionary(f => f.Key, StringComparer.Ordinal));
+    }
+
+    [LoggerMessage(EventId = 1101, Level = LogLevel.Warning,
+        Message = "Flagon could not refresh flags from the store ({ConsecutiveFailures} consecutive failure(s)); still serving the last-known-good snapshot (version {SnapshotVersion}).")]
+    private static partial void LogRefreshFailed(ILogger logger, Exception exception, int consecutiveFailures, long snapshotVersion);
+
+    [LoggerMessage(EventId = 1102, Level = LogLevel.Information,
+        Message = "Flagon reached the flag store again after {ConsecutiveFailures} failed refresh(es); snapshot is at version {SnapshotVersion}.")]
+    private static partial void LogRefreshRecovered(ILogger logger, int consecutiveFailures, long snapshotVersion);
 }
