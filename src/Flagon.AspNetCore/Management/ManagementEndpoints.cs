@@ -20,8 +20,12 @@ internal static class ManagementEndpoints
         var enabled = ParseBool(query, "enabled");
         var archived = ParseBool(query, "archived");
 
-        var flags = (await admin.ListAsync(http.RequestAborted).ConfigureAwait(false))
-            .Select(FlagResponse.From)
+        var records = await admin.ListAsync(http.RequestAborted).ConfigureAwait(false);
+        var usage = (await admin.ListUsageAsync(http.RequestAborted).ConfigureAwait(false))
+            .ToDictionary(u => u.Key, StringComparer.Ordinal);
+
+        var flags = records
+            .Select(r => FlagResponse.From(r, usage.GetValueOrDefault(r.Key)))
             .Where(f => text is null
                 || f.Key.Contains(text, StringComparison.OrdinalIgnoreCase)
                 || (f.Description?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false))
@@ -39,7 +43,7 @@ internal static class ManagementEndpoints
     {
         var record = await admin.GetAsync(key, http.RequestAborted).ConfigureAwait(false)
             ?? throw new FlagNotFoundException(key);
-        return Flag(http, record);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
 
     public static async Task<IResult> CreateAsync(HttpContext http, IFlagonAdmin admin)
@@ -53,9 +57,8 @@ internal static class ManagementEndpoints
         var record = await admin.CreateAsync(
             new CreateFlagRequest(body.Key, body.Enabled, body.Description, body.Tags), http.RequestAborted).ConfigureAwait(false);
 
-        SetETag(http, record.Version);
         var location = $"{http.Request.PathBase}{http.Request.Path.Value?.TrimEnd('/')}/{Uri.EscapeDataString(record.Key)}";
-        return Results.Created(location, FlagResponse.From(record));
+        return Results.Created(location, await ResponseAsync(http, admin, record).ConfigureAwait(false));
     }
 
     public static async Task<IResult> UpdateMetadataAsync(string key, HttpContext http, IFlagonAdmin admin)
@@ -64,7 +67,7 @@ internal static class ManagementEndpoints
         var version = ExpectedVersion(http, body!.Version);
         var record = await admin.UpdateMetadataAsync(
             key, new UpdateFlagMetadataRequest(body.Description, body.Tags), version, http.RequestAborted).ConfigureAwait(false);
-        return Flag(http, record);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
 
     public static async Task<IResult> SetEnabledAsync(string key, HttpContext http, IFlagonAdmin admin)
@@ -73,19 +76,21 @@ internal static class ManagementEndpoints
         var enabled = body!.Enabled ?? throw new FlagValidationException("'enabled' is required.");
         var version = ExpectedVersion(http, body.Version);
         var record = await admin.SetEnabledAsync(key, enabled, version, http.RequestAborted).ConfigureAwait(false);
-        return Flag(http, record);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
 
     public static async Task<IResult> ArchiveAsync(string key, HttpContext http, IFlagonAdmin admin)
     {
         var version = await VersionFromRequestAsync(http).ConfigureAwait(false);
-        return Flag(http, await admin.ArchiveAsync(key, version, http.RequestAborted).ConfigureAwait(false));
+        var record = await admin.ArchiveAsync(key, version, http.RequestAborted).ConfigureAwait(false);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
 
     public static async Task<IResult> RestoreAsync(string key, HttpContext http, IFlagonAdmin admin)
     {
         var version = await VersionFromRequestAsync(http).ConfigureAwait(false);
-        return Flag(http, await admin.RestoreAsync(key, version, http.RequestAborted).ConfigureAwait(false));
+        var record = await admin.RestoreAsync(key, version, http.RequestAborted).ConfigureAwait(false);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
 
     public static async Task<IResult> PurgeAsync(string key, HttpContext http, IFlagonAdmin admin)
@@ -105,10 +110,14 @@ internal static class ManagementEndpoints
 
     public static string FormatETag(long version) => "\"" + version.ToString(CultureInfo.InvariantCulture) + "\"";
 
-    private static IResult Flag(HttpContext http, FlagRecord record)
+    private static async Task<IResult> FlagAsync(HttpContext http, IFlagonAdmin admin, FlagRecord record) =>
+        Results.Ok(await ResponseAsync(http, admin, record).ConfigureAwait(false));
+
+    private static async Task<FlagResponse> ResponseAsync(HttpContext http, IFlagonAdmin admin, FlagRecord record)
     {
+        var usage = await admin.GetUsageAsync(record.Key, http.RequestAborted).ConfigureAwait(false);
         SetETag(http, record.Version);
-        return Results.Ok(FlagResponse.From(record));
+        return FlagResponse.From(record, usage);
     }
 
     private static void SetETag(HttpContext http, long version) => http.Response.Headers.ETag = FormatETag(version);

@@ -294,6 +294,41 @@ public class ManagementApiTests
     }
 
     [Fact]
+    public async Task Flags_include_when_each_app_last_evaluated_them_and_whether_their_code_defaults_disagree()
+    {
+        var store = new Flagon.Storage.InMemoryFlagStore();
+        await using (var setup = await FlagonTestHost.StartAsync(o => o.Store = store))
+        {
+            await setup.Admin.CreateAsync(new CreateFlagRequest("dark-mode"));
+            await setup.Admin.CreateAsync(new CreateFlagRequest("never-used"));
+        }
+
+        await using (var web = await FlagonTestHost.StartAsync(o => { o.Store = store; o.ApplicationName = "Web"; }))
+        await using (var worker = await FlagonTestHost.StartAsync(o => { o.Store = store; o.ApplicationName = "Worker"; }))
+        {
+            web.Flagon.IsEnabled("dark-mode", defaultValue: true);
+            worker.Flagon.IsEnabled("dark-mode", defaultValue: false);
+        } // disposing flushes usage
+
+        await using var host = await StartAsync(o => o.Store = store);
+        var client = host.CreateClient();
+
+        var flags = await client.GetFromJsonAsync<JsonElement>("/flagon/api/flags");
+        var listed = flags.EnumerateArray().Single(f => f.GetProperty("key").GetString() == "dark-mode").GetProperty("usage");
+        Assert.True(listed.GetProperty("hasDefaultMismatch").GetBoolean());
+        Assert.Equal(FlagonTestHost.Epoch, listed.GetProperty("lastEvaluatedAt").GetDateTimeOffset());
+        Assert.Equal(["Web", "Worker"], listed.GetProperty("applications").EnumerateArray().Select(a => a.GetProperty("applicationName").GetString()));
+        Assert.Equal([true, false], listed.GetProperty("applications").EnumerateArray().Select(a => a.GetProperty("observedDefault").GetBoolean()));
+
+        var unused = flags.EnumerateArray().Single(f => f.GetProperty("key").GetString() == "never-used").GetProperty("usage");
+        Assert.Equal(0, unused.GetProperty("applications").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, unused.GetProperty("lastEvaluatedAt").ValueKind);
+
+        var single = await client.GetFromJsonAsync<JsonElement>("/flagon/api/flags/dark-mode");
+        Assert.True(single.GetProperty("usage").GetProperty("hasDefaultMismatch").GetBoolean());
+    }
+
+    [Fact]
     public async Task The_api_can_be_mounted_at_a_custom_path()
     {
         await using var host = await FlagonTestHost.StartAsync(o => o.Endpoints = app => app.MapFlagonApi("/admin/flags-api/"));

@@ -17,11 +17,10 @@ internal sealed record FlagResponse(
     DateTimeOffset? CreatedAt,
     string? CreatedBy,
     DateTimeOffset? UpdatedAt,
-    string? UpdatedBy)
+    string? UpdatedBy,
+    FlagUsageResponse Usage)
 {
-    // Extension point for usage tracking (#11): add e.g. `IReadOnlyList<FlagUsageResponse>? Usage` here and fill it in
-    // ManagementEndpoints.ListAsync/GetAsync from IFlagonAdmin's usage read (per-app LastEvaluatedAt / ObservedDefault).
-    public static FlagResponse From(FlagRecord record)
+    public static FlagResponse From(FlagRecord record, FlagUsageReport? usage)
     {
         var document = record.Document;
         var metadata = document.Metadata;
@@ -39,9 +38,23 @@ internal sealed record FlagResponse(
             metadata.CreatedAt,
             metadata.CreatedBy,
             metadata.UpdatedAt,
-            metadata.UpdatedBy);
+            metadata.UpdatedBy,
+            FlagUsageResponse.From(usage));
     }
 }
+
+/// <summary>Where a flag is being evaluated: per application, the last evaluation and the code default supplied.</summary>
+internal sealed record FlagUsageResponse(DateTimeOffset? LastEvaluatedAt, bool HasDefaultMismatch, IReadOnlyList<FlagApplicationUsageResponse> Applications)
+{
+    public static FlagUsageResponse From(FlagUsageReport? usage) => usage is null
+        ? new FlagUsageResponse(null, false, [])
+        : new FlagUsageResponse(
+            usage.LastEvaluatedAt,
+            usage.HasDefaultMismatch,
+            usage.Applications.Select(a => new FlagApplicationUsageResponse(a.ApplicationName, a.LastEvaluatedAt, a.ObservedDefault)).ToArray());
+}
+
+internal sealed record FlagApplicationUsageResponse(string ApplicationName, DateTimeOffset LastEvaluatedAt, JsonElement? ObservedDefault);
 
 /// <summary>An audit entry as returned by the management API. Documents are flagd JSON.</summary>
 internal sealed record FlagAuditEntryResponse(

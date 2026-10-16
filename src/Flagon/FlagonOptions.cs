@@ -3,9 +3,10 @@ using Flagon.Storage;
 namespace Flagon;
 
 /// <summary>Flagon configuration, supplied via <c>services.AddFlagon(opts =&gt; ...)</c>.</summary>
-public sealed class FlagonOptions
+public sealed partial class FlagonOptions
 {
     private TimeSpan _refreshInterval = TimeSpan.FromSeconds(10);
+    private TimeSpan _usageFlushInterval = TimeSpan.FromSeconds(60);
 
     internal Func<IServiceProvider, IFlagStore>? StoreFactory { get; private set; }
 
@@ -35,6 +36,26 @@ public sealed class FlagonOptions
     /// starts with an empty snapshot (code defaults apply) and keeps retrying every <see cref="RefreshInterval"/>.
     /// </summary>
     public bool FailFastOnStartup { get; set; }
+
+    /// <summary>
+    /// When true (the default) each evaluation records, in memory, the key and the code default supplied; the aggregate is
+    /// written to the store every <see cref="UsageFlushInterval"/> and on graceful shutdown so admins can see when each app
+    /// last evaluated each flag (<see cref="IFlagonAdmin.GetUsageAsync"/>). Set false to avoid the writes entirely.
+    /// Tracking is skipped silently for read-only stores.
+    /// </summary>
+    public bool UsageTracking { get; set; } = true;
+
+    /// <summary>How often recorded usage is written to the store (default 60 seconds).</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
+    public TimeSpan UsageFlushInterval
+    {
+        get => _usageFlushInterval;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
+            _usageFlushInterval = value;
+        }
+    }
 
     /// <summary>
     /// Uses the store built by <paramref name="factory"/>. Storage packages wrap this in their own extension

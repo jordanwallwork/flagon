@@ -75,4 +75,15 @@ public interface IFlagonAdmin
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     /// <exception cref="FlagValidationException">The flag is not archived (only archived flags can be purged).</exception>
     Task PurgeAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Usage of <paramref name="key"/>: when each application last evaluated it, the code default each supplied, and
+    /// whether those defaults disagree (<see cref="FlagUsageReport.HasDefaultMismatch"/>). Empty if nothing has been recorded.
+    /// Usage is batched in each app and written every <see cref="FlagonOptions.UsageFlushInterval"/> (and on graceful
+    /// shutdown), so it lags evaluation by up to one interval.
+    /// </summary>
+    Task<FlagUsageReport> GetUsageAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>Usage of every key that has been evaluated (one report per key, ordered by key), for flag-list views.</summary>
+    Task<IReadOnlyList<FlagUsageReport>> ListUsageAsync(CancellationToken cancellationToken = default);
 }
