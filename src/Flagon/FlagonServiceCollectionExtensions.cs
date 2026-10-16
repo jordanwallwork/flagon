@@ -1,7 +1,9 @@
 using Flagon;
 using Flagon.Internal;
 using Flagon.Storage;
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -37,9 +39,28 @@ public static class FlagonServiceCollectionExtensions
         services.AddSingleton<FlagSnapshotManager>();
         services.AddSingleton<IFlagonSnapshotStatus>(sp => sp.GetRequiredService<FlagSnapshotManager>());
         services.AddSingleton<IFlagon, FlagonEvaluator>();
+        services.TryAddSingleton<IFlagonActorAccessor, AmbientFlagonActorAccessor>();
+        services.AddSingleton(sp => new FlagChangeStamper(
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IFlagonActorAccessor>(),
+            ResolveApplicationName(options, sp)));
         services.AddSingleton<IFlagonAdmin, FlagonAdmin>();
+        services.AddSingleton<FlagSeeder>();
         services.AddHostedService<FlagonHostedService>();
 
         return services;
+    }
+
+    private static string ResolveApplicationName(FlagonOptions options, IServiceProvider services)
+    {
+        if (!string.IsNullOrWhiteSpace(options.ApplicationName))
+        {
+            return options.ApplicationName;
+        }
+
+        var hostName = services.GetService<IHostEnvironment>()?.ApplicationName;
+        return !string.IsNullOrWhiteSpace(hostName)
+            ? hostName
+            : Assembly.GetEntryAssembly()?.GetName().Name ?? "unknown";
     }
 }

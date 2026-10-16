@@ -36,7 +36,7 @@ public class AutoMigrateTests
         await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
 
         Assert.False(host.Flagon.IsEnabled("ready"));
-        Assert.Contains(host.Logs.Flagon(LogLevel.Warning), e => e.EventId.Id == 1104);
+        Assert.Contains(host.Logs.Flagon(LogLevel.Warning), e => e.EventId.Id == 1105);
 
         store.IsDown = false;
         await host.AdvanceToNextRefreshAsync();
