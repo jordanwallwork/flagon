@@ -109,6 +109,23 @@ internal sealed partial class FlagonAdmin(
             }
         });
 
+    public async Task<FlagUsageReport> GetUsageAsync(string key, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var usage = await store.GetUsageAsync(key, cancellationToken).ConfigureAwait(false);
+        return FlagUsageReport.For(key, usage);
+    }
+
+    public async Task<IReadOnlyList<FlagUsageReport>> ListUsageAsync(CancellationToken cancellationToken = default)
+    {
+        var usage = await store.LoadAllUsageAsync(cancellationToken).ConfigureAwait(false);
+        return usage
+            .GroupBy(u => u.Key, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => FlagUsageReport.For(g.Key, g))
+            .ToArray();
+    }
+
     private static void ValidateTags(IReadOnlyList<string>? tags)
     {
         foreach (var tag in tags ?? [])

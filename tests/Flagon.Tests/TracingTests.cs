@@ -139,6 +139,19 @@ public sealed class TracingTests : IDisposable
     }
 
     [Fact]
+    public async Task Flushing_usage_to_the_store_is_traced()
+    {
+        var host = await FlagonTestHost.StartAsync();
+        await host.Admin.CreateAsync(new CreateFlagRequest("used", Enabled: true));
+        host.Flagon.IsEnabled("used");
+
+        await host.DisposeAsync(); // graceful shutdown flushes pending usage
+
+        var flush = Assert.Single(Named("flagon.usage_flush"));
+        Assert.Equal(1, flush.GetTagItem("flagon.usage.flags"));
+    }
+
+    [Fact]
     public async Task A_store_failure_during_an_admin_write_is_counted_as_a_store_error()
     {
         var store = OutageFlagStore.Wrap();

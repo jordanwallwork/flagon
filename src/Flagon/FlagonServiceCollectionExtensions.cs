@@ -40,6 +40,7 @@ public static class FlagonServiceCollectionExtensions
         services.AddSingleton<FlagSnapshotManager>();
         services.AddSingleton<IFlagonSnapshotStatus>(sp => sp.GetRequiredService<FlagSnapshotManager>());
         services.AddSingleton<IFlagon, FlagonEvaluator>();
+        services.TryAddSingleton<IEvaluationContextAccessor>(NullEvaluationContextAccessor.Instance);
         services.TryAddSingleton<IFlagonActorAccessor, AmbientFlagonActorAccessor>();
         services.AddSingleton(sp => new FlagChangeStamper(
             sp.GetRequiredService<TimeProvider>(),
@@ -48,6 +49,8 @@ public static class FlagonServiceCollectionExtensions
         services.AddSingleton<IFlagonAdmin, FlagonAdmin>();
         services.AddSingleton<FlagSeeder>();
         services.AddHostedService<FlagonHostedService>();
+        services.AddSingleton<UsageTracker>();
+        services.AddHostedService<UsageFlushService>();
 
         return services;
     }

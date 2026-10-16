@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Flagon.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace Flagon.Internal;
@@ -7,6 +8,7 @@ namespace Flagon.Internal;
 /// <summary>Evaluates flags against the current snapshot. No I/O.</summary>
 internal sealed partial class FlagonEvaluator(
     FlagSnapshotManager snapshots,
+    UsageTracker usage,
     FlagonInstrumentation instrumentation,
     ILogger<FlagonEvaluator> logger) : IFlagon
 {
@@ -20,6 +22,7 @@ internal sealed partial class FlagonEvaluator(
 
     public FlagEvaluationDetails<bool> GetBooleanDetails(string key, bool defaultValue = false, EvaluationContext? context = null)
     {
+        usage.Record(key, defaultValue);
         var details = Evaluate(key, defaultValue);
         instrumentation.RecordEvaluation(details);
         return details;
@@ -34,6 +37,22 @@ internal sealed partial class FlagonEvaluator(
             return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 
+        return Evaluate(key, flag, defaultValue);
+    }
+
+    public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null)
+    {
+        // Read the snapshot once so the version and the flags agree.
+        var snapshot = snapshots.Current;
+        var results = snapshot.Flags.Values
+            .OrderBy(f => f.Key, StringComparer.Ordinal)
+            .Select(f => Evaluate(f.Key, f, defaultValue: false))
+            .ToList();
+        return new FlagEvaluationSet<bool>(snapshot.Version, results);
+    }
+
+    private static FlagEvaluationDetails<bool> Evaluate(string key, FlagRecord flag, bool defaultValue)
+    {
         // An archived flag fails safe to the caller's default whatever its document says.
         if (flag.Archived)
         {
