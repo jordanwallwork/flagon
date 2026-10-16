@@ -30,6 +30,19 @@ public class SqlServerHostTests(SqlServerFixture db)
     }
 
     [Fact]
+    public async Task Flags_defined_in_code_are_seeded_into_a_freshly_migrated_schema()
+    {
+        var schema = SqlServerFixture.NewSchema();
+
+        await using var app = await FlagonTestHost.StartAsync(o => o.Flagon = f => f
+            .UseSqlServerStorage(db.ConnectionString, schema: schema)
+            .Define("new-search", defaultValue: true, description: "Search v2"));
+
+        Assert.True(app.Flagon.IsEnabled("new-search"));
+        Assert.Equal("Search v2", (await app.Store.GetAsync("new-search"))!.Document.Metadata.Description);
+    }
+
+    [Fact]
     public async Task The_connection_string_can_be_given_by_name_from_configuration()
     {
         var schema = SqlServerFixture.NewSchema();

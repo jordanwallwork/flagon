@@ -99,6 +99,21 @@ public class OpenFeatureProviderTests
     }
 
     [Fact]
+    public async Task An_archived_flag_returns_the_callers_default_with_the_archived_reason()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("old-feature", Enabled: true));
+        await host.Admin.ArchiveAsync("old-feature", created.Version);
+
+        var details = await Client(host).GetBooleanDetailsAsync("old-feature", false);
+
+        Assert.False(details.Value);
+        Assert.Null(details.Variant);
+        Assert.Equal("ARCHIVED", details.Reason);
+        Assert.Equal(ErrorType.None, details.ErrorType);
+    }
+
+    [Fact]
     public async Task A_flag_with_targeting_is_served_with_OpenFeatures_default_reason()
     {
         await using var host = await StartWithStoredFlagAsync("targeted", """

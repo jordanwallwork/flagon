@@ -3,9 +3,10 @@ using Flagon.Storage;
 namespace Flagon;
 
 /// <summary>Flagon configuration, supplied via <c>services.AddFlagon(opts =&gt; ...)</c>.</summary>
-public sealed class FlagonOptions
+public sealed partial class FlagonOptions
 {
     private TimeSpan _refreshInterval = TimeSpan.FromSeconds(10);
+    private TimeSpan _usageFlushInterval = TimeSpan.FromSeconds(60);
 
     internal Func<IServiceProvider, IFlagStore>? StoreFactory { get; private set; }
 
@@ -25,6 +26,12 @@ public sealed class FlagonOptions
     }
 
     /// <summary>
+    /// This application's name, recorded on audit entries (and usage) so changes can be traced to the app that made them.
+    /// Defaults (when null or blank) to the host's <c>IHostEnvironment.ApplicationName</c>, else the entry assembly name.
+    /// </summary>
+    public string? ApplicationName { get; set; }
+
+    /// <summary>
     /// When true, host startup fails if the initial flag load from the store fails. When false (the default) the app
     /// starts with an empty snapshot (code defaults apply) and keeps retrying every <see cref="RefreshInterval"/>.
     /// </summary>
@@ -36,6 +43,26 @@ public sealed class FlagonOptions
     /// Turn off when schema changes are applied by a DBA from the store's exported scripts.
     /// </summary>
     public bool AutoMigrate { get; set; } = true;
+
+    /// <summary>
+    /// When true (the default) each evaluation records, in memory, the key and the code default supplied; the aggregate is
+    /// written to the store every <see cref="UsageFlushInterval"/> and on graceful shutdown so admins can see when each app
+    /// last evaluated each flag (<see cref="IFlagonAdmin.GetUsageAsync"/>). Set false to avoid the writes entirely.
+    /// Tracking is skipped silently for read-only stores.
+    /// </summary>
+    public bool UsageTracking { get; set; } = true;
+
+    /// <summary>How often recorded usage is written to the store (default 60 seconds).</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
+    public TimeSpan UsageFlushInterval
+    {
+        get => _usageFlushInterval;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
+            _usageFlushInterval = value;
+        }
+    }
 
     /// <summary>
     /// Uses the store built by <paramref name="factory"/>. Storage packages wrap this in their own extension
