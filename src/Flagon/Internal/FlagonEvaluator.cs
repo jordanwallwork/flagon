@@ -5,7 +5,10 @@ using Microsoft.Extensions.Logging;
 namespace Flagon.Internal;
 
 /// <summary>Evaluates flags against the current snapshot. No I/O.</summary>
-internal sealed partial class FlagonEvaluator(FlagSnapshotManager snapshots, ILogger<FlagonEvaluator> logger) : IFlagon
+internal sealed partial class FlagonEvaluator(
+    FlagSnapshotManager snapshots,
+    FlagonInstrumentation instrumentation,
+    ILogger<FlagonEvaluator> logger) : IFlagon
 {
     private readonly ConcurrentDictionary<string, byte> _warnedMissingKeys = new(StringComparer.Ordinal);
 
@@ -16,6 +19,13 @@ internal sealed partial class FlagonEvaluator(FlagSnapshotManager snapshots, ILo
         ValueTask.FromResult(IsEnabled(key, defaultValue, context));
 
     public FlagEvaluationDetails<bool> GetBooleanDetails(string key, bool defaultValue = false, EvaluationContext? context = null)
+    {
+        var details = Evaluate(key, defaultValue);
+        instrumentation.RecordEvaluation(details);
+        return details;
+    }
+
+    private FlagEvaluationDetails<bool> Evaluate(string key, bool defaultValue)
     {
         // The MVP boolean engine does not use the context; it is accepted so call sites survive targeting arriving.
         if (key is null || !snapshots.Current.Flags.TryGetValue(key, out var flag))

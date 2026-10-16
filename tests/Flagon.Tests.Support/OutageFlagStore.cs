@@ -19,6 +19,12 @@ public class OutageFlagStore : DispatchProxy
     /// <summary>When true, every store call throws <see cref="StoreOutageException"/>.</summary>
     public bool IsDown { get; set; }
 
+    /// <summary>
+    /// When set, <see cref="IFlagStore.GetChangeVersionAsync"/> does not complete until this task does (or the call is
+    /// cancelled), simulating a hung store call: refreshes stall without failing.
+    /// </summary>
+    public Task? Hang { get; set; }
+
     /// <summary>The store as seen by Flagon (pass this to the host).</summary>
     public IFlagStore Store { get; private set; } = null!;
 
@@ -46,6 +52,12 @@ public class OutageFlagStore : DispatchProxy
             throw new StoreOutageException();
         }
 
+        if (Hang is { } hang && targetMethod.Name == nameof(IFlagStore.GetChangeVersionAsync))
+        {
+            var cancellationToken = args?.OfType<CancellationToken>().FirstOrDefault() ?? default;
+            return new ValueTask<long>(HangThenGetChangeVersionAsync(hang, cancellationToken));
+        }
+
         try
         {
             return targetMethod.Invoke(_inner, args);
@@ -55,6 +67,12 @@ public class OutageFlagStore : DispatchProxy
             ExceptionDispatchInfo.Throw(e.InnerException);
             throw;
         }
+    }
+
+    private async Task<long> HangThenGetChangeVersionAsync(Task hang, CancellationToken cancellationToken)
+    {
+        await hang.WaitAsync(cancellationToken);
+        return await _inner.GetChangeVersionAsync(cancellationToken);
     }
 }
 
