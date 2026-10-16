@@ -90,6 +90,45 @@ public sealed class FlagonTestHost : IAsyncDisposable
         return new FlagonTestHost(host, time, logs);
     }
 
+    /// <summary>The snapshot freshness status (what a health check would read).</summary>
+    public FlagonSnapshotStatus Status => Services.GetRequiredService<IFlagonSnapshotStatus>().Current;
+
+    /// <summary>
+    /// Advances the fake clock by one refresh interval and waits until every host has finished the refresh attempt
+    /// that tick triggered. Hosts sharing one <see cref="FakeTimeProvider"/> are advanced once.
+    /// </summary>
+    public static async Task AdvanceToNextRefreshAsync(params FlagonTestHost[] hosts)
+    {
+        foreach (var group in hosts.GroupBy(h => h.Time))
+        {
+            group.Key.Advance(group.First().Status.RefreshInterval);
+        }
+
+        foreach (var host in hosts)
+        {
+            await host.WaitForRefreshAttemptAsync();
+        }
+    }
+
+    /// <summary>Advances this host's clock by one refresh interval and waits for the triggered refresh attempt.</summary>
+    public Task AdvanceToNextRefreshAsync() => AdvanceToNextRefreshAsync(this);
+
+    /// <summary>Waits (bounded by a real-time safety timeout) until a refresh attempt has completed at the current fake time.</summary>
+    public async Task WaitForRefreshAttemptAsync()
+    {
+        var now = Time.GetUtcNow();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!(Status.LastAttemptAt >= now))
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException($"No refresh attempt completed at fake time {now:O}. Status: {Status}");
+            }
+
+            await Task.Delay(1);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _host.StopAsync();
