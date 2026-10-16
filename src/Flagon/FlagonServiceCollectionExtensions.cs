@@ -35,6 +35,7 @@ public static class FlagonServiceCollectionExtensions
         services.AddSingleton(storeFactory);
 
         services.AddSingleton<FlagSnapshotManager>();
+        services.AddSingleton<IFlagonSnapshotStatus>(sp => sp.GetRequiredService<FlagSnapshotManager>());
         services.AddSingleton<IFlagon, FlagonEvaluator>();
         services.AddSingleton<IFlagonAdmin, FlagonAdmin>();
         services.AddHostedService<FlagonHostedService>();
