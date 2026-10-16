@@ -9,7 +9,7 @@ internal sealed record FlagDefinition(string Key, bool DefaultValue, string? Des
 /// Applies the flags declared with <see cref="FlagonOptions.Define"/> to the store: creates missing ones (source code)
 /// and syncs metadata of existing ones without touching their state. Archived flags are never revived or changed.
 /// </summary>
-internal sealed class FlagSeeder(IFlagStore store, FlagonOptions options, TimeProvider time)
+internal sealed class FlagSeeder(IFlagStore store, FlagonOptions options, FlagChangeStamper changes)
 {
     private const int MaxConflictRetries = 5;
 
@@ -33,21 +33,19 @@ internal sealed class FlagSeeder(IFlagStore store, FlagonOptions options, TimePr
         for (var attempt = 0; ; attempt++)
         {
             var current = await store.GetAsync(definition.Key, cancellationToken).ConfigureAwait(false);
-            var now = time.GetUtcNow();
+            var change = changes.Begin();
 
             if (current is null)
             {
                 var metadata = new FlagMetadata(
                     Description: definition.Description,
                     Tags: definition.Tags,
-                    Source: FlagSource.Code,
-                    CreatedAt: now,
-                    UpdatedAt: now);
+                    Source: FlagSource.Code).StampCreated(change);
 
                 var created = await store.TryCreateAsync(
                     definition.Key,
                     FlagDocument.Boolean(definition.DefaultValue, metadata),
-                    new FlagChangeContext(now),
+                    change,
                     cancellationToken).ConfigureAwait(false);
                 if (created is not null || attempt >= MaxConflictRetries)
                 {
@@ -62,20 +60,19 @@ internal sealed class FlagSeeder(IFlagStore store, FlagonOptions options, TimePr
                 return;
             }
 
-            var document = current.Document with
+            var document = (current.Document with
             {
                 Metadata = current.Document.Metadata with
                 {
                     Description = definition.Description,
                     Tags = definition.Tags,
                     Source = FlagSource.Code,
-                    UpdatedAt = now,
                 },
-            };
+            }).StampUpdated(change);
 
             try
             {
-                await store.UpdateAsync(definition.Key, document, current.Version, new FlagChangeContext(now), cancellationToken).ConfigureAwait(false);
+                await store.UpdateAsync(definition.Key, document, current.Version, change, cancellationToken).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (ex is FlagVersionConflictException or FlagNotFoundException && attempt < MaxConflictRetries)

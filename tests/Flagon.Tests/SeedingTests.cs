@@ -153,6 +153,31 @@ public class SeedingTests
     }
 
     [Fact]
+    public async Task Seeding_writes_are_audited_as_made_by_the_seeding_application()
+    {
+        var store = new InMemoryFlagStore();
+        await using (await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.ApplicationName = "Checkout";
+            o.Flagon = f => f.Define("new-checkout", true, "v1");
+        }))
+        {
+        }
+
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.ApplicationName = "Checkout";
+            o.Flagon = f => f.Define("new-checkout", true, "v2");
+        });
+
+        var history = await host.Admin.GetAuditHistoryAsync("new-checkout");
+        Assert.Equal([FlagAuditAction.Updated, FlagAuditAction.Created], history.Select(e => e.Action));
+        Assert.All(history, e => Assert.Equal("Checkout", e.ApplicationName));
+    }
+
+    [Fact]
     public void Defining_an_invalid_key_a_tag_with_a_comma_or_the_same_key_twice_is_rejected()
     {
         var options = new FlagonOptions().Define("ok");
