@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>Flagon.AspNetCore</PackageId>
-    <Description>ASP.NET Core integration for Flagon: OFREP evaluation endpoints, an ambient evaluation context resolved from the current request, and health checks.</Description>
+    <Description>ASP.NET Core integration for Flagon: OFREP evaluation endpoints, an HTTP management API, an ambient evaluation context resolved from the current request, and health checks.</Description>
     <RootNamespace>Flagon.AspNetCore</RootNamespace>
   </PropertyGroup>
   <ItemGroup>

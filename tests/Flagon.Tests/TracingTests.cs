@@ -76,6 +76,22 @@ public sealed class TracingTests : IDisposable
     }
 
     [Fact]
+    public async Task Editing_metadata_is_traced_and_a_stale_edit_is_logged_as_a_conflict()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("documented", Enabled: false));
+        await host.Admin.UpdateMetadataAsync("documented", new UpdateFlagMetadataRequest(Description: "first"), flag.Version);
+
+        await Assert.ThrowsAsync<FlagVersionConflictException>(
+            () => host.Admin.UpdateMetadataAsync("documented", new UpdateFlagMetadataRequest(Description: "second"), flag.Version));
+
+        Assert.Equal(
+            [ActivityStatusCode.Unset, ActivityStatusCode.Error],
+            Named("flagon.update_metadata").Select(a => a.Status));
+        Assert.Contains(host.Logs.Flagon(LogLevel.Information), l => l.EventId.Id == 1201 && l.Message.Contains("update_metadata", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_version_conflict_is_traced_as_an_error_and_logged_but_not_counted_as_a_store_error()
     {
         await using var host = await FlagonTestHost.StartAsync();
