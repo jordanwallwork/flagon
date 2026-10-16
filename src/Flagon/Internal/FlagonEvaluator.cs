@@ -24,6 +24,12 @@ internal sealed partial class FlagonEvaluator(FlagSnapshotManager snapshots, ILo
             return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 
+        // An archived flag fails safe to the caller's default whatever its document says.
+        if (flag.Archived)
+        {
+            return new(key, defaultValue, null, EvaluationReason.Archived);
+        }
+
         var document = flag.Document;
 
         // flagd semantics: a DISABLED flag yields the caller's default with reason DISABLED (not an error).
