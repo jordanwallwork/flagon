@@ -29,6 +29,12 @@ public enum EvaluationReason
 
     /// <summary>An error occurred; the caller's default was returned. See <see cref="FlagEvaluationDetails{T}.ErrorCode"/> (OpenFeature <c>ERROR</c>).</summary>
     Error,
+
+    /// <summary>
+    /// The flag is archived; the caller's default was returned. Not an error. A Flagon-specific reason
+    /// (OpenFeature allows custom reasons), surfaced as <c>ARCHIVED</c>.
+    /// </summary>
+    Archived,
 }
 
 /// <summary>Evaluation error codes. Aligned with OpenFeature's error codes.</summary>

@@ -8,10 +8,15 @@ public sealed class InMemoryFlagStore : IFlagStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, FlagRecord> _flags = new(StringComparer.Ordinal);
+    private readonly List<FlagAuditEntry> _audit = [];
+    private readonly Dictionary<(string Key, string ApplicationName), FlagUsage> _usage = new(UsageKeyComparer.Instance);
     private long _changeVersion;
 
     /// <inheritdoc />
     public bool IsReadOnly => false;
+
+    /// <inheritdoc />
+    public Task ApplyMigrationsAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
     /// <inheritdoc />
     public ValueTask<long> GetChangeVersionAsync(CancellationToken cancellationToken = default)
@@ -41,8 +46,10 @@ public sealed class InMemoryFlagStore : IFlagStore
     }
 
     /// <inheritdoc />
-    public Task<FlagRecord?> TryCreateAsync(string key, FlagDocument document, CancellationToken cancellationToken = default)
+    public Task<FlagRecord?> TryCreateAsync(string key, FlagDocument document, FlagChangeContext? change = null, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(document);
         lock (_gate)
         {
             if (_flags.ContainsKey(key))
@@ -52,28 +59,153 @@ public sealed class InMemoryFlagStore : IFlagStore
 
             var record = new FlagRecord(key, document, ++_changeVersion);
             _flags[key] = record;
+            Audit(change, key, FlagAuditAction.Created, record.Version, before: null, after: document);
             return Task.FromResult<FlagRecord?>(record);
         }
     }
 
     /// <inheritdoc />
-    public Task<FlagRecord> UpdateAsync(string key, FlagDocument document, long expectedVersion, CancellationToken cancellationToken = default)
+    public Task<FlagRecord> UpdateAsync(string key, FlagDocument document, long expectedVersion, FlagChangeContext? change = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        lock (_gate)
+        {
+            var current = GetForWrite(key, expectedVersion);
+            var record = current with { Document = document, Version = ++_changeVersion };
+            _flags[key] = record;
+            Audit(change, key, FlagAuditAction.Updated, record.Version, current.Document, document);
+            return Task.FromResult(record);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<FlagRecord> ArchiveAsync(string key, long expectedVersion, FlagChangeContext? change = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult(SetArchived(key, expectedVersion, archived: true, change));
+
+    /// <inheritdoc />
+    public Task<FlagRecord> RestoreAsync(string key, long expectedVersion, FlagChangeContext? change = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult(SetArchived(key, expectedVersion, archived: false, change));
+
+    /// <inheritdoc />
+    public Task<long> PurgeAsync(string key, long expectedVersion, FlagChangeContext? change = null, CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
-            if (!_flags.TryGetValue(key, out var current))
+            var current = GetForWrite(key, expectedVersion);
+            if (!current.Archived)
             {
-                throw new FlagNotFoundException(key);
+                throw new FlagValidationException($"Flag '{key}' must be archived before it can be purged.");
             }
 
-            if (current.Version != expectedVersion)
+            _flags.Remove(key);
+            foreach (var usageKey in _usage.Keys.Where(k => string.Equals(k.Key, key, StringComparison.Ordinal)).ToArray())
             {
-                throw new FlagVersionConflictException(key, expectedVersion, current.Version);
+                _usage.Remove(usageKey);
             }
 
-            var record = new FlagRecord(key, document, ++_changeVersion);
-            _flags[key] = record;
-            return Task.FromResult(record);
+            var version = ++_changeVersion;
+            Audit(change, key, FlagAuditAction.Purged, version, current.Document, after: null);
+            return Task.FromResult(version);
         }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<FlagAuditEntry>> GetAuditAsync(string key, CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult<IReadOnlyList<FlagAuditEntry>>(_audit.Where(e => string.Equals(e.Key, key, StringComparison.Ordinal)).ToArray());
+        }
+    }
+
+    /// <inheritdoc />
+    public Task UpsertUsageAsync(IReadOnlyCollection<FlagUsage> usage, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        lock (_gate)
+        {
+            foreach (var record in usage)
+            {
+                var key = (record.Key, record.ApplicationName);
+                if (!_usage.TryGetValue(key, out var existing) || record.LastEvaluatedAt >= existing.LastEvaluatedAt)
+                {
+                    _usage[key] = record;
+                }
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<FlagUsage>> GetUsageAsync(string key, CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult<IReadOnlyList<FlagUsage>>(_usage.Values.Where(u => string.Equals(u.Key, key, StringComparison.Ordinal)).ToArray());
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<FlagUsage>> LoadAllUsageAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult<IReadOnlyList<FlagUsage>>(_usage.Values.ToArray());
+        }
+    }
+
+    private FlagRecord SetArchived(string key, long expectedVersion, bool archived, FlagChangeContext? change)
+    {
+        lock (_gate)
+        {
+            var current = GetForWrite(key, expectedVersion);
+            if (current.Archived == archived)
+            {
+                throw new FlagValidationException(archived ? $"Flag '{key}' is already archived." : $"Flag '{key}' is not archived.");
+            }
+
+            var record = current with { Archived = archived, Version = ++_changeVersion };
+            _flags[key] = record;
+            Audit(change, key, archived ? FlagAuditAction.Archived : FlagAuditAction.Restored, record.Version, current.Document, current.Document);
+            return record;
+        }
+    }
+
+    private FlagRecord GetForWrite(string key, long expectedVersion)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (!_flags.TryGetValue(key, out var current))
+        {
+            throw new FlagNotFoundException(key);
+        }
+
+        if (current.Version != expectedVersion)
+        {
+            throw new FlagVersionConflictException(key, expectedVersion, current.Version);
+        }
+
+        return current;
+    }
+
+    private void Audit(FlagChangeContext? change, string key, FlagAuditAction action, long version, FlagDocument? before, FlagDocument? after)
+    {
+        if (change is null)
+        {
+            return;
+        }
+
+        _audit.Add(new FlagAuditEntry(_audit.Count + 1, key, action, version, change.Timestamp, change.Actor, change.ApplicationName, before, after));
+    }
+
+    private sealed class UsageKeyComparer : IEqualityComparer<(string Key, string ApplicationName)>
+    {
+        public static readonly UsageKeyComparer Instance = new();
+
+        public bool Equals((string Key, string ApplicationName) x, (string Key, string ApplicationName) y) =>
+            string.Equals(x.Key, y.Key, StringComparison.Ordinal) && string.Equals(x.ApplicationName, y.ApplicationName, StringComparison.Ordinal);
+
+        public int GetHashCode((string Key, string ApplicationName) obj) =>
+            HashCode.Combine(StringComparer.Ordinal.GetHashCode(obj.Key), StringComparer.Ordinal.GetHashCode(obj.ApplicationName));
     }
 }

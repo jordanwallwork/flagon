@@ -61,6 +61,21 @@ public class OfrepSingleEvaluationTests
     }
 
     [Fact]
+    public async Task An_archived_flag_tells_the_client_to_use_its_code_default()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("old-banner", Enabled: true));
+        await host.Admin.ArchiveAsync("old-banner", created.Version);
+
+        var response = await host.CreateClient().PostAsJsonAsync("/ofrep/v1/evaluate/flags/old-banner", EmptyContext);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ARCHIVED", body.GetProperty("reason").GetString());
+        Assert.False(body.TryGetProperty("value", out _));
+    }
+
+    [Fact]
     public async Task A_flag_whose_document_cannot_be_interpreted_returns_400_with_a_parse_error()
     {
         await using var host = await StartAsync();

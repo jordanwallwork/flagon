@@ -41,6 +41,12 @@ internal sealed partial class FlagonEvaluator(FlagSnapshotManager snapshots, ILo
 
     private static FlagEvaluationDetails<bool> Evaluate(string key, FlagRecord flag, bool defaultValue)
     {
+        // An archived flag fails safe to the caller's default whatever its document says.
+        if (flag.Archived)
+        {
+            return new(key, defaultValue, null, EvaluationReason.Archived);
+        }
+
         var document = flag.Document;
 
         // flagd semantics: a DISABLED flag yields the caller's default with reason DISABLED (not an error).

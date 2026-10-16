@@ -3,7 +3,7 @@ using Flagon.Storage;
 namespace Flagon;
 
 /// <summary>Flagon configuration, supplied via <c>services.AddFlagon(opts =&gt; ...)</c>.</summary>
-public sealed class FlagonOptions
+public sealed partial class FlagonOptions
 {
     private TimeSpan _refreshInterval = TimeSpan.FromSeconds(10);
 
@@ -23,6 +23,12 @@ public sealed class FlagonOptions
             _refreshInterval = value;
         }
     }
+
+    /// <summary>
+    /// This application's name, recorded on audit entries (and usage) so changes can be traced to the app that made them.
+    /// Defaults (when null or blank) to the host's <c>IHostEnvironment.ApplicationName</c>, else the entry assembly name.
+    /// </summary>
+    public string? ApplicationName { get; set; }
 
     /// <summary>
     /// When true, host startup fails if the initial flag load from the store fails. When false (the default) the app
