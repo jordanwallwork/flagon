@@ -31,6 +31,13 @@ public sealed class FlagonOptions
     public bool FailFastOnStartup { get; set; }
 
     /// <summary>
+    /// When true (the default) Flagon calls <see cref="IFlagStore.ApplyMigrationsAsync"/> on startup, before the initial
+    /// flag load, retrying on each refresh until it succeeds. Turn off when a DBA applies the store's scripts.
+    /// A migration failure fails startup only when <see cref="FailFastOnStartup"/> is set.
+    /// </summary>
+    public bool AutoMigrate { get; set; } = true;
+
+    /// <summary>
     /// Uses the store built by <paramref name="factory"/>. Storage packages wrap this in their own extension
     /// (e.g. <c>UseSqlServerStorage</c>). The last storage call wins.
     /// </summary>
