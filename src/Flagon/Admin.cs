@@ -10,6 +10,14 @@ namespace Flagon;
 public sealed record CreateFlagRequest(string Key, bool Enabled = false, string? Description = null, IReadOnlyList<string>? Tags = null);
 
 /// <summary>
+/// A request to change a flag's descriptive metadata. Null fields are left unchanged; an empty description clears it
+/// and an empty tag list removes all tags.
+/// </summary>
+/// <param name="Description">The new description, or null to keep the current one.</param>
+/// <param name="Tags">The new tags (no commas), or null to keep the current ones.</param>
+public sealed record UpdateFlagMetadataRequest(string? Description = null, IReadOnlyList<string>? Tags = null);
+
+/// <summary>
 /// In-process flag management. Reads go to the store (not the evaluation snapshot); writes are applied to the store
 /// and reflected in this app's <see cref="IFlagon"/> immediately.
 /// Updates take the version the caller last saw and throw <see cref="FlagVersionConflictException"/> if it is stale.
@@ -31,6 +39,12 @@ public interface IFlagonAdmin
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>Changes a flag's description and/or tags; its state and variants are untouched.</summary>
+    /// <exception cref="FlagValidationException">The request is invalid.</exception>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The audit history of <paramref name="key"/>, newest first (empty if none). Entries survive purges.

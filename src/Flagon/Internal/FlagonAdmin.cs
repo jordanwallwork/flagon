@@ -50,6 +50,32 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
         return record;
     }
 
+    public async Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateTags(request.Tags);
+
+        var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
+            ?? throw new FlagNotFoundException(key);
+
+        var change = changes.Begin();
+        var metadata = current.Document.Metadata;
+        if (request.Description is not null)
+        {
+            metadata = metadata with { Description = request.Description.Length == 0 ? null : request.Description };
+        }
+
+        if (request.Tags is not null)
+        {
+            metadata = metadata with { Tags = request.Tags };
+        }
+
+        var document = (current.Document with { Metadata = metadata }).StampUpdated(change);
+        var record = await store.UpdateAsync(key, document, expectedVersion, change, cancellationToken).ConfigureAwait(false);
+        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+        return record;
+    }
+
     public async Task<IReadOnlyList<FlagAuditEntry>> GetAuditHistoryAsync(string key, CancellationToken cancellationToken = default)
     {
         var oldestFirst = await store.GetAuditAsync(key, cancellationToken).ConfigureAwait(false);
