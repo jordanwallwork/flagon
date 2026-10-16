@@ -56,6 +56,26 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
         return oldestFirst.Reverse().ToArray();
     }
 
+    public async Task<FlagRecord> ArchiveAsync(string key, long expectedVersion, CancellationToken cancellationToken = default)
+    {
+        var record = await store.ArchiveAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+        return record;
+    }
+
+    public async Task<FlagRecord> RestoreAsync(string key, long expectedVersion, CancellationToken cancellationToken = default)
+    {
+        var record = await store.RestoreAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+        return record;
+    }
+
+    public async Task PurgeAsync(string key, long expectedVersion, CancellationToken cancellationToken = default)
+    {
+        await store.PurgeAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static void ValidateTags(IReadOnlyList<string>? tags)
     {
         foreach (var tag in tags ?? [])
