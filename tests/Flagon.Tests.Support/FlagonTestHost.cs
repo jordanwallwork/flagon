@@ -198,6 +198,27 @@ public sealed class FlagonTestHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Waits (bounded by a real-time safety timeout) until <paramref name="condition"/> holds. For background work that is
+    /// not clock-driven (e.g. the auto-create queue), where there is no fake-time tick to wait on.
+    /// </summary>
+    public static async Task EventuallyAsync(Func<Task<bool>> condition, string because)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!await condition())
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException($"Timed out waiting until {because}.");
+            }
+
+            await Task.Delay(1);
+        }
+    }
+
+    /// <summary>Stops the host gracefully (background queues drain) without disposing it, so its services stay readable.</summary>
+    public Task StopAsync() => _host.StopAsync();
+
     public async ValueTask DisposeAsync()
     {
         await _host.StopAsync();

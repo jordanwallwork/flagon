@@ -19,6 +19,9 @@ public class OutageFlagStore : DispatchProxy
     /// <summary>When true, every store call throws <see cref="StoreOutageException"/>.</summary>
     public bool IsDown { get; set; }
 
+    /// <summary>When true, the store reports <see cref="IFlagStore.IsReadOnly"/> as true (like a remote, read-only store).</summary>
+    public bool ReportsReadOnly { get; set; }
+
     /// <summary>The store as seen by Flagon (pass this to the host).</summary>
     public IFlagStore Store { get; private set; } = null!;
 
@@ -41,6 +44,11 @@ public class OutageFlagStore : DispatchProxy
     {
         ArgumentNullException.ThrowIfNull(targetMethod);
         _calls.AddOrUpdate(targetMethod.Name, 1, (_, n) => n + 1);
+        if (ReportsReadOnly && targetMethod.Name == "get_" + nameof(IFlagStore.IsReadOnly))
+        {
+            return true;
+        }
+
         if (IsDown && !targetMethod.Name.StartsWith("get_", StringComparison.Ordinal))
         {
             throw new StoreOutageException();

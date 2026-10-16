@@ -65,6 +65,13 @@ public sealed partial class FlagonOptions
     public bool AutoMigrate { get; set; } = true;
 
     /// <summary>
+    /// When true (the default), evaluating a key that does not exist creates it in the background (off the evaluation path)
+    /// as an enabled boolean flag serving the caller's default, with source <see cref="FlagSource.Auto"/>, so it appears for
+    /// management without changing behaviour. Archived keys are never re-created. Skipped when the store is read-only.
+    /// </summary>
+    public bool AutoCreate { get; set; } = true;
+
+    /// <summary>
     /// Uses the store built by <paramref name="factory"/>. Storage packages wrap this in their own extension
     /// (e.g. <c>UseSqlServerStorage</c>). The last storage call wins.
     /// </summary>
