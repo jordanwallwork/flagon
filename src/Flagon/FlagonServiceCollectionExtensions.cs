@@ -46,6 +46,8 @@ public static class FlagonServiceCollectionExtensions
             ResolveApplicationName(options, sp)));
         services.AddSingleton<IFlagonAdmin, FlagonAdmin>();
         services.AddHostedService<FlagonHostedService>();
+        services.AddSingleton<UsageTracker>();
+        services.AddHostedService<UsageFlushService>();
 
         return services;
     }
