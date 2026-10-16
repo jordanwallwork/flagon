@@ -12,5 +12,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Flagon.Tests.Support\Flagon.Tests.Support.csproj" />
+    <ProjectReference Include="..\..\src\Flagon.Storage.Conformance\Flagon.Storage.Conformance.csproj" />
   </ItemGroup>
 </Project>

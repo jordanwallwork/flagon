@@ -86,4 +86,5 @@ public sealed record FlagDocument(
 /// <param name="Key">The case-sensitive flag key.</param>
 /// <param name="Document">The flagd document.</param>
 /// <param name="Version">The change version assigned by the store's global sequence on the flag's last write. Used for optimistic concurrency.</param>
-public sealed record FlagRecord(string Key, FlagDocument Document, long Version);
+/// <param name="Archived">True if the flag has been archived: it is kept (and blocks re-creation of its key) but should evaluate to the caller's default.</param>
+public sealed record FlagRecord(string Key, FlagDocument Document, long Version, bool Archived = false);

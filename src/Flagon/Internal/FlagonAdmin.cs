@@ -25,7 +25,7 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
             CreatedAt: now,
             UpdatedAt: now);
 
-        var record = await store.TryCreateAsync(request.Key, FlagDocument.Boolean(request.Enabled, metadata), cancellationToken).ConfigureAwait(false)
+        var record = await store.TryCreateAsync(request.Key, FlagDocument.Boolean(request.Enabled, metadata), new FlagChangeContext(now), cancellationToken).ConfigureAwait(false)
             ?? throw new FlagAlreadyExistsException(request.Key);
 
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
@@ -43,14 +43,15 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
             throw new FlagValidationException($"Flag '{key}' is not a boolean flag (it has no '{variant}' variant).");
         }
 
+        var now = time.GetUtcNow();
         var document = current.Document with
         {
             DefaultVariant = variant,
-            Metadata = current.Document.Metadata with { UpdatedAt = time.GetUtcNow() },
+            Metadata = current.Document.Metadata with { UpdatedAt = now },
         };
 
         // The store enforces expectedVersion atomically; the read above only builds the new document.
-        var record = await store.UpdateAsync(key, document, expectedVersion, cancellationToken).ConfigureAwait(false);
+        var record = await store.UpdateAsync(key, document, expectedVersion, new FlagChangeContext(now), cancellationToken).ConfigureAwait(false);
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
         return record;
     }
