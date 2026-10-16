@@ -10,7 +10,8 @@ internal sealed partial class FlagonEvaluator(
     FlagSnapshotManager snapshots,
     UsageTracker usage,
     FlagonInstrumentation instrumentation,
-    ILogger<FlagonEvaluator> logger) : IFlagon
+    ILogger<FlagonEvaluator> logger,
+    FlagAutoCreator autoCreator) : IFlagon
 {
     private readonly ConcurrentDictionary<string, byte> _warnedMissingKeys = new(StringComparer.Ordinal);
 
@@ -34,6 +35,7 @@ internal sealed partial class FlagonEvaluator(
         if (key is null || !snapshots.Current.Flags.TryGetValue(key, out var flag))
         {
             WarnMissingOnce(key ?? string.Empty);
+            autoCreator.Enqueue(key ?? string.Empty, defaultValue);
             return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 

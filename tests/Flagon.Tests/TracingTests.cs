@@ -152,6 +152,37 @@ public sealed class TracingTests : IDisposable
     }
 
     [Fact]
+    public async Task Applying_store_migrations_at_startup_is_traced_and_a_failure_counts_as_a_store_error()
+    {
+        var store = OutageFlagStore.Wrap(isDown: true);
+        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
+        using var storeErrors = new MetricCollector<long>(
+            host.Services.GetRequiredService<IMeterFactory>(), FlagonDiagnostics.MeterName, "flagon.store.errors");
+
+        await host.AdvanceToNextRefreshAsync(); // still down: migrations are retried and fail again
+        store.IsDown = false;
+        await host.AdvanceToNextRefreshAsync();
+
+        Assert.Equal(
+            [ActivityStatusCode.Error, ActivityStatusCode.Error, ActivityStatusCode.Unset],
+            Named("flagon.migrate").Select(a => a.Status));
+        Assert.Contains(storeErrors.GetMeasurementSnapshot(), m => (string?)m.Tags["flagon.store.operation"] == "migrate");
+    }
+
+    [Fact]
+    public async Task Auto_creating_a_flag_is_traced_with_its_key()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+
+        host.Flagon.IsEnabled("brand-new", true);
+        await host.StopAsync(); // drains the auto-create queue
+
+        var create = Assert.Single(Named("flagon.auto_create"));
+        Assert.Equal("brand-new", create.GetTagItem("feature_flag.key"));
+        Assert.Equal(true, create.GetTagItem("flagon.auto_create.created"));
+    }
+
+    [Fact]
     public async Task A_store_failure_during_an_admin_write_is_counted_as_a_store_error()
     {
         var store = OutageFlagStore.Wrap();

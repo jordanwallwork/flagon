@@ -51,6 +51,9 @@ public static class FlagonServiceCollectionExtensions
         services.AddHostedService<FlagonHostedService>();
         services.AddSingleton<UsageTracker>();
         services.AddHostedService<UsageFlushService>();
+        // Registered after the refresher so it stops (and drains its queue) first.
+        services.AddSingleton<FlagAutoCreator>();
+        services.AddHostedService(sp => sp.GetRequiredService<FlagAutoCreator>());
 
         return services;
     }
