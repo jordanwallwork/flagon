@@ -3,7 +3,7 @@ using Flagon.Storage;
 namespace Flagon.Internal;
 
 /// <summary>Management operations. Writes go to the store, then the local snapshot is refreshed so this app sees them at once.</summary>
-internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshots, TimeProvider time) : IFlagonAdmin
+internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshots, FlagChangeStamper changes) : IFlagonAdmin
 {
     public Task<IReadOnlyList<FlagRecord>> ListAsync(CancellationToken cancellationToken = default) =>
         store.LoadAllAsync(cancellationToken);
@@ -17,15 +17,13 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
         FlagKey.Validate(request.Key);
         ValidateTags(request.Tags);
 
-        var now = time.GetUtcNow();
+        var change = changes.Begin();
         var metadata = new FlagMetadata(
             Description: request.Description,
             Tags: request.Tags,
-            Source: FlagSource.Manual,
-            CreatedAt: now,
-            UpdatedAt: now);
+            Source: FlagSource.Manual).StampCreated(change);
 
-        var record = await store.TryCreateAsync(request.Key, FlagDocument.Boolean(request.Enabled, metadata), new FlagChangeContext(now), cancellationToken).ConfigureAwait(false)
+        var record = await store.TryCreateAsync(request.Key, FlagDocument.Boolean(request.Enabled, metadata), change, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagAlreadyExistsException(request.Key);
 
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
@@ -43,17 +41,19 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
             throw new FlagValidationException($"Flag '{key}' is not a boolean flag (it has no '{variant}' variant).");
         }
 
-        var now = time.GetUtcNow();
-        var document = current.Document with
-        {
-            DefaultVariant = variant,
-            Metadata = current.Document.Metadata with { UpdatedAt = now },
-        };
+        var change = changes.Begin();
+        var document = (current.Document with { DefaultVariant = variant }).StampUpdated(change);
 
         // The store enforces expectedVersion atomically; the read above only builds the new document.
-        var record = await store.UpdateAsync(key, document, expectedVersion, new FlagChangeContext(now), cancellationToken).ConfigureAwait(false);
+        var record = await store.UpdateAsync(key, document, expectedVersion, change, cancellationToken).ConfigureAwait(false);
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
         return record;
+    }
+
+    public async Task<IReadOnlyList<FlagAuditEntry>> GetAuditHistoryAsync(string key, CancellationToken cancellationToken = default)
+    {
+        var oldestFirst = await store.GetAuditAsync(key, cancellationToken).ConfigureAwait(false);
+        return oldestFirst.Reverse().ToArray();
     }
 
     private static void ValidateTags(IReadOnlyList<string>? tags)

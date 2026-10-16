@@ -1,3 +1,5 @@
+using Flagon.Storage;
+
 namespace Flagon;
 
 /// <summary>A request to create a boolean flag.</summary>
@@ -29,4 +31,11 @@ public interface IFlagonAdmin
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The audit history of <paramref name="key"/>, newest first (empty if none). Entries survive purges.
+    /// Every write made through this service records its actor (from <see cref="IFlagonActorAccessor"/>),
+    /// application (<see cref="FlagonOptions.ApplicationName"/>), timestamp, and before/after documents.
+    /// </summary>
+    Task<IReadOnlyList<FlagAuditEntry>> GetAuditHistoryAsync(string key, CancellationToken cancellationToken = default);
 }
