@@ -1,3 +1,5 @@
+using Flagon.Storage;
+
 namespace Flagon;
 
 /// <summary>A request to create a boolean flag.</summary>
@@ -29,4 +31,34 @@ public interface IFlagonAdmin
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The audit history of <paramref name="key"/>, newest first (empty if none). Entries survive purges.
+    /// Every write made through this service records its actor (from <see cref="IFlagonActorAccessor"/>),
+    /// application (<see cref="FlagonOptions.ApplicationName"/>), timestamp, and before/after documents.
+    /// </summary>
+    Task<IReadOnlyList<FlagAuditEntry>> GetAuditHistoryAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Archives a flag: its document is kept, but evaluation returns the caller's default with reason
+    /// <see cref="EvaluationReason.Archived"/> and the key is never re-created automatically.
+    /// </summary>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="FlagValidationException">The flag is already archived.</exception>
+    Task<FlagRecord> ArchiveAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>Restores an archived flag so it evaluates normally again.</summary>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="FlagValidationException">The flag is not archived.</exception>
+    Task<FlagRecord> RestoreAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Permanently deletes an archived flag (its audit history is kept). The key then evaluates as not found and may be created again.
+    /// </summary>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="FlagValidationException">The flag is not archived (only archived flags can be purged).</exception>
+    Task PurgeAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
 }

@@ -25,6 +25,12 @@ public sealed partial class FlagonOptions
     }
 
     /// <summary>
+    /// This application's name, recorded on audit entries (and usage) so changes can be traced to the app that made them.
+    /// Defaults (when null or blank) to the host's <c>IHostEnvironment.ApplicationName</c>, else the entry assembly name.
+    /// </summary>
+    public string? ApplicationName { get; set; }
+
+    /// <summary>
     /// When true, host startup fails if the initial flag load from the store fails. When false (the default) the app
     /// starts with an empty snapshot (code defaults apply) and keeps retrying every <see cref="RefreshInterval"/>.
     /// </summary>
