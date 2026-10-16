@@ -118,4 +118,21 @@ public interface IFlagon
 
     /// <summary>Async counterpart of <see cref="GetBooleanDetails"/>. Completes synchronously.</summary>
     ValueTask<FlagEvaluationDetails<bool>> GetBooleanDetailsAsync(string key, bool defaultValue = false, EvaluationContext? context = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates every flag in the current snapshot (bulk evaluation, e.g. for OFREP clients), ordered by key.
+    /// Each flag is evaluated with a caller default of <c>false</c>; an entry whose
+    /// <see cref="FlagEvaluationDetails{T}.Variant"/> is null (e.g. a disabled flag, or an error) carries no flag value,
+    /// so the consumer should apply its own default.
+    /// </summary>
+    FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null);
 }
+
+/// <summary>The result of evaluating every flag in one snapshot.</summary>
+/// <typeparam name="T">The flags' value type.</typeparam>
+/// <param name="Version">
+/// The store change version of the snapshot the flags were evaluated from. It changes whenever any flag changes,
+/// so it is a suitable cache validator (e.g. an HTTP ETag) for the set.
+/// </param>
+/// <param name="Flags">One result per flag, ordered by key (ordinal).</param>
+public sealed record FlagEvaluationSet<T>(long Version, IReadOnlyList<FlagEvaluationDetails<T>> Flags);
