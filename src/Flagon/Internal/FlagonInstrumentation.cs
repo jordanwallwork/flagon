@@ -141,6 +141,7 @@ internal sealed class FlagonInstrumentation : IDisposable
         EvaluationReason.Disabled => "disabled",
         EvaluationReason.Stale => "stale",
         EvaluationReason.Error => "error",
+        EvaluationReason.Archived => "archived",
         _ => "unknown",
     };
 

@@ -45,6 +45,19 @@ public class TelemetryTests
     }
 
     [Fact]
+    public async Task An_archived_flag_is_counted_with_reason_archived()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("old", Enabled: true));
+        await host.Admin.ArchiveAsync("old", flag.Version);
+        using var evaluations = Collect<long>(host, "flagon.evaluations");
+
+        host.Flagon.IsEnabled("old");
+
+        Assert.Equal("archived", Assert.Single(evaluations.GetMeasurementSnapshot()).Tags["feature_flag.result.reason"]);
+    }
+
+    [Fact]
     public async Task Each_refresh_records_its_duration_tagged_with_whether_flags_were_reloaded()
     {
         var store = new InMemoryFlagStore();

@@ -95,6 +95,22 @@ public sealed class TracingTests : IDisposable
     }
 
     [Fact]
+    public async Task Archiving_is_traced_and_a_stale_archive_is_logged_as_a_conflict()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("retired", Enabled: true));
+        var archived = await host.Admin.ArchiveAsync("retired", flag.Version);
+
+        await Assert.ThrowsAsync<FlagVersionConflictException>(() => host.Admin.RestoreAsync("retired", flag.Version));
+
+        Assert.Equal("retired", Assert.Single(Named("flagon.archive")).GetTagItem("feature_flag.key"));
+        Assert.Equal(ActivityStatusCode.Error, Assert.Single(Named("flagon.restore")).Status);
+        var log = Assert.Single(host.Logs.Flagon(LogLevel.Information), l => l.EventId.Id == 1201);
+        Assert.Contains("restore", log.Message, StringComparison.Ordinal);
+        Assert.Contains(archived.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), log.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_store_failure_during_an_admin_write_is_counted_as_a_store_error()
     {
         var store = OutageFlagStore.Wrap();

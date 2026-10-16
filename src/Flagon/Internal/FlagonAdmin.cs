@@ -7,7 +7,7 @@ namespace Flagon.Internal;
 internal sealed partial class FlagonAdmin(
     IFlagStore store,
     FlagSnapshotManager snapshots,
-    TimeProvider time,
+    FlagChangeStamper changes,
     FlagonInstrumentation instrumentation,
     ILogger<FlagonAdmin> logger) : IFlagonAdmin
 {
@@ -20,7 +20,7 @@ internal sealed partial class FlagonAdmin(
     public Task<FlagRecord> CreateAsync(CreateFlagRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return instrumentation.TraceStoreOperationAsync("create", request.Key, _ => CreateCoreAsync(request, cancellationToken));
+        return WriteAsync("create", request.Key, () => CreateCoreAsync(request, cancellationToken));
     }
 
     private async Task<FlagRecord> CreateCoreAsync(CreateFlagRequest request, CancellationToken cancellationToken)
@@ -28,15 +28,13 @@ internal sealed partial class FlagonAdmin(
         FlagKey.Validate(request.Key);
         ValidateTags(request.Tags);
 
-        var now = time.GetUtcNow();
+        var change = changes.Begin();
         var metadata = new FlagMetadata(
             Description: request.Description,
             Tags: request.Tags,
-            Source: FlagSource.Manual,
-            CreatedAt: now,
-            UpdatedAt: now);
+            Source: FlagSource.Manual).StampCreated(change);
 
-        var record = await store.TryCreateAsync(request.Key, FlagDocument.Boolean(request.Enabled, metadata), cancellationToken).ConfigureAwait(false)
+        var record = await store.TryCreateAsync(request.Key, FlagDocument.Boolean(request.Enabled, metadata), change, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagAlreadyExistsException(request.Key);
 
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
@@ -44,7 +42,7 @@ internal sealed partial class FlagonAdmin(
     }
 
     public Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default) =>
-        instrumentation.TraceStoreOperationAsync("set_enabled", key, _ => SetEnabledCoreAsync(key, enabled, expectedVersion, cancellationToken));
+        WriteAsync("set_enabled", key, () => SetEnabledCoreAsync(key, enabled, expectedVersion, cancellationToken));
 
     private async Task<FlagRecord> SetEnabledCoreAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken)
     {
@@ -57,27 +55,59 @@ internal sealed partial class FlagonAdmin(
             throw new FlagValidationException($"Flag '{key}' is not a boolean flag (it has no '{variant}' variant).");
         }
 
-        var document = current.Document with
-        {
-            DefaultVariant = variant,
-            Metadata = current.Document.Metadata with { UpdatedAt = time.GetUtcNow() },
-        };
+        var change = changes.Begin();
+        var document = (current.Document with { DefaultVariant = variant }).StampUpdated(change);
 
         // The store enforces expectedVersion atomically; the read above only builds the new document.
-        FlagRecord record;
-        try
-        {
-            record = await store.UpdateAsync(key, document, expectedVersion, cancellationToken).ConfigureAwait(false);
-        }
-        catch (FlagVersionConflictException conflict)
-        {
-            LogVersionConflict(logger, conflict.Key, conflict.ExpectedVersion, conflict.CurrentVersion);
-            throw;
-        }
-
+        var record = await store.UpdateAsync(key, document, expectedVersion, change, cancellationToken).ConfigureAwait(false);
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
         return record;
     }
+
+    public async Task<IReadOnlyList<FlagAuditEntry>> GetAuditHistoryAsync(string key, CancellationToken cancellationToken = default)
+    {
+        var oldestFirst = await store.GetAuditAsync(key, cancellationToken).ConfigureAwait(false);
+        return oldestFirst.Reverse().ToArray();
+    }
+
+    public Task<FlagRecord> ArchiveAsync(string key, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("archive", key, async () =>
+        {
+            var record = await store.ArchiveAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+            await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            return record;
+        });
+
+    public Task<FlagRecord> RestoreAsync(string key, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("restore", key, async () =>
+        {
+            var record = await store.RestoreAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+            await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            return record;
+        });
+
+    public Task PurgeAsync(string key, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("purge", key, async () =>
+        {
+            await store.PurgeAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+            await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>Traces a write as <c>flagon.{operation}</c> (counting store failures) and logs optimistic-concurrency conflicts.</summary>
+    private Task<T> WriteAsync<T>(string operation, string key, Func<Task<T>> write) =>
+        instrumentation.TraceStoreOperationAsync(operation, key, async _ =>
+        {
+            try
+            {
+                return await write().ConfigureAwait(false);
+            }
+            catch (FlagVersionConflictException conflict)
+            {
+                LogVersionConflict(logger, operation, conflict.Key, conflict.ExpectedVersion, conflict.CurrentVersion);
+                throw;
+            }
+        });
 
     private static void ValidateTags(IReadOnlyList<string>? tags)
     {
@@ -91,6 +121,6 @@ internal sealed partial class FlagonAdmin(
     }
 
     [LoggerMessage(EventId = 1201, Level = LogLevel.Information,
-        Message = "Update to flag '{FlagKey}' was rejected: expected version {ExpectedVersion} but the flag is at version {CurrentVersion} (it was changed concurrently).")]
-    private static partial void LogVersionConflict(ILogger logger, string flagKey, long expectedVersion, long currentVersion);
+        Message = "Flagon rejected {Operation} of flag '{FlagKey}': expected version {ExpectedVersion} but the flag is at version {CurrentVersion} (it was changed concurrently).")]
+    private static partial void LogVersionConflict(ILogger logger, string operation, string flagKey, long expectedVersion, long currentVersion);
 }

@@ -16,7 +16,7 @@ namespace Flagon;
 /// <c>flagon.store.operation</c> (e.g. <c>refresh</c>, <c>create</c>, <c>set_enabled</c>) and <c>error.type</c> (exception type).</description></item>
 /// </list>
 /// <para>Activities on the <see cref="ActivitySourceName"/> source are named <c>flagon.&lt;operation&gt;</c>
-/// (e.g. <c>flagon.refresh</c>, <c>flagon.create</c>, <c>flagon.set_enabled</c>) and carry <c>feature_flag.key</c> when they concern one flag.
+/// (<c>flagon.refresh</c>, <c>flagon.create</c>, <c>flagon.set_enabled</c>, <c>flagon.archive</c>, <c>flagon.restore</c>, <c>flagon.purge</c>, ...) and carry <c>feature_flag.key</c> when they concern one flag.
 /// Failed operations set the activity status to <c>Error</c> and tag <c>error.type</c>.</para>
 /// </remarks>
 public static class FlagonDiagnostics
