@@ -9,6 +9,7 @@ namespace Flagon.Internal;
 /// </summary>
 internal sealed partial class FlagonHostedService(
     FlagSnapshotManager snapshots,
+    FlagSeeder seeder,
     FlagonOptions options,
     TimeProvider time,
     ILogger<FlagonHostedService> logger) : IHostedService, IAsyncDisposable
@@ -16,11 +17,29 @@ internal sealed partial class FlagonHostedService(
     private readonly CancellationTokenSource _stopping = new();
     private PeriodicTimer? _timer;
     private Task? _polling;
+    private volatile bool _seeded;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         // Create the timer before the first await so its schedule starts at host start, not after the initial load.
         _timer = new PeriodicTimer(options.RefreshInterval, time);
+
+        // Seeding (Define) runs after migrations and before the initial load, so defined flags are in the first snapshot.
+        try
+        {
+            await SeedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        {
+            if (options.FailFastOnStartup)
+            {
+                _timer.Dispose();
+                throw new FlagonException(
+                    "Flagon could not seed flags defined in code at startup and FailFastOnStartup is enabled.", ex);
+            }
+
+            // Not fatal: logged by SeedAsync and retried on each poll.
+        }
 
         try
         {
@@ -47,6 +66,11 @@ internal sealed partial class FlagonHostedService(
         {
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
+                if (!_seeded)
+                {
+                    await TrySeedAsync(stoppingToken).ConfigureAwait(false);
+                }
+
                 try
                 {
                     await snapshots.RefreshAsync(stoppingToken).ConfigureAwait(false);
@@ -59,6 +83,33 @@ internal sealed partial class FlagonHostedService(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+        }
+    }
+
+    /// <summary>Seeds the flags declared with Define. Throws on failure; the failure is logged and seeding is retried each poll.</summary>
+    private async Task SeedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await seeder.SeedAsync(cancellationToken).ConfigureAwait(false);
+            _seeded = true;
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        {
+            LogSeedingFailed(logger, ex, options.RefreshInterval);
+            throw;
+        }
+    }
+
+    private async Task TrySeedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SeedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Logged by SeedAsync; retried on the next tick.
         }
     }
 
@@ -84,4 +135,8 @@ internal sealed partial class FlagonHostedService(
     [LoggerMessage(EventId = 1103, Level = LogLevel.Warning,
         Message = "Flagon could not load flags from the store at startup; starting with code defaults and retrying every {RefreshInterval}.")]
     private static partial void LogStartingWithoutFlags(ILogger logger, TimeSpan refreshInterval);
+
+    [LoggerMessage(EventId = 1104, Level = LogLevel.Warning,
+        Message = "Flagon could not seed the flags defined in code; retrying every {RefreshInterval}.")]
+    private static partial void LogSeedingFailed(ILogger logger, Exception exception, TimeSpan refreshInterval);
 }

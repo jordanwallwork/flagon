@@ -46,6 +46,7 @@ public static class FlagonServiceCollectionExtensions
             sp.GetRequiredService<IFlagonActorAccessor>(),
             ResolveApplicationName(options, sp)));
         services.AddSingleton<IFlagonAdmin, FlagonAdmin>();
+        services.AddSingleton<FlagSeeder>();
         services.AddHostedService<FlagonHostedService>();
 
         return services;
