@@ -1,3 +1,4 @@
+using Flagon.Storage;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -9,6 +10,7 @@ namespace Flagon.Internal;
 /// </summary>
 internal sealed partial class FlagonHostedService(
     FlagSnapshotManager snapshots,
+    IFlagStore store,
     FlagonOptions options,
     TimeProvider time,
     ILogger<FlagonHostedService> logger) : IHostedService, IAsyncDisposable
@@ -16,6 +18,7 @@ internal sealed partial class FlagonHostedService(
     private readonly CancellationTokenSource _stopping = new();
     private PeriodicTimer? _timer;
     private Task? _polling;
+    private bool _migrated = !options.AutoMigrate;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -24,7 +27,7 @@ internal sealed partial class FlagonHostedService(
 
         try
         {
-            await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            await MigrateAndRefreshAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -49,7 +52,7 @@ internal sealed partial class FlagonHostedService(
             {
                 try
                 {
-                    await snapshots.RefreshAsync(stoppingToken).ConfigureAwait(false);
+                    await MigrateAndRefreshAsync(stoppingToken).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -60,6 +63,28 @@ internal sealed partial class FlagonHostedService(
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
         }
+    }
+
+    private async Task MigrateAndRefreshAsync(CancellationToken cancellationToken)
+    {
+        if (!_migrated)
+        {
+            try
+            {
+                await store.ApplyMigrationsAsync(cancellationToken).ConfigureAwait(false);
+                _migrated = true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                LogMigrationFailed(logger, ex);
+                // Refresh anyway so the snapshot status reflects the store's reachability (and an already-installed
+                // schema keeps serving); the migration is retried on the next tick.
+                await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -84,4 +109,7 @@ internal sealed partial class FlagonHostedService(
     [LoggerMessage(EventId = 1103, Level = LogLevel.Warning,
         Message = "Flagon could not load flags from the store at startup; starting with code defaults and retrying every {RefreshInterval}.")]
     private static partial void LogStartingWithoutFlags(ILogger logger, TimeSpan refreshInterval);
+
+    [LoggerMessage(EventId = 1104, Level = LogLevel.Warning, Message = "Flagon could not apply store migrations; they will be retried on the next refresh.")]
+    private static partial void LogMigrationFailed(ILogger logger, Exception exception);
 }

@@ -31,6 +31,13 @@ public sealed class FlagonOptions
     public bool FailFastOnStartup { get; set; }
 
     /// <summary>
+    /// When true (the default) the store's schema is created or upgraded (<see cref="IFlagStore.ApplyMigrationsAsync"/>)
+    /// when the host starts, before flags are loaded; a failed migration is retried on each refresh until it succeeds.
+    /// Turn off when schema changes are applied by a DBA from the store's exported scripts.
+    /// </summary>
+    public bool AutoMigrate { get; set; } = true;
+
+    /// <summary>
     /// Uses the store built by <paramref name="factory"/>. Storage packages wrap this in their own extension
     /// (e.g. <c>UseSqlServerStorage</c>). The last storage call wins.
     /// </summary>
