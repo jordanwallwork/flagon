@@ -111,6 +111,34 @@ public sealed class TracingTests : IDisposable
     }
 
     [Fact]
+    public async Task Seeding_flags_defined_in_code_is_traced()
+    {
+        await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.Define("seeded", true));
+
+        var seed = Assert.Single(Named("flagon.seed"));
+        Assert.Equal(ActivityStatusCode.Unset, seed.Status);
+        Assert.Equal(1, seed.GetTagItem("flagon.seed.definitions"));
+    }
+
+    [Fact]
+    public async Task A_seeding_failure_is_traced_as_an_error_and_counted_as_a_store_error()
+    {
+        var store = OutageFlagStore.Wrap(isDown: true);
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store.Store;
+            o.Flagon = f => f.Define("seeded", true);
+        });
+        using var storeErrors = new MetricCollector<long>(
+            host.Services.GetRequiredService<IMeterFactory>(), FlagonDiagnostics.MeterName, "flagon.store.errors");
+
+        await host.AdvanceToNextRefreshAsync();
+
+        Assert.All(Named("flagon.seed"), a => Assert.Equal(ActivityStatusCode.Error, a.Status));
+        Assert.Contains(storeErrors.GetMeasurementSnapshot(), m => (string?)m.Tags["flagon.store.operation"] == "seed");
+    }
+
+    [Fact]
     public async Task A_store_failure_during_an_admin_write_is_counted_as_a_store_error()
     {
         var store = OutageFlagStore.Wrap();

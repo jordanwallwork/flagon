@@ -9,22 +9,32 @@ internal sealed record FlagDefinition(string Key, bool DefaultValue, string? Des
 /// Applies the flags declared with <see cref="FlagonOptions.Define"/> to the store: creates missing ones (source code)
 /// and syncs metadata of existing ones without touching their state. Archived flags are never revived or changed.
 /// </summary>
-internal sealed class FlagSeeder(IFlagStore store, FlagonOptions options, FlagChangeStamper changes)
+internal sealed class FlagSeeder(
+    IFlagStore store,
+    FlagonOptions options,
+    FlagChangeStamper changes,
+    FlagonInstrumentation instrumentation)
 {
     private const int MaxConflictRetries = 5;
 
     /// <summary>Seeds every definition. Throws on store failure; already-seeded definitions are idempotent on retry.</summary>
     public async Task SeedAsync(CancellationToken cancellationToken)
     {
-        if (store.IsReadOnly)
+        if (store.IsReadOnly || options.Definitions.Count == 0)
         {
             return;
         }
 
-        foreach (var definition in options.Definitions)
+        await instrumentation.TraceStoreOperationAsync("seed", flagKey: null, async activity =>
         {
-            await SeedAsync(definition, cancellationToken).ConfigureAwait(false);
-        }
+            activity?.SetTag("flagon.seed.definitions", options.Definitions.Count);
+            foreach (var definition in options.Definitions)
+            {
+                await SeedAsync(definition, cancellationToken).ConfigureAwait(false);
+            }
+
+            return true;
+        }).ConfigureAwait(false);
     }
 
     private async Task SeedAsync(FlagDefinition definition, CancellationToken cancellationToken)
