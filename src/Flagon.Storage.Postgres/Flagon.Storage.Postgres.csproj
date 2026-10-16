@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>Flagon.Storage.Postgres</PackageId>
+    <Description>PostgreSQL storage for Flagon feature flags: raw ADO.NET via Npgsql, embedded versioned migrations applied on startup (or exported for DBA-managed deployments).</Description>
+    <RootNamespace>Flagon.Storage.Postgres</RootNamespace>
+    <PackageTags>$(PackageTags);postgres;postgresql;npgsql</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Migrations\*.sql" LogicalName="Flagon.Storage.Postgres.Migrations.%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Flagon\Flagon.csproj" />
+  </ItemGroup>
+</Project>
