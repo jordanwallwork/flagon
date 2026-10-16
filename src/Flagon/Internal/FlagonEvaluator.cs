@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace Flagon.Internal;
 
 /// <summary>Evaluates flags against the current snapshot. No I/O.</summary>
-internal sealed partial class FlagonEvaluator(FlagSnapshotManager snapshots, ILogger<FlagonEvaluator> logger) : IFlagon
+internal sealed partial class FlagonEvaluator(FlagSnapshotManager snapshots, ILogger<FlagonEvaluator> logger, FlagAutoCreator autoCreator) : IFlagon
 {
     private readonly ConcurrentDictionary<string, byte> _warnedMissingKeys = new(StringComparer.Ordinal);
 
@@ -21,6 +21,7 @@ internal sealed partial class FlagonEvaluator(FlagSnapshotManager snapshots, ILo
         if (key is null || !snapshots.Current.Flags.TryGetValue(key, out var flag))
         {
             WarnMissingOnce(key ?? string.Empty);
+            autoCreator.Enqueue(key ?? string.Empty, defaultValue);
             return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 

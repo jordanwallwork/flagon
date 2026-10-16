@@ -46,6 +46,9 @@ public static class FlagonServiceCollectionExtensions
             ResolveApplicationName(options, sp)));
         services.AddSingleton<IFlagonAdmin, FlagonAdmin>();
         services.AddHostedService<FlagonHostedService>();
+        // Registered after the refresher so it stops (and drains its queue) first.
+        services.AddSingleton<FlagAutoCreator>();
+        services.AddHostedService(sp => sp.GetRequiredService<FlagAutoCreator>());
 
         return services;
     }
