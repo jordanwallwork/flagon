@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Flagon.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace Flagon.Internal;
@@ -25,6 +26,22 @@ internal sealed partial class FlagonEvaluator(FlagSnapshotManager snapshots, ILo
             return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 
+        return Evaluate(key, flag, defaultValue);
+    }
+
+    public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null)
+    {
+        // Read the snapshot once so the version and the flags agree.
+        var snapshot = snapshots.Current;
+        var results = snapshot.Flags.Values
+            .OrderBy(f => f.Key, StringComparer.Ordinal)
+            .Select(f => Evaluate(f.Key, f, defaultValue: false))
+            .ToList();
+        return new FlagEvaluationSet<bool>(snapshot.Version, results);
+    }
+
+    private static FlagEvaluationDetails<bool> Evaluate(string key, FlagRecord flag, bool defaultValue)
+    {
         // An archived flag fails safe to the caller's default whatever its document says.
         if (flag.Archived)
         {

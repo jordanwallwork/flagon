@@ -1,4 +1,8 @@
 using Flagon.Storage;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -29,6 +33,13 @@ public sealed class FlagonTestHostOptions
 
     /// <summary>Extra service registrations, applied after <c>AddFlagon</c>.</summary>
     public Action<IServiceCollection>? Services { get; set; }
+
+    /// <summary>
+    /// Makes the host a <see cref="WebApplication"/> served by an in-memory <see cref="TestServer"/>: this delegate
+    /// maps endpoints (e.g. <c>app =&gt; app.MapFlagonOfrep()</c>) after the authentication/authorization middleware.
+    /// Call the app with <see cref="FlagonTestHost.CreateClient"/>. Null (default) builds a plain generic host.
+    /// </summary>
+    public Action<WebApplication>? Endpoints { get; set; }
 }
 
 /// <summary>
@@ -65,17 +76,53 @@ public sealed class FlagonTestHost : IAsyncDisposable
         var time = options.Time ?? new FakeTimeProvider(Epoch);
         var logs = new TestLogSink();
 
-        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        IHost host;
+        if (options.Endpoints is null)
         {
-            ApplicationName = options.ApplicationName,
-            EnvironmentName = options.EnvironmentName,
-            DisableDefaults = true,
-        });
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Trace);
-        builder.Logging.AddProvider(logs);
-        builder.Services.AddSingleton<TimeProvider>(time);
-        builder.Services.AddFlagon(o =>
+            var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+            {
+                ApplicationName = options.ApplicationName,
+                EnvironmentName = options.EnvironmentName,
+                DisableDefaults = true,
+            });
+            ConfigureServices(builder.Services, builder.Logging, options, time, logs);
+            host = builder.Build();
+        }
+        else
+        {
+            var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions
+            {
+                ApplicationName = options.ApplicationName,
+                EnvironmentName = options.EnvironmentName,
+            });
+            builder.WebHost.UseTestServer();
+            builder.Services.AddRouting();
+            builder.Services
+                .AddAuthentication(TestAuthHandler.SchemeName)
+                .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, null);
+            builder.Services.AddAuthorization();
+            ConfigureServices(builder.Services, builder.Logging, options, time, logs);
+
+            var app = builder.Build();
+            app.UseRouting();
+            app.UseAuthentication();
+            app.UseAuthorization();
+            options.Endpoints(app);
+            host = app;
+        }
+
+        await host.StartAsync();
+        return new FlagonTestHost(host, time, logs);
+    }
+
+    private static void ConfigureServices(
+        IServiceCollection services, ILoggingBuilder logging, FlagonTestHostOptions options, FakeTimeProvider time, TestLogSink logs)
+    {
+        logging.ClearProviders();
+        logging.SetMinimumLevel(LogLevel.Trace);
+        logging.AddProvider(logs);
+        services.AddSingleton<TimeProvider>(time);
+        services.AddFlagon(o =>
         {
             if (options.Store is not null)
             {
@@ -83,11 +130,33 @@ public sealed class FlagonTestHost : IAsyncDisposable
             }
             options.Flagon?.Invoke(o);
         });
-        options.Services?.Invoke(builder.Services);
+        options.Services?.Invoke(services);
+    }
 
-        var host = builder.Build();
-        await host.StartAsync();
-        return new FlagonTestHost(host, time, logs);
+    /// <summary>
+    /// An <see cref="HttpClient"/> for the in-memory test server (requires <see cref="FlagonTestHostOptions.Endpoints"/>).
+    /// With <paramref name="user"/>, requests are authenticated as that user id with the given roles
+    /// (see <see cref="TestAuthHandler"/>); otherwise they are anonymous.
+    /// </summary>
+    public HttpClient CreateClient(string? user = null, params string[] roles)
+    {
+        if (_host is not WebApplication app)
+        {
+            throw new InvalidOperationException(
+                $"Set {nameof(FlagonTestHostOptions)}.{nameof(FlagonTestHostOptions.Endpoints)} to host a web application.");
+        }
+
+        var client = app.GetTestClient();
+        if (user is not null)
+        {
+            client.DefaultRequestHeaders.Add(TestAuthHandler.UserHeader, user);
+            foreach (var role in roles)
+            {
+                client.DefaultRequestHeaders.Add(TestAuthHandler.RoleHeader, role);
+            }
+        }
+
+        return client;
     }
 
     /// <summary>The snapshot freshness status (what a health check would read).</summary>
@@ -153,6 +222,13 @@ public sealed class FlagonTestHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _host.StopAsync();
-        _host.Dispose();
+        if (_host is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync();
+        }
+        else
+        {
+            _host.Dispose();
+        }
     }
 }
