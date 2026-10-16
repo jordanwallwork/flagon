@@ -3,7 +3,7 @@ using Flagon.Storage;
 namespace Flagon;
 
 /// <summary>Flagon configuration, supplied via <c>services.AddFlagon(opts =&gt; ...)</c>.</summary>
-public sealed class FlagonOptions
+public sealed partial class FlagonOptions
 {
     private TimeSpan _refreshInterval = TimeSpan.FromSeconds(10);
     private TimeSpan _usageFlushInterval = TimeSpan.FromSeconds(60);
