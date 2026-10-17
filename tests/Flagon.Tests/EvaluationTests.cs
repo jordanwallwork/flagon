@@ -33,7 +33,7 @@ public class EvaluationTests
     [InlineData(false)]
     public async Task A_missing_flag_returns_the_callers_default_with_flag_not_found(bool callerDefault)
     {
-        await using var host = await FlagonTestHost.StartAsync();
+        await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.AutoCreate = false);
 
         Assert.Equal(callerDefault, host.Flagon.IsEnabled("does-not-exist", callerDefault));
         Assert.Equal(callerDefault, await host.Flagon.IsEnabledAsync("does-not-exist", callerDefault));

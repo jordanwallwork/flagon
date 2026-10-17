@@ -12,7 +12,11 @@ public class SqlServerHostTests(SqlServerFixture db)
     public async Task Flagon_creates_its_schema_on_startup_and_serves_flags_from_sql_server()
     {
         var schema = SqlServerFixture.NewSchema();
-        await using var appA = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.UseSqlServerStorage(db.ConnectionString, schema: schema));
+        await using var appA = await FlagonTestHost.StartAsync(o => o.Flagon = f =>
+        {
+            f.AutoCreate = false;
+            f.UseSqlServerStorage(db.ConnectionString, schema: schema);
+        });
 
         Assert.Equal(1, await db.ScalarAsync<int>($"SELECT MAX([version]) FROM [{schema}].[schema_version]"));
         Assert.True(appA.Status.IsLoaded);
