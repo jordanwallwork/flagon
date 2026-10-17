@@ -1,7 +1,5 @@
-using Microsoft.AspNetCore.Authorization;
+using Flagon.AspNetCore.Internal;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 
 namespace Flagon.AspNetCore.Management;
 
@@ -14,7 +12,7 @@ internal static class ManagementEndpointFilter
     public static async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var http = context.HttpContext;
-        if (!IsAuthorizationConfigured(http) && !http.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment())
+        if (!ManagementGate.IsOpen(http))
         {
             // Look like nothing is mapped here, rather than advertising an unprotected management API.
             return Results.NotFound();
@@ -50,21 +48,6 @@ internal static class ManagementEndpointFilter
                 ["currentVersion"] = ex.CurrentVersion,
             });
         }
-    }
-
-    /// <summary>
-    /// True when the endpoint carries authorization requirements (e.g. from <c>RequireAuthorization(...)</c>) that are not
-    /// cancelled by <c>AllowAnonymous()</c>.
-    /// </summary>
-    private static bool IsAuthorizationConfigured(HttpContext http)
-    {
-        var metadata = http.GetEndpoint()?.Metadata;
-        if (metadata is null || metadata.GetMetadata<IAllowAnonymous>() is not null)
-        {
-            return false;
-        }
-
-        return metadata.GetMetadata<IAuthorizeData>() is not null || metadata.GetMetadata<AuthorizationPolicy>() is not null;
     }
 
     private static IResult Problem(int status, string title, string detail, IDictionary<string, object?>? extensions = null) =>
