@@ -16,6 +16,7 @@ internal sealed partial class FlagonHostedService(
     FlagSeeder seeder,
     FlagonOptions options,
     TimeProvider time,
+    FlagonInstrumentation instrumentation,
     ILogger<FlagonHostedService> logger) : IHostedService, IAsyncDisposable
 {
     private readonly CancellationTokenSource _stopping = new();
@@ -109,7 +110,11 @@ internal sealed partial class FlagonHostedService(
 
         try
         {
-            await store.ApplyMigrationsAsync(cancellationToken).ConfigureAwait(false);
+            await instrumentation.TraceStoreOperationAsync("migrate", flagKey: null, async _ =>
+            {
+                await store.ApplyMigrationsAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }).ConfigureAwait(false);
             _migrated = true;
             return null;
         }

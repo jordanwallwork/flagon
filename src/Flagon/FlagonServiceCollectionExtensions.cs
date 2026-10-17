@@ -36,6 +36,7 @@ public static class FlagonServiceCollectionExtensions
         var storeFactory = options.StoreFactory ?? (_ => new InMemoryFlagStore());
         services.AddSingleton(storeFactory);
 
+        services.AddSingleton<FlagonInstrumentation>();
         services.AddSingleton<FlagSnapshotManager>();
         services.AddSingleton<IFlagonSnapshotStatus>(sp => sp.GetRequiredService<FlagSnapshotManager>());
         services.AddSingleton<IFlagon, FlagonEvaluator>();

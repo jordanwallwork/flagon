@@ -1,9 +1,15 @@
 using Flagon.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace Flagon.Internal;
 
 /// <summary>Management operations. Writes go to the store, then the local snapshot is refreshed so this app sees them at once.</summary>
-internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshots, FlagChangeStamper changes) : IFlagonAdmin
+internal sealed partial class FlagonAdmin(
+    IFlagStore store,
+    FlagSnapshotManager snapshots,
+    FlagChangeStamper changes,
+    FlagonInstrumentation instrumentation,
+    ILogger<FlagonAdmin> logger) : IFlagonAdmin
 {
     public Task<IReadOnlyList<FlagRecord>> ListAsync(CancellationToken cancellationToken = default) =>
         store.LoadAllAsync(cancellationToken);
@@ -11,9 +17,14 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
     public Task<FlagRecord?> GetAsync(string key, CancellationToken cancellationToken = default) =>
         store.GetAsync(key, cancellationToken);
 
-    public async Task<FlagRecord> CreateAsync(CreateFlagRequest request, CancellationToken cancellationToken = default)
+    public Task<FlagRecord> CreateAsync(CreateFlagRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return WriteAsync("create", request.Key, () => CreateCoreAsync(request, cancellationToken));
+    }
+
+    private async Task<FlagRecord> CreateCoreAsync(CreateFlagRequest request, CancellationToken cancellationToken)
+    {
         FlagKey.Validate(request.Key);
         ValidateTags(request.Tags);
 
@@ -30,7 +41,10 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
         return record;
     }
 
-    public async Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default)
+    public Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("set_enabled", key, () => SetEnabledCoreAsync(key, enabled, expectedVersion, cancellationToken));
+
+    private async Task<FlagRecord> SetEnabledCoreAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken)
     {
         var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagNotFoundException(key);
@@ -50,9 +64,14 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
         return record;
     }
 
-    public async Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default)
+    public Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return WriteAsync("update_metadata", key, () => UpdateMetadataCoreAsync(key, request, expectedVersion, cancellationToken));
+    }
+
+    private async Task<FlagRecord> UpdateMetadataCoreAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken)
+    {
         ValidateTags(request.Tags);
 
         var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
@@ -82,25 +101,44 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
         return oldestFirst.Reverse().ToArray();
     }
 
-    public async Task<FlagRecord> ArchiveAsync(string key, long expectedVersion, CancellationToken cancellationToken = default)
-    {
-        var record = await store.ArchiveAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
-        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
-        return record;
-    }
+    public Task<FlagRecord> ArchiveAsync(string key, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("archive", key, async () =>
+        {
+            var record = await store.ArchiveAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+            await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            return record;
+        });
 
-    public async Task<FlagRecord> RestoreAsync(string key, long expectedVersion, CancellationToken cancellationToken = default)
-    {
-        var record = await store.RestoreAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
-        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
-        return record;
-    }
+    public Task<FlagRecord> RestoreAsync(string key, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("restore", key, async () =>
+        {
+            var record = await store.RestoreAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+            await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            return record;
+        });
 
-    public async Task PurgeAsync(string key, long expectedVersion, CancellationToken cancellationToken = default)
-    {
-        await store.PurgeAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
-        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
-    }
+    public Task PurgeAsync(string key, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("purge", key, async () =>
+        {
+            await store.PurgeAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
+            await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>Traces a write as <c>flagon.{operation}</c> (counting store failures) and logs optimistic-concurrency conflicts.</summary>
+    private Task<T> WriteAsync<T>(string operation, string key, Func<Task<T>> write) =>
+        instrumentation.TraceStoreOperationAsync(operation, key, async _ =>
+        {
+            try
+            {
+                return await write().ConfigureAwait(false);
+            }
+            catch (FlagVersionConflictException conflict)
+            {
+                LogVersionConflict(logger, operation, conflict.Key, conflict.ExpectedVersion, conflict.CurrentVersion);
+                throw;
+            }
+        });
 
     public async Task<FlagUsageReport> GetUsageAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -129,4 +167,8 @@ internal sealed class FlagonAdmin(IFlagStore store, FlagSnapshotManager snapshot
             }
         }
     }
+
+    [LoggerMessage(EventId = 1201, Level = LogLevel.Information,
+        Message = "Flagon rejected {Operation} of flag '{FlagKey}': expected version {ExpectedVersion} but the flag is at version {CurrentVersion} (it was changed concurrently).")]
+    private static partial void LogVersionConflict(ILogger logger, string operation, string flagKey, long expectedVersion, long currentVersion);
 }

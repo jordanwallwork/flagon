@@ -45,7 +45,7 @@ public class AutoCreateTests
         Assert.Equal(FlagonTestHost.Epoch, entry.Timestamp);
         Assert.Null(entry.Before);
         Assert.Equal(FlagSource.Auto, entry.After!.Metadata.Source);
-        Assert.Contains(host.Logs.Flagon(LogLevel.Information), l => l.EventId.Id == 1201 && l.Message.Contains("'new-thing'", StringComparison.Ordinal));
+        Assert.Contains(host.Logs.Flagon(LogLevel.Information), l => l.EventId.Id == 1401 && l.Message.Contains("'new-thing'", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class AutoCreateTests
             Assert.Single(await store.GetAuditAsync("racy"));
             foreach (var host in hosts)
             {
-                Assert.DoesNotContain(host.Logs.Entries, l => l.Level >= LogLevel.Error || l.EventId.Id == 1202);
+                Assert.DoesNotContain(host.Logs.Entries, l => l.Level >= LogLevel.Error || l.EventId.Id == 1402);
             }
         }
         finally
@@ -161,7 +161,7 @@ public class AutoCreateTests
 
         Assert.Equal(0, store.CallCount(nameof(IFlagStore.TryCreateAsync)));
         Assert.Empty(await store.Inner.LoadAllAsync());
-        Assert.DoesNotContain(host.Logs.Entries, l => l.Level >= LogLevel.Error || l.EventId.Id == 1202);
+        Assert.DoesNotContain(host.Logs.Entries, l => l.Level >= LogLevel.Error || l.EventId.Id == 1402);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class AutoCreateTests
 
         Assert.Equal(0, store.CallCount(nameof(IFlagStore.TryCreateAsync)));
         Assert.Empty(await store.Inner.LoadAllAsync());
-        Assert.DoesNotContain(host.Logs.Entries, l => l.Level >= LogLevel.Error || l.EventId.Id == 1202);
+        Assert.DoesNotContain(host.Logs.Entries, l => l.Level >= LogLevel.Error || l.EventId.Id == 1402);
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public class AutoCreateTests
 
         Assert.True(host.Flagon.IsEnabled("flaky", true));
         await FlagonTestHost.EventuallyAsync(
-            () => Task.FromResult(host.Logs.Flagon(LogLevel.Warning).Any(l => l.EventId.Id == 1202)),
+            () => Task.FromResult(host.Logs.Flagon(LogLevel.Warning).Any(l => l.EventId.Id == 1402)),
             "the failed create is logged");
 
         store.IsDown = false;

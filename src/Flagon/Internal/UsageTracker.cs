@@ -16,6 +16,7 @@ internal sealed partial class UsageTracker(
     FlagonOptions options,
     TimeProvider time,
     FlagChangeStamper changes,
+    FlagonInstrumentation instrumentation,
     ILogger<UsageTracker> logger)
 {
     private static readonly JsonElement True = JsonSerializer.SerializeToElement(true);
@@ -83,7 +84,12 @@ internal sealed partial class UsageTracker(
 
             try
             {
-                await store.UpsertUsageAsync(batch, cancellationToken).ConfigureAwait(false);
+                await instrumentation.TraceStoreOperationAsync("usage_flush", flagKey: null, async activity =>
+                {
+                    activity?.SetTag("flagon.usage.flags", batch.Count);
+                    await store.UpsertUsageAsync(batch, cancellationToken).ConfigureAwait(false);
+                    return true;
+                }).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -102,7 +108,7 @@ internal sealed partial class UsageTracker(
         }
     }
 
-    [LoggerMessage(EventId = 1201, Level = LogLevel.Warning, Message = "Flagon could not write usage for {Count} flag(s) to the store; it will be retried at the next flush.")]
+    [LoggerMessage(EventId = 1501, Level = LogLevel.Warning, Message = "Flagon could not write usage for {Count} flag(s) to the store; it will be retried at the next flush.")]
     private static partial void LogFlushFailed(ILogger logger, Exception exception, int count);
 
     private sealed class Entry

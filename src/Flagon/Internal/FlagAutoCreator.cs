@@ -17,6 +17,7 @@ internal sealed partial class FlagAutoCreator(
     FlagSnapshotManager snapshots,
     FlagChangeStamper changes,
     FlagonOptions options,
+    FlagonInstrumentation instrumentation,
     ILogger<FlagAutoCreator> logger) : IHostedService, IDisposable
 {
     private readonly Channel<(string Key, bool DefaultValue)> _queue =
@@ -105,8 +106,13 @@ internal sealed partial class FlagAutoCreator(
 
             var change = changes.Begin();
             var metadata = new FlagMetadata(Source: FlagSource.Auto).StampCreated(change);
-            var created = await store.TryCreateAsync(key, FlagDocument.Boolean(defaultValue, metadata), change, cancellationToken)
-                .ConfigureAwait(false);
+            var created = await instrumentation.TraceStoreOperationAsync("auto_create", key, async activity =>
+            {
+                var record = await store.TryCreateAsync(key, FlagDocument.Boolean(defaultValue, metadata), change, cancellationToken)
+                    .ConfigureAwait(false);
+                activity?.SetTag("flagon.auto_create.created", record is not null);
+                return record;
+            }).ConfigureAwait(false);
 
             if (created is null)
             {
@@ -142,11 +148,11 @@ internal sealed partial class FlagAutoCreator(
         }
     }
 
-    [LoggerMessage(EventId = 1201, Level = LogLevel.Information,
+    [LoggerMessage(EventId = 1401, Level = LogLevel.Information,
         Message = "Auto-created flag '{FlagKey}' with default {DefaultValue} on first evaluation by '{ApplicationName}'.")]
     private static partial void LogAutoCreated(ILogger logger, string flagKey, bool defaultValue, string? applicationName);
 
-    [LoggerMessage(EventId = 1202, Level = LogLevel.Warning,
+    [LoggerMessage(EventId = 1402, Level = LogLevel.Warning,
         Message = "Could not auto-create flag '{FlagKey}'; it will be retried the next time it is evaluated.")]
     private static partial void LogAutoCreateFailed(ILogger logger, Exception exception, string flagKey);
 }
