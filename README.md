@@ -72,8 +72,8 @@ FlagEvaluationDetails<bool> details = flags.GetBooleanDetails("new-checkout");
 
 Every evaluation method takes an optional `EvaluationContext` (targeting key plus attributes). When you don't pass one,
 Flagon uses the ambient context: with `builder.Services.AddFlagonAmbientContext()` (Flagon.AspNetCore) that is the
-current request's user. MVP flags have no targeting rules yet, so the context doesn't change results today, but call
-sites written now keep working when targeting arrives.
+current request's user. A flag's flagd `targeting` rule (JsonLogic plus `fractional`, `sem_ver`, `starts_with` and
+`ends_with`) is evaluated against that context, compiled once when the snapshot loads.
 
 The first time code evaluates an unknown key, Flagon creates the flag (in the background, off the evaluation path) with
 the default the code supplied, marked `source: auto`. Archived keys are never re-created.

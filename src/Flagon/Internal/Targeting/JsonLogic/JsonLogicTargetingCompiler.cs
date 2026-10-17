@@ -1,16 +1,16 @@
 using System.Text;
 using System.Text.Json;
 
-namespace Flagon.Internal.Targeting.OwnJsonLogic;
+namespace Flagon.Internal.Targeting.JsonLogic;
 
 /// <summary>
-/// Spike A (#22): compiles flagd targeting into a tree of <see cref="Node"/>s once, evaluated per call without parsing
+/// Flagon's targeting engine (the default <see cref="ITargetingCompiler"/>; ADR 0001): compiles flagd targeting into a tree of <see cref="Node"/>s once, evaluated per call without parsing
 /// and, for common rules, without allocating. Semantics follow flagd 0.18: diegoholiveira/jsonlogic v3.9.1 restricted to
 /// the operators flagd's targeting schema allows, plus <c>fractional</c> (v3), <c>sem_ver</c>, <c>starts_with</c> and
 /// <c>ends_with</c>. An unknown operator (including an unresolved <c>$ref</c>) or a rule the Go engine would reject
 /// for any data fails compilation.
 /// </summary>
-internal sealed class OwnJsonLogicCompiler : ITargetingCompiler
+internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
 {
     private static readonly TargetingCompilation NeverMatches = TargetingCompilation.Success(static (in TargetingContext _) => null);
 

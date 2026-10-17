@@ -1,4 +1,4 @@
-namespace Flagon.Internal.Targeting.OwnJsonLogic;
+namespace Flagon.Internal.Targeting.JsonLogic;
 
 /// <summary>
 /// flagd <c>sem_ver</c> (<c>core/pkg/evaluator/semver.go</c>) over a port of <c>golang.org/x/mod/semver</c>: optional

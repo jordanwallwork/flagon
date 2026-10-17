@@ -113,10 +113,10 @@ public abstract class FlagdParityTests(ITestOutputHelper output)
 }
 
 /// <summary>
-/// The parity harness against Flagon's default registration (whatever compiler <c>AddFlagon</c> wires up; today the
-/// never-matching <see cref="NullTargetingCompiler"/>). Its expected-failure list must be empty once the chosen engine lands.
-/// A spike adds a sibling, e.g.
-/// <c>public sealed class JsonLogicParityTests(ITestOutputHelper o) : FlagdParityTests(o) { protected override string CompilerName =&gt; "json-logic"; private protected override ITargetingCompiler Compiler { get; } = new JsonLogicTargetingCompiler(); }</c>.
+/// The parity harness against Flagon's default registration (whatever compiler <c>AddFlagon</c> wires up:
+/// <see cref="Internal.Targeting.JsonLogic.JsonLogicTargetingCompiler"/>). Its expected-failure list holds only cases
+/// whose fixture flag Flagon cannot store. An alternative compiler adds a sibling, e.g.
+/// <c>public sealed class OtherParityTests(ITestOutputHelper o) : FlagdParityTests(o) { protected override string CompilerName =&gt; "other"; private protected override ITargetingCompiler Compiler { get; } = new OtherTargetingCompiler(); }</c>.
 /// </summary>
 public sealed class DefaultCompilerParityTests(ITestOutputHelper output) : FlagdParityTests(output)
 {

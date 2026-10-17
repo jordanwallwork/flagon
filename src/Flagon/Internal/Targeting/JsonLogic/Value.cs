@@ -3,7 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
-namespace Flagon.Internal.Targeting.OwnJsonLogic;
+namespace Flagon.Internal.Targeting.JsonLogic;
 
 internal enum Kind : byte
 {

@@ -18,6 +18,5 @@
   <ItemGroup>
     <ProjectReference Include="..\Flagon.Tests.Support\Flagon.Tests.Support.csproj" />
     <ProjectReference Include="..\..\src\Flagon.Storage.Conformance\Flagon.Storage.Conformance.csproj" />
-    <ProjectReference Include="..\..\src\Flagon.Targeting.JsonEverything\Flagon.Targeting.JsonEverything.csproj" />
   </ItemGroup>
 </Project>

@@ -29,7 +29,7 @@ public class FlagdSemanticsTests
     }
 
     [Fact]
-    public async Task A_flag_with_targeting_serves_its_default_variant_with_reason_default_because_targeting_is_not_evaluated_yet()
+    public async Task A_flag_whose_rule_matches_serves_the_rules_variant_and_otherwise_its_default_variant()
     {
         await using var host = await HostWithStoredFlagAsync("targeted", """
             {
@@ -38,9 +38,11 @@ public class FlagdSemanticsTests
             }
             """);
 
-        var details = host.Flagon.GetBooleanDetails("targeted", false, new EvaluationContext("u1", new Dictionary<string, object?> { ["country"] = "GB" }));
+        var gb = host.Flagon.GetBooleanDetails("targeted", true, new EvaluationContext("u1", new Dictionary<string, object?> { ["country"] = "GB" }));
+        var fr = host.Flagon.GetBooleanDetails("targeted", false, new EvaluationContext("u2", new Dictionary<string, object?> { ["country"] = "FR" }));
 
-        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", true, "on", EvaluationReason.Default), details);
+        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", false, "off", EvaluationReason.TargetingMatch), gb);
+        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", true, "on", EvaluationReason.Default), fr);
     }
 
     [Fact]

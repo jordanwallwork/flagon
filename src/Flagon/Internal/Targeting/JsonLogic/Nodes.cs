@@ -1,4 +1,4 @@
-namespace Flagon.Internal.Targeting.OwnJsonLogic;
+namespace Flagon.Internal.Targeting.JsonLogic;
 
 /// <summary>
 /// What a node evaluates against: the targeting context and the current data object (<see cref="Value.Root"/>, or an

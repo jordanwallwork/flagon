@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 
-namespace Flagon.Internal.Targeting.OwnJsonLogic;
+namespace Flagon.Internal.Targeting.JsonLogic;
 
 /// <summary>
 /// flagd <c>fractional</c>, bucketing generation v3 (flagd 0.18, <c>core/pkg/evaluator/fractional.go</c>): murmur3 x86

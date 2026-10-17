@@ -223,13 +223,36 @@ public class TargetingSeamTests
     }
 
     [Fact]
-    public async Task The_default_compiler_never_matches_so_targeted_flags_serve_their_default_variant()
+    public async Task The_default_compiler_evaluates_flagd_targeting_rules()
+    {
+        var store = new InMemoryFlagStore();
+        await store.TryCreateAsync("targeted", FlagdJson.Deserialize("""
+            {
+              "state": "ENABLED", "variants": { "on": true, "off": false }, "defaultVariant": "off",
+              "targeting": { "if": [ { "==": [ { "var": "country" }, "GB" ] }, "on", null ] }
+            }
+            """));
+        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store);
+
+        var gb = new EvaluationContext("alice", new Dictionary<string, object?> { ["country"] = "GB" });
+        var fr = new EvaluationContext("bob", new Dictionary<string, object?> { ["country"] = "FR" });
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", true, "on", EvaluationReason.TargetingMatch), host.Flagon.GetBooleanDetails("targeted", false, gb));
+        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", false, "off", EvaluationReason.Default), host.Flagon.GetBooleanDetails("targeted", true, fr));
+    }
+
+    [Fact]
+    public async Task The_default_compiler_rejects_an_operator_outside_flagds_set_with_a_parse_error()
     {
         var store = new InMemoryFlagStore();
         await store.TryCreateAsync("targeted", FlagdJson.Deserialize(TargetedFlag));
         await using var host = await FlagonTestHost.StartAsync(o => o.Store = store);
 
-        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", false, "off", EvaluationReason.Default), host.Flagon.GetBooleanDetails("targeted", true));
+        var details = host.Flagon.GetBooleanDetails("targeted", true);
+
+        Assert.Equal(EvaluationReason.Error, details.Reason);
+        Assert.Equal(ErrorCode.ParseError, details.ErrorCode);
+        Assert.True(details.Value);
     }
 
     private static IReadOnlyList<Support.CapturedLog> CompileWarnings(FlagonTestHost host) =>

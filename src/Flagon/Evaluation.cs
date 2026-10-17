@@ -86,7 +86,7 @@ public sealed record FlagEvaluationDetails<T>(
 
 /// <summary>
 /// The context a flag is evaluated in: a targeting key (usually a user id) plus string-keyed attributes.
-/// Accepted by every evaluation API today; the MVP boolean engine does not use it.
+/// A flag's targeting rule is evaluated against it (with <c>targetingKey</c> injected, as flagd does).
 /// </summary>
 public sealed class EvaluationContext
 {

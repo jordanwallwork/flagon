@@ -14,6 +14,5 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Flagon\Flagon.csproj" />
-    <ProjectReference Include="..\..\src\Flagon.Targeting.JsonEverything\Flagon.Targeting.JsonEverything.csproj" />
   </ItemGroup>
 </Project>

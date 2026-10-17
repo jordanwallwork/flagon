@@ -6,8 +6,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Flagon.Benchmarks;
 
 /// <summary>
-/// The hot path: <see cref="IFlagon.GetBooleanDetails"/> on a loaded snapshot with an explicit context, per engine.
-/// Every targeted scenario's context makes its rule match.
+/// The hot path: <see cref="IFlagon.GetBooleanDetails"/> on a loaded snapshot with an explicit context, through the
+/// default registration. Every targeted scenario's context makes its rule match.
 /// </summary>
 [MemoryDiagnoser]
 public class EvaluationBenchmarks
@@ -22,11 +22,6 @@ public class EvaluationBenchmarks
     private IFlagon _flagon = null!;
     private EvaluationContext _context = null!;
 
-    [ParamsSource(nameof(EngineNames))]
-    public string Engine { get; set; } = Engines.OwnJsonLogic;
-
-    public static IEnumerable<string> EngineNames => Engines.Names;
-
     [GlobalSetup]
     public void Setup()
     {
@@ -38,7 +33,6 @@ public class EvaluationBenchmarks
 
         var services = new ServiceCollection();
         services.AddFlagon(o => o.UseStorage(store));
-        services.AddSingleton(Engines.Create(Engine));
         _services = services.BuildServiceProvider();
         _services.GetRequiredService<FlagSnapshotManager>().RefreshAsync().GetAwaiter().GetResult();
         _flagon = _services.GetRequiredService<IFlagon>();
@@ -55,7 +49,7 @@ public class EvaluationBenchmarks
             var details = _flagon.GetBooleanDetails(key, false, _context);
             if (details.ErrorCode != ErrorCode.None || (key != "static" && details.Reason != EvaluationReason.TargetingMatch))
             {
-                throw new InvalidOperationException($"{Engine}: '{key}' evaluated to {details}; the scenario is broken.");
+                throw new InvalidOperationException($"'{key}' evaluated to {details}; the scenario is broken.");
             }
         }
     }

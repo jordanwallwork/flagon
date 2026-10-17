@@ -1,17 +1,17 @@
 using System.Text.Json;
 using Flagon.Internal.Targeting;
-using Flagon.Internal.Targeting.OwnJsonLogic;
+using Flagon.Internal.Targeting.JsonLogic;
 
 namespace Flagon.Tests;
 
 /// <summary>
-/// Spike A (#22) at the <see cref="ITargetingCompiler"/> seam: what the flagd-testbed does not cover (zero-allocation
+/// The default targeting engine at the <see cref="ITargetingCompiler"/> seam: what the flagd-testbed does not cover (zero-allocation
 /// evaluation, out-of-schema operators, rules over non-string context values). Parity itself is
-/// <c>OwnJsonLogicParityTests</c>.
+/// <c>DefaultCompilerParityTests</c>.
 /// </summary>
-public class OwnJsonLogicCompilerTests
+public class JsonLogicTargetingCompilerTests
 {
-    private static readonly OwnJsonLogicCompiler Compiler = new();
+    private static readonly JsonLogicTargetingCompiler Compiler = new();
 
     private static CompiledRule Compile(string flagKey, string rule)
     {
