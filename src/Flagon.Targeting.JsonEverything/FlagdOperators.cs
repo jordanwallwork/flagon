@@ -6,7 +6,8 @@ namespace Flagon.Targeting.JsonEverything;
 
 /// <summary>
 /// flagd's custom operators (<c>fractional</c>, <c>sem_ver</c>, <c>starts_with</c>, <c>ends_with</c>) as JsonLogic
-/// <see cref="IRule"/> handlers.
+/// <see cref="IRule"/> handlers, plus the standard operators whose json-everything semantics differ from flagd's
+/// (<c>var</c>).
 /// </summary>
 /// <remarks>
 /// json-everything's <see cref="RuleRegistry"/> is process-global and <c>AddRule</c> overwrites. Registering the public
@@ -26,6 +27,9 @@ internal static class FlagdOperators
         ["sem_ver"] = new SemVerRule(),
         ["starts_with"] = new StringComparisonRule(static (value, target) => value.StartsWith(target, StringComparison.Ordinal)),
         ["ends_with"] = new StringComparisonRule(static (value, target) => value.EndsWith(target, StringComparison.Ordinal)),
+
+        // Parity override of a standard operator: json-everything's var returns a present-but-null value, flagd its default.
+        ["var"] = new VarRule(),
     };
 
     private static int _registered;
@@ -53,6 +57,25 @@ internal static class FlagdOperators
 
     internal static string? AsString(JsonNode? node) =>
         node is JsonValue value && value.GetValueKind() == JsonValueKind.String ? value.GetValue<string>() : null;
+
+    /// <summary>flagd's <c>var</c>: the default applies when the path is missing or its value is null.</summary>
+    private sealed class VarRule : IRule
+    {
+        public JsonNode? Apply(JsonNode? args, Json.Logic.EvaluationContext context)
+        {
+            var (path, fallback) = args is JsonArray array
+                ? (array.Count > 0 ? array[0] : null, array.Count > 1 ? array[1] : null)
+                : (args, null);
+
+            var name = JsonLogic.Apply(path, context).Stringify();
+            if (string.IsNullOrEmpty(name))
+            {
+                return context.CurrentValue;
+            }
+
+            return context.TryFind(name, out var value) && value is not null ? value : JsonLogic.Apply(fallback, context);
+        }
+    }
 
     private sealed class StringComparisonRule(Func<string, string, bool> compare) : IRule
     {

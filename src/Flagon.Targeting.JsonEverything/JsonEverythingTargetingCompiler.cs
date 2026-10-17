@@ -17,10 +17,13 @@ internal sealed class JsonEverythingTargetingCompiler : ITargetingCompiler
 {
     private static readonly TargetingCompilation NeverMatches = TargetingCompilation.Success(static (in TargetingContext _) => null);
 
-    /// <summary>The operators flagd's targeting schema allows (flagd-schemas <c>targeting.json</c>), and no others.</summary>
+    /// <summary>
+    /// The operators flagd's targeting schema allows (flagd-schemas <c>targeting.json</c>) that run as json-everything
+    /// implements them. The rest of the schema's set (flagd's own operators, and <c>var</c>) is <see cref="FlagdOperators"/>.
+    /// </summary>
     private static readonly HashSet<string> StandardOperators = new(StringComparer.Ordinal)
     {
-        "var", "missing", "missing_some",
+        "missing", "missing_some",
         "if", "==", "===", "!=", "!==", "!", "!!", "or", "and",
         "<", "<=", ">", ">=",
         "+", "-", "*", "/", "%", "max", "min",
