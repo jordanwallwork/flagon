@@ -7,6 +7,8 @@
     <PackageVersion Include="MinVer" Version="6.0.0" />
   </ItemGroup>
   <ItemGroup Label="Runtime">
+    <!-- Spike B (#23) only: src/Flagon.Targeting.JsonEverything. -->
+    <PackageVersion Include="JsonLogic" Version="5.5.0" />
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.4" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.0.0" />
     <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="8.0.2" />
