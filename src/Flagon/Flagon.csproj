@@ -13,5 +13,8 @@
   <ItemGroup>
     <!-- OFREP evaluates through FlagonEvaluator's remote path (no usage, auto-create or ambient context). Packages ship in lockstep. -->
     <InternalsVisibleTo Include="Flagon.AspNetCore" />
+    <!-- Tests (and the shared test harness) register fake targeting compilers through the internal ITargetingCompiler seam. -->
+    <InternalsVisibleTo Include="Flagon.Tests" />
+    <InternalsVisibleTo Include="Flagon.Tests.Support" />
   </ItemGroup>
 </Project>

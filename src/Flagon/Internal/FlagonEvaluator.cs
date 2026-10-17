@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using Flagon.Storage;
+using Flagon.Internal.Targeting;
 using Microsoft.Extensions.Logging;
 
 namespace Flagon.Internal;
@@ -12,7 +12,8 @@ internal sealed partial class FlagonEvaluator(
     FlagonInstrumentation instrumentation,
     ILogger<FlagonEvaluator> logger,
     FlagAutoCreator autoCreator,
-    IEvaluationContextAccessor ambientContext) : IFlagon
+    IEvaluationContextAccessor ambientContext,
+    TimeProvider time) : IFlagon
 {
     private readonly ConcurrentDictionary<string, byte> _warnedMissingKeys = new(StringComparer.Ordinal);
 
@@ -59,15 +60,12 @@ internal sealed partial class FlagonEvaluator(
     /// <summary>Pure evaluation against the current snapshot: no usage, auto-create, logging or metrics.</summary>
     private FlagEvaluationDetails<bool> Evaluate(string key, bool defaultValue, EvaluationContext? context)
     {
-        // The MVP boolean engine does not use the context (explicit, else ambient); it is threaded through so call sites
-        // and the ambient fallback already work when targeting arrives.
-        _ = context;
         if (key is null || !snapshots.Current.Flags.TryGetValue(key, out var flag))
         {
             return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 
-        return Evaluate(key, flag, defaultValue);
+        return Evaluate(key, flag, defaultValue, context);
     }
 
     public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null) => EvaluateAll(context ?? ambientContext.Current);
@@ -77,21 +75,21 @@ internal sealed partial class FlagonEvaluator(
         // Read the snapshot once so the version and the flags agree.
         var snapshot = snapshots.Current;
         var results = snapshot.Flags.Values
-            .OrderBy(f => f.Key, StringComparer.Ordinal)
-            .Select(f => Evaluate(f.Key, f, defaultValue: false))
+            .OrderBy(f => f.Record.Key, StringComparer.Ordinal)
+            .Select(f => Evaluate(f.Record.Key, f, defaultValue: false, context))
             .ToList();
         return new FlagEvaluationSet<bool>(snapshot.Version, results);
     }
 
-    private static FlagEvaluationDetails<bool> Evaluate(string key, FlagRecord flag, bool defaultValue)
+    private FlagEvaluationDetails<bool> Evaluate(string key, SnapshotFlag flag, bool defaultValue, EvaluationContext? context)
     {
         // An archived flag fails safe to the caller's default whatever its document says.
-        if (flag.Archived)
+        if (flag.Record.Archived)
         {
             return new(key, defaultValue, null, EvaluationReason.Archived);
         }
 
-        var document = flag.Document;
+        var document = flag.Record.Document;
 
         // flagd semantics: a DISABLED flag yields the caller's default with reason DISABLED (not an error).
         if (document.State == FlagState.Disabled)
@@ -99,22 +97,57 @@ internal sealed partial class FlagonEvaluator(
             return new(key, defaultValue, null, EvaluationReason.Disabled);
         }
 
-        if (!document.Variants.TryGetValue(document.DefaultVariant, out var value))
+        // No targeting: the default variant, STATIC. Targeting resolving to null (no match): the default variant, DEFAULT.
+        var variant = document.DefaultVariant;
+        var reason = EvaluationReason.Static;
+        if (flag.Targeting is { } targeting)
+        {
+            if (targeting.Rule is not { } rule)
+            {
+                return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
+                    $"Flag '{key}' has a targeting rule that could not be compiled: {targeting.Error}");
+            }
+
+            string? matched;
+            try
+            {
+                matched = rule(new TargetingContext(key, context, time.GetUtcNow().ToUnixTimeSeconds()));
+            }
+            catch (Exception ex)
+            {
+                return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.General,
+                    $"Flag '{key}' targeting rule failed: {ex.Message}");
+            }
+
+            if (matched is null)
+            {
+                reason = EvaluationReason.Default;
+            }
+            else if (!document.Variants.ContainsKey(matched))
+            {
+                return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.General,
+                    $"Flag '{key}' targeting resolved to variant '{matched}', which is not one of its variants.");
+            }
+            else
+            {
+                variant = matched;
+                reason = EvaluationReason.TargetingMatch;
+            }
+        }
+
+        if (!document.Variants.TryGetValue(variant, out var value))
         {
             return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
-                $"Flag '{key}' has defaultVariant '{document.DefaultVariant}', which is not one of its variants.");
+                $"Flag '{key}' has defaultVariant '{variant}', which is not one of its variants.");
         }
 
         if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
         {
             return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.TypeMismatch,
-                $"Flag '{key}' variant '{document.DefaultVariant}' is not a boolean.");
+                $"Flag '{key}' variant '{variant}' is not a boolean.");
         }
 
-        // Targeting is not evaluated in the MVP: a flag with targeting serves its default variant with reason DEFAULT
-        // (as flagd does when no rule matches); a flag without targeting is STATIC.
-        var reason = document.Targeting is null ? EvaluationReason.Static : EvaluationReason.Default;
-        return new(key, value.GetBoolean(), document.DefaultVariant, reason);
+        return new(key, value.GetBoolean(), variant, reason);
     }
 
     public ValueTask<FlagEvaluationDetails<bool>> GetBooleanDetailsAsync(string key, bool defaultValue = false, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>

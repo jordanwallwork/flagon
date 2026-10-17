@@ -1,5 +1,6 @@
 using Flagon;
 using Flagon.Internal;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -37,6 +38,8 @@ public static class FlagonServiceCollectionExtensions
         services.AddSingleton(storeFactory);
 
         services.AddSingleton<FlagonInstrumentation>();
+        // Internal seam for the targeting engine; TryAdd so a replacement registered first wins (last-added also wins).
+        services.TryAddSingleton<ITargetingCompiler, NullTargetingCompiler>();
         services.AddSingleton<FlagSnapshotManager>();
         services.AddSingleton<IFlagonSnapshotStatus>(sp => sp.GetRequiredService<FlagSnapshotManager>());
         services.AddSingleton<FlagonEvaluator>();
