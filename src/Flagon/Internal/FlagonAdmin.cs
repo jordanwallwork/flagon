@@ -26,7 +26,7 @@ internal sealed partial class FlagonAdmin(
     private async Task<FlagRecord> CreateCoreAsync(CreateFlagRequest request, CancellationToken cancellationToken)
     {
         FlagKey.Validate(request.Key);
-        ValidateTags(request.Tags);
+        FlagTags.Validate(request.Tags);
 
         var change = changes.Begin();
         var metadata = new FlagMetadata(
@@ -72,7 +72,7 @@ internal sealed partial class FlagonAdmin(
 
     private async Task<FlagRecord> UpdateMetadataCoreAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken)
     {
-        ValidateTags(request.Tags);
+        FlagTags.Validate(request.Tags);
 
         var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagNotFoundException(key);
@@ -155,17 +155,6 @@ internal sealed partial class FlagonAdmin(
             .OrderBy(g => g.Key, StringComparer.Ordinal)
             .Select(g => FlagUsageReport.For(g.Key, g))
             .ToArray();
-    }
-
-    private static void ValidateTags(IReadOnlyList<string>? tags)
-    {
-        foreach (var tag in tags ?? [])
-        {
-            if (string.IsNullOrWhiteSpace(tag) || tag.Contains(',', StringComparison.Ordinal))
-            {
-                throw new FlagValidationException($"'{tag}' is not a valid tag. Tags must be non-blank and may not contain commas.");
-            }
-        }
     }
 
     [LoggerMessage(EventId = 1201, Level = LogLevel.Information,

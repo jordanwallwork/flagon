@@ -102,9 +102,13 @@ Flagon keeps serving the last snapshot it loaded.
 ## Storage
 
 Without a storage call Flagon uses an in-memory store, which is ideal for trying it out and for tests. For real use,
-install a provider and pass a connection string or the name of one in `ConnectionStrings`:
+install a provider and pass the name of a connection string in `ConnectionStrings`, or a connection string itself. A
+configured name wins; otherwise a value containing `=` is used as the connection string; anything else fails with a
+clear error when the store is created. Both extensions live in the `Flagon` namespace.
 
 ```csharp
+using Flagon;
+
 // PostgreSQL (Flagon.Storage.Postgres)
 builder.Services.AddFlagon(opts => opts.UsePostgresStorage("Flags"));                      // ConnectionStrings:Flags
 

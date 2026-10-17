@@ -16,6 +16,10 @@
     <ProjectReference Include="..\Flagon\Flagon.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Connection-string-or-name resolution shared by every storage package. -->
+    <Compile Include="..\Shared\ConnectionStringResolver.cs" Link="Internal\ConnectionStringResolver.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="Migrations\*.sql" LogicalName="Flagon.Storage.SqlServer.Migrations.%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

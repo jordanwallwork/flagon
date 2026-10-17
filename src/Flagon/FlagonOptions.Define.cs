@@ -23,13 +23,7 @@ public sealed partial class FlagonOptions
     {
         FlagKey.Validate(key);
         var tagList = tags?.ToArray() ?? [];
-        foreach (var tag in tagList)
-        {
-            if (string.IsNullOrWhiteSpace(tag) || tag.Contains(',', StringComparison.Ordinal))
-            {
-                throw new FlagValidationException($"'{tag}' is not a valid tag. Tags must be non-blank and may not contain commas.");
-            }
-        }
+        FlagTags.Validate(tagList);
 
         if (_definitions.Exists(d => string.Equals(d.Key, key, StringComparison.Ordinal)))
         {

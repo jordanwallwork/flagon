@@ -1,9 +1,8 @@
-using Flagon;
+using Flagon.Storage.Internal;
 using Flagon.Storage.SqlServer;
-using Microsoft.Extensions.Configuration;
 
 // ReSharper disable once CheckNamespace
-namespace Microsoft.Extensions.DependencyInjection;
+namespace Flagon;
 
 /// <summary>Configures Flagon to store flags in SQL Server.</summary>
 public static class SqlServerFlagonOptionsExtensions
@@ -14,33 +13,17 @@ public static class SqlServerFlagonOptionsExtensions
     /// </summary>
     /// <param name="options">The Flagon options.</param>
     /// <param name="connectionStringOrName">
-    /// A connection string, or the name of one in configuration (<c>ConnectionStrings:{name}</c>). A value that names
-    /// a configured connection string is used as a name; otherwise a value containing <c>=</c> is used as a connection string.
+    /// The name of a connection string in the app's configuration (<c>ConnectionStrings:{name}</c>), or a SQL Server
+    /// connection string. A configured name wins; otherwise a value containing <c>=</c> is used as the connection string.
+    /// Resolved when the store is first created; a value that is neither fails with <see cref="InvalidOperationException"/>.
     /// </param>
     /// <param name="schema">The schema holding Flagon's tables (letters, digits, underscores; default <c>flagon</c>).</param>
-    /// <exception cref="ArgumentException">The schema name is invalid.</exception>
+    /// <exception cref="ArgumentException"><paramref name="connectionStringOrName"/> is null or blank, or the schema name is invalid.</exception>
     public static FlagonOptions UseSqlServerStorage(this FlagonOptions options, string connectionStringOrName, string schema = SqlServerMigrations.DefaultSchema)
     {
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentException.ThrowIfNullOrEmpty(connectionStringOrName);
+        ConnectionStringResolver.Guard(connectionStringOrName);
         SqlServerMigrations.ValidateSchema(schema);
-        return options.UseStorage(sp => new SqlServerFlagStore(ResolveConnectionString(sp, connectionStringOrName), schema));
-    }
-
-    private static string ResolveConnectionString(IServiceProvider services, string connectionStringOrName)
-    {
-        var named = services.GetService<IConfiguration>()?.GetConnectionString(connectionStringOrName);
-        if (!string.IsNullOrEmpty(named))
-        {
-            return named;
-        }
-
-        if (connectionStringOrName.Contains('=', StringComparison.Ordinal))
-        {
-            return connectionStringOrName;
-        }
-
-        throw new InvalidOperationException(
-            $"Flagon SQL Server storage: no connection string named '{connectionStringOrName}' was found in configuration (ConnectionStrings:{connectionStringOrName}).");
+        return options.UseStorage(sp => new SqlServerFlagStore(ConnectionStringResolver.Resolve(sp, connectionStringOrName), schema));
     }
 }

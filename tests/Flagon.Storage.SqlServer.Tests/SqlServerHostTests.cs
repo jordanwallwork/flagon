@@ -70,6 +70,12 @@ public class SqlServerHostTests(SqlServerFixture db)
         Assert.Contains("NoSuchConnection", error.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_connection_string_is_rejected_when_storage_is_configured(string value) =>
+        Assert.Throws<ArgumentException>(() => new FlagonOptions().UseSqlServerStorage(value));
+
     [Fact]
     public async Task With_auto_migration_off_a_dba_can_install_the_schema_from_the_exported_script()
     {

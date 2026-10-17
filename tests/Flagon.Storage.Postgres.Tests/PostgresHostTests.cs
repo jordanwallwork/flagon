@@ -68,6 +68,31 @@ public class PostgresHostTests(PostgresFixture db) : IClassFixture<PostgresFixtu
         Assert.Contains("'Missing'", error.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_connection_string_is_rejected_when_storage_is_configured(string value) =>
+        Assert.Throws<ArgumentException>(() => new FlagonOptions().UsePostgresStorage(value));
+
+    [Fact]
+    public async Task A_configured_connection_string_name_takes_precedence_over_reading_the_value_as_a_connection_string()
+    {
+        var schema = PostgresFixture.NewSchema();
+        const string name = "Flags=Primary";
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { [$"ConnectionStrings:{name}"] = db.ConnectionString })
+            .Build();
+
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Flagon = f => f.UsePostgresStorage(name, schema);
+            o.Services = s => s.AddSingleton<IConfiguration>(configuration);
+        });
+
+        await host.Admin.CreateAsync(new CreateFlagRequest("named", Enabled: true));
+        Assert.True(host.Flagon.IsEnabled("named"));
+    }
+
     [Fact]
     public async Task With_auto_migrate_off_startup_leaves_the_database_untouched()
     {
