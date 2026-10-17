@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -8,6 +10,7 @@ internal sealed partial class FlagonAdmin(
     IFlagStore store,
     FlagSnapshotManager snapshots,
     FlagChangeStamper changes,
+    ITargetingCompiler compiler,
     FlagonInstrumentation instrumentation,
     ILogger<FlagonAdmin> logger) : IFlagonAdmin
 {
@@ -27,6 +30,7 @@ internal sealed partial class FlagonAdmin(
     {
         FlagKey.Validate(request.Key);
         FlagTags.Validate(request.Tags);
+        var targeting = TargetingRules.Validate(compiler, request.Key, request.Targeting);
 
         var change = changes.Begin();
         var metadata = new FlagMetadata(
@@ -34,7 +38,8 @@ internal sealed partial class FlagonAdmin(
             Tags: request.Tags,
             Source: FlagSource.Manual).StampCreated(change);
 
-        var record = await store.TryCreateAsync(request.Key, FlagDocument.Boolean(request.Enabled, metadata), change, cancellationToken).ConfigureAwait(false)
+        var document = FlagDocument.Boolean(request.Enabled, metadata) with { Targeting = targeting };
+        var record = await store.TryCreateAsync(request.Key, document, change, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagAlreadyExistsException(request.Key);
 
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
@@ -57,6 +62,26 @@ internal sealed partial class FlagonAdmin(
 
         var change = changes.Begin();
         var document = (current.Document with { DefaultVariant = variant }).StampUpdated(change);
+
+        // The store enforces expectedVersion atomically; the read above only builds the new document.
+        var record = await store.UpdateAsync(key, document, expectedVersion, change, cancellationToken).ConfigureAwait(false);
+        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
+        return record;
+    }
+
+    public Task<FlagRecord> SetTargetingAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("set_targeting", key, () => SetTargetingCoreAsync(key, targeting, expectedVersion, cancellationToken));
+
+    private async Task<FlagRecord> SetTargetingCoreAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var validated = TargetingRules.Validate(compiler, key, targeting);
+
+        var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
+            ?? throw new FlagNotFoundException(key);
+
+        var change = changes.Begin();
+        var document = (current.Document with { Targeting = validated }).StampUpdated(change);
 
         // The store enforces expectedVersion atomically; the read above only builds the new document.
         var record = await store.UpdateAsync(key, document, expectedVersion, change, cancellationToken).ConfigureAwait(false);

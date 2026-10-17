@@ -28,7 +28,7 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
         }
         catch (CompileException ex)
         {
-            return TargetingCompilation.Failure(ex.Message);
+            return TargetingCompilation.Failure(ex.Message, ex.Pointer, ex.Operator);
         }
     }
 
@@ -74,7 +74,55 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
 
     // --- compilation ---
 
-    private sealed class CompileException(string message) : Exception(message);
+    /// <summary>
+    /// A compile error. While it unwinds, the innermost operation names itself as <see cref="Operator"/> and every
+    /// enclosing operation and array index adds a path segment, so <see cref="Pointer"/> locates the failing operation.
+    /// </summary>
+    private sealed class CompileException(string message) : Exception(message)
+    {
+        private readonly List<string> _reversedSegments = [];
+
+        /// <summary>The operator of the innermost operation that failed.</summary>
+        public string? Operator { get; private set; }
+
+        /// <summary>A JSON Pointer (RFC 6901) to the failing operation within the rule; empty for the rule itself.</summary>
+        public string Pointer => string.Concat(Enumerable.Reverse(_reversedSegments).Select(s => "/" + s.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal)));
+
+        public CompileException InOperation(string name)
+        {
+            if (Operator is null)
+            {
+                Operator = name;
+            }
+            else
+            {
+                _reversedSegments.Add(name);
+            }
+
+            return this;
+        }
+
+        public CompileException AtIndex(int index)
+        {
+            _reversedSegments.Add(index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return this;
+        }
+    }
+
+    /// <summary><see cref="CompileValue"/> for the item at <paramref name="index"/> of an array, recording the index on failure.</summary>
+    private static Node CompileItem(JsonElement item, int index)
+    {
+        try
+        {
+            return CompileValue(item);
+        }
+        catch (CompileException ex)
+        {
+            throw ex.AtIndex(index);
+        }
+    }
+
+    private static Node[] CompileItems(IEnumerable<JsonElement> items) => items.Select(CompileItem).ToArray();
 
     /// <summary>A value position (Go <c>parseValues</c>): a one-key object is an operation; anything else a literal.</summary>
     private static Node CompileValue(JsonElement e)
@@ -94,7 +142,7 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
                 }
 
             case JsonValueKind.Array:
-                var items = e.EnumerateArray().Select(CompileValue).ToArray();
+                var items = CompileItems(e.EnumerateArray());
                 return items.All(i => i is ConstNode)
                     ? new ConstNode(Value.ArrayOf(items.Select(i => ((ConstNode)i).Value).ToArray()))
                     : new ArrayNode(items);
@@ -103,11 +151,23 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
         }
     }
 
-    private static Node CompileOperation(string name, JsonElement values) => name switch
+    private static Node CompileOperation(string name, JsonElement values)
+    {
+        try
+        {
+            return CompileOperationCore(name, values);
+        }
+        catch (CompileException ex)
+        {
+            throw ex.InOperation(name);
+        }
+    }
+
+    private static Node CompileOperationCore(string name, JsonElement values) => name switch
     {
         "var" => CompileVar(values),
-        "if" => new IfNode(RawItems(name, values).Select(CompileValue).ToArray()),
-        "and" or "or" => new AndOrNode(RawItems(name, values).Select(CompileValue).ToArray(), name == "and"),
+        "if" => new IfNode(CompileItems(RawItems(name, values))),
+        "and" or "or" => new AndOrNode(CompileItems(RawItems(name, values)), name == "and"),
         "map" => CompileIteration(IterationOp.Map, name, values),
         "filter" => CompileIteration(IterationOp.Filter, name, values),
         "all" => CompileIteration(IterationOp.All, name, values),
@@ -141,12 +201,13 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
         "cat" => Checked(Op.Cat, name, values, scalar: JsonValueKind.String),
         "missing" => Checked(Op.Missing, name, values, scalar: JsonValueKind.String),
         "merge" => Checked(Op.Merge, name, values, scalar: JsonValueKind.Number),
-        "$ref" => throw new CompileException($"unresolved $ref {values.GetRawText()}: no such evaluator"),
+        "$ref" => throw new CompileException(
+            $"unresolved $ref {values.GetRawText()}: Flagon stores flags individually and has no flag-set $evaluators, so inline the evaluator's rule in place of the reference"),
         _ => throw new CompileException($"unsupported operator '{name}'"),
     };
 
     private static Args CompileArgs(JsonElement values) => values.ValueKind == JsonValueKind.Array
-        ? new Args(values.EnumerateArray().Select(CompileValue).ToArray(), null)
+        ? new Args(CompileItems(values.EnumerateArray()), null)
         : new Args(null, CompileValue(values));
 
     // An operator the Go engine panics on unless its evaluated arguments are an array: a literal non-array (other than
@@ -194,7 +255,7 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
                 }
 
                 var path = values[0];
-                var defaultNode = n == 2 ? CompileValue(values[1]) : null;
+                var defaultNode = n == 2 ? CompileItem(values[1], 1) : null;
                 if (path.ValueKind == JsonValueKind.String)
                 {
                     return VarNode.Path(path.GetString()!, defaultNode, rawString: false);
@@ -236,12 +297,12 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
         Node? subject = items[0].ValueKind switch
         {
             JsonValueKind.Array => new ConstNode(Values.Constant(items[0])),
-            JsonValueKind.Object => CompileValue(items[0]),
+            JsonValueKind.Object => CompileItem(items[0], 0),
             _ => null,
         };
         Node? initial = op == IterationOp.Reduce
-            ? items[2].ValueKind == JsonValueKind.Object ? CompileValue(items[2]) : new ConstNode(Values.Constant(items[2]))
+            ? items[2].ValueKind == JsonValueKind.Object ? CompileItem(items[2], 2) : new ConstNode(Values.Constant(items[2]))
             : null;
-        return new IterationNode(op, subject, CompileValue(items[1]), initial);
+        return new IterationNode(op, subject, CompileItem(items[1], 1), initial);
     }
 }

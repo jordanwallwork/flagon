@@ -1,5 +1,4 @@
 using System.Collections.Frozen;
-using System.Text.Json;
 using Flagon.Internal.Targeting;
 using Flagon.Storage;
 using Microsoft.Extensions.Logging;
@@ -25,34 +24,15 @@ internal sealed class FlagSnapshot
     /// <summary>
     /// Builds a snapshot from <paramref name="records"/>, compiling each flag's targeting once with
     /// <paramref name="compiler"/>. A rule that fails to compile (or whose compiler throws) marks only that flag broken.
+    /// Empty targeting (<c>{}</c>) is no targeting, as in flagd.
     /// </summary>
     public static FlagSnapshot Create(long version, IEnumerable<FlagRecord> records, ITargetingCompiler compiler)
     {
         var flags = records.ToFrozenDictionary(
             r => r.Key,
-            r => new SnapshotFlag(r, HasTargeting(r.Document) ? Compile(compiler, r.Key, r.Document.Targeting!.Value) : null),
+            r => new SnapshotFlag(r, TargetingRules.IsRule(r.Document.Targeting) ? TargetingRules.Compile(compiler, r.Key, r.Document.Targeting!.Value) : null),
             StringComparer.Ordinal);
         return new FlagSnapshot(version, flags);
-    }
-
-    /// <summary>
-    /// Whether <paramref name="document"/> has a targeting rule to run. flagd treats an empty object (<c>{}</c>) as no
-    /// targeting, so such a flag serves its default variant with reason STATIC.
-    /// </summary>
-    public static bool HasTargeting(FlagDocument document) =>
-        document.Targeting is { } targeting
-        && !(targeting.ValueKind == JsonValueKind.Object && !targeting.EnumerateObject().Any());
-
-    private static TargetingCompilation Compile(ITargetingCompiler compiler, string key, JsonElement targeting)
-    {
-        try
-        {
-            return compiler.Compile(key, targeting) ?? TargetingCompilation.Failure("The targeting compiler returned no result.");
-        }
-        catch (Exception ex)
-        {
-            return TargetingCompilation.Failure(ex.Message);
-        }
     }
 }
 

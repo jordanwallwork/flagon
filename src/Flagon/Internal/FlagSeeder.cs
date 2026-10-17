@@ -1,13 +1,14 @@
+using System.Text.Json;
 using Flagon.Storage;
 
 namespace Flagon.Internal;
 
 /// <summary>A flag declared in code with <see cref="FlagonOptions.Define"/>.</summary>
-internal sealed record FlagDefinition(string Key, bool DefaultValue, string? Description, IReadOnlyList<string> Tags);
+internal sealed record FlagDefinition(string Key, bool DefaultValue, string? Description, IReadOnlyList<string> Tags, JsonElement? Targeting = null);
 
 /// <summary>
 /// Applies the flags declared with <see cref="FlagonOptions.Define"/> to the store: creates missing ones (source code)
-/// and syncs metadata of existing ones without touching their state. Archived flags are never revived or changed.
+/// and syncs metadata of existing ones without touching their state or targeting. Archived flags are never revived or changed.
 /// </summary>
 internal sealed class FlagSeeder(
     IFlagStore store,
@@ -54,7 +55,7 @@ internal sealed class FlagSeeder(
 
                 var created = await store.TryCreateAsync(
                     definition.Key,
-                    FlagDocument.Boolean(definition.DefaultValue, metadata),
+                    FlagDocument.Boolean(definition.DefaultValue, metadata) with { Targeting = definition.Targeting },
                     change,
                     cancellationToken).ConfigureAwait(false);
                 if (created is not null || attempt >= MaxConflictRetries)

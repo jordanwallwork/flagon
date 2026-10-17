@@ -26,10 +26,12 @@ internal delegate string? CompiledRule(in TargetingContext context);
 /// <summary>The outcome of <see cref="ITargetingCompiler.Compile"/>: a <see cref="Rule"/>, or an <see cref="Error"/>.</summary>
 internal sealed class TargetingCompilation
 {
-    private TargetingCompilation(CompiledRule? rule, string? error)
+    private TargetingCompilation(CompiledRule? rule, string? error, string? errorPath, string? errorOperator)
     {
         Rule = rule;
         Error = error;
+        ErrorPath = errorPath;
+        ErrorOperator = errorOperator;
     }
 
     /// <summary>The compiled rule; null when compilation failed.</summary>
@@ -38,12 +40,25 @@ internal sealed class TargetingCompilation
     /// <summary>Why compilation failed; null on success.</summary>
     public string? Error { get; }
 
+    /// <summary>
+    /// Where in the rule compilation failed, as a JSON Pointer (RFC 6901) to the failing operation (empty for the rule
+    /// itself); null on success or when the compiler cannot tell.
+    /// </summary>
+    public string? ErrorPath { get; }
+
+    /// <summary>The operator that failed to compile; null on success or when the compiler cannot tell.</summary>
+    public string? ErrorOperator { get; }
+
     /// <summary>Whether the rule compiled.</summary>
     public bool Succeeded => Rule is not null;
 
     /// <summary>A successful compilation.</summary>
-    public static TargetingCompilation Success(CompiledRule rule) => new(rule ?? throw new ArgumentNullException(nameof(rule)), null);
+    public static TargetingCompilation Success(CompiledRule rule) => new(rule ?? throw new ArgumentNullException(nameof(rule)), null, null, null);
 
-    /// <summary>A failed compilation, explained by <paramref name="error"/>.</summary>
-    public static TargetingCompilation Failure(string error) => new(null, error ?? throw new ArgumentNullException(nameof(error)));
+    /// <summary>
+    /// A failed compilation, explained by <paramref name="error"/>, optionally located by <paramref name="path"/>
+    /// (see <see cref="ErrorPath"/>) and <paramref name="operator"/>.
+    /// </summary>
+    public static TargetingCompilation Failure(string error, string? path = null, string? @operator = null) =>
+        new(null, error ?? throw new ArgumentNullException(nameof(error)), path, @operator);
 }
