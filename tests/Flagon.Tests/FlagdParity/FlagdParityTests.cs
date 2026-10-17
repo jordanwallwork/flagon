@@ -114,11 +114,15 @@ public abstract class FlagdParityTests(ITestOutputHelper output)
 
 /// <summary>
 /// The parity harness against Flagon's default registration (whatever compiler <c>AddFlagon</c> wires up:
-/// <see cref="Internal.Targeting.JsonLogic.JsonLogicTargetingCompiler"/>). Its expected-failure list holds only cases
-/// whose fixture flag Flagon cannot store. An alternative compiler adds a sibling, e.g.
+/// <see cref="Internal.Targeting.JsonLogic.JsonLogicTargetingCompiler"/>). Its expected-failure list is empty, and
+/// <see cref="The_default_registration_has_no_expected_failures"/> keeps it so. An alternative compiler adds a sibling, e.g.
 /// <c>public sealed class OtherParityTests(ITestOutputHelper o) : FlagdParityTests(o) { protected override string CompilerName =&gt; "other"; private protected override ITargetingCompiler Compiler { get; } = new OtherTargetingCompiler(); }</c>.
 /// </summary>
 public sealed class DefaultCompilerParityTests(ITestOutputHelper output) : FlagdParityTests(output)
 {
     protected override string CompilerName => "default";
+
+    [Fact]
+    public void The_default_registration_has_no_expected_failures() =>
+        Assert.Empty(ExpectedFailures.For(CompilerName));
 }

@@ -2,13 +2,5 @@
 # (DefaultCompilerParityTests, i.e. JsonLogicTargetingCompiler; docs/adr/0001-targeting-engine.md). One case id per
 # line (<feature path>:<line>); text after '#' is a comment. The list is exact: a listed case that passes fails the run.
 #
-# Every remaining failure is independent of the compiler: the fixture flag has a null or absent defaultVariant, which
-# flagd allows and Flagon's FlagDocument does not, so FlagdJson rejects the fixture and the flag is missing from the
-# store.
-
-# --- evaluator/gherkin/no-default-variant.feature
-evaluator/gherkin/no-default-variant.feature:18  # Resolve flag with no default variant [null-default-flag | Boolean |  | true | true | DEFAULT] (fixture flag not storable: no defaultVariant)
-evaluator/gherkin/no-default-variant.feature:19  # Resolve flag with no default variant [null-default-flag | Boolean |  | false | false | DEFAULT] (fixture flag not storable: no defaultVariant)
-evaluator/gherkin/no-default-variant.feature:21  # Resolve flag with no default variant [no-default-flag-null-... | String | wozniak@orange.com | Inventor | Inventor | DEFAULT] (fixture flag not storable: no defaultVariant)
-evaluator/gherkin/no-default-variant.feature:22  # Resolve flag with no default variant [no-default-flag-null-... | String | jobs@orange.com | CEO | CEO | TARGETING_MATCH] (fixture flag not storable: no defaultVariant)
-evaluator/gherkin/no-default-variant.feature:23  # Resolve flag with no default variant [no-default-flag-undef... | String | wozniak@orange.com | Retired | Retired | DEFAULT] (fixture flag not storable: no defaultVariant)
+# Empty: every runnable case of the boolean subset passes. Keep it that way; a new testbed release that introduces a
+# failure is a parity bug to fix, not a line to add here.

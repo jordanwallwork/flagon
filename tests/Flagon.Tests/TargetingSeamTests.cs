@@ -167,16 +167,30 @@ public class TargetingSeamTests
     }
 
     [Fact]
-    public async Task A_rule_that_throws_while_evaluating_returns_the_callers_default_with_an_error()
+    public async Task A_rule_that_throws_while_evaluating_returns_the_callers_default_with_a_parse_error()
     {
+        // flagd reports a JsonLogic failure at evaluation time (e.g. cat on a bool) as PARSE_ERROR.
         var compiler = new FakeTargetingCompiler(_ => (in TargetingContext context) => throw new InvalidOperationException("boom"));
         await using var host = await HostAsync(compiler, ("targeted", TargetedFlag));
 
         var details = host.Flagon.GetBooleanDetails("targeted", true);
 
         Assert.True(details.Value);
+        Assert.Null(details.Variant);
         Assert.Equal(EvaluationReason.Error, details.Reason);
-        Assert.Equal(ErrorCode.General, details.ErrorCode);
+        Assert.Equal(ErrorCode.ParseError, details.ErrorCode);
+        Assert.Contains("boom", details.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Empty_targeting_is_no_targeting_and_serves_the_default_variant_with_reason_static()
+    {
+        var compiler = new FakeTargetingCompiler(_ => (in TargetingContext context) => "on");
+        await using var host = await HostAsync(compiler, ("empty",
+            """{ "state": "ENABLED", "variants": { "on": true, "off": false }, "defaultVariant": "off", "targeting": {} }"""));
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("empty", false, "off", EvaluationReason.Static), host.Flagon.GetBooleanDetails("empty", true));
+        Assert.Equal(0, compiler.Compilations);
     }
 
     [Fact]

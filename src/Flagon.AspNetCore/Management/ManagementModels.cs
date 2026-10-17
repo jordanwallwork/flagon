@@ -9,7 +9,7 @@ internal sealed record FlagResponse(
     long Version,
     bool Enabled,
     string State,
-    string DefaultVariant,
+    string? DefaultVariant,
     bool Archived,
     string? Description,
     IReadOnlyList<string> Tags,
@@ -24,7 +24,8 @@ internal sealed record FlagResponse(
     {
         var document = record.Document;
         var metadata = document.Metadata;
-        var enabled = document.Variants.TryGetValue(document.DefaultVariant, out var value) && value.ValueKind == JsonValueKind.True;
+        var enabled = document.DefaultVariant is { } defaultVariant
+            && document.Variants.TryGetValue(defaultVariant, out var value) && value.ValueKind == JsonValueKind.True;
         return new FlagResponse(
             record.Key,
             record.Version,

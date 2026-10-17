@@ -49,8 +49,10 @@ Each suite runs against its own flag files, in its own store.
   fractional examples for other bucketing generations. Flagon targets `@fractional-v3`, the generation flagd 0.18
   implements; `@fractional-v1` and `@fractional-v2` examples expect different buckets for the same inputs. The
   `Summary` test prints every excluded case and why.
-- **Not storable**: flagd allows a null or absent `defaultVariant`; Flagon's `FlagDocument` does not, so those flags are
-  left out of the store and their cases fail whatever the compiler.
+- **No `defaultVariant`**: flagd allows a null or absent `defaultVariant`, and so does Flagon: when no rule applies the
+  caller's default is served with reason `DEFAULT`, as the `no-default-variant` scenarios assert.
+- **Not storable**: a fixture flag that `FlagdJson` rejects is left out of the store, and its cases fail whatever the
+  compiler, naming the reason. No flag in this release is affected.
 
 ## Updating
 

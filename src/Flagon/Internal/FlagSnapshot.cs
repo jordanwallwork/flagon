@@ -30,10 +30,18 @@ internal sealed class FlagSnapshot
     {
         var flags = records.ToFrozenDictionary(
             r => r.Key,
-            r => new SnapshotFlag(r, r.Document.Targeting is { } targeting ? Compile(compiler, r.Key, targeting) : null),
+            r => new SnapshotFlag(r, HasTargeting(r.Document) ? Compile(compiler, r.Key, r.Document.Targeting!.Value) : null),
             StringComparer.Ordinal);
         return new FlagSnapshot(version, flags);
     }
+
+    /// <summary>
+    /// Whether <paramref name="document"/> has a targeting rule to run. flagd treats an empty object (<c>{}</c>) as no
+    /// targeting, so such a flag serves its default variant with reason STATIC.
+    /// </summary>
+    public static bool HasTargeting(FlagDocument document) =>
+        document.Targeting is { } targeting
+        && !(targeting.ValueKind == JsonValueKind.Object && !targeting.EnumerateObject().Any());
 
     private static TargetingCompilation Compile(ITargetingCompiler compiler, string key, JsonElement targeting)
     {

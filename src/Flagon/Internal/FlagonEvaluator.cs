@@ -115,7 +115,8 @@ internal sealed partial class FlagonEvaluator(
             }
             catch (Exception ex)
             {
-                return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.General,
+                // flagd reports a JsonLogic failure while applying the rule (e.g. cat on a bool) as PARSE_ERROR.
+                return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
                     $"Flag '{key}' targeting rule failed: {ex.Message}");
             }
 
@@ -133,6 +134,12 @@ internal sealed partial class FlagonEvaluator(
                 variant = matched;
                 reason = EvaluationReason.TargetingMatch;
             }
+        }
+
+        if (variant is null)
+        {
+            // flagd: no defaultVariant and no rule result serves the caller's default (the testbed asserts DEFAULT).
+            return new(key, defaultValue, null, EvaluationReason.Default);
         }
 
         if (!document.Variants.TryGetValue(variant, out var value))
