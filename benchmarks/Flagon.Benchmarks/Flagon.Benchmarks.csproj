@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    BenchmarkDotNet suite for the targeting engine (#24). Not part of the CI gate: CI builds it with the solution but
+    `dotnet test` skips it (not a test project). How to run it: benchmarks/results/targeting-engines.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Flagon.Benchmarks</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Flagon\Flagon.csproj" />
+    <ProjectReference Include="..\..\src\Flagon.Targeting.JsonEverything\Flagon.Targeting.JsonEverything.csproj" />
+  </ItemGroup>
+</Project>

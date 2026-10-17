@@ -16,6 +16,8 @@
     <!-- Tests (and the shared test harness) register fake targeting compilers through the internal ITargetingCompiler seam. -->
     <InternalsVisibleTo Include="Flagon.Tests" />
     <InternalsVisibleTo Include="Flagon.Tests.Support" />
+    <!-- Benchmarks (#24) register a compiler and build snapshots directly through the same seam. -->
+    <InternalsVisibleTo Include="Flagon.Benchmarks" />
     <!-- Spike B (#23): the json-everything JsonLogic compiler implements the seam from its own project. -->
     <InternalsVisibleTo Include="Flagon.Targeting.JsonEverything" />
   </ItemGroup>

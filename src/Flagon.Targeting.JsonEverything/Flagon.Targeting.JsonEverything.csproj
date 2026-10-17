@@ -15,5 +15,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Flagon.Tests" />
+    <InternalsVisibleTo Include="Flagon.Benchmarks" />
   </ItemGroup>
 </Project>
