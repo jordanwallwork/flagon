@@ -8,7 +8,8 @@ namespace Flagon.Internal;
 
 /// <summary>
 /// Aggregates evaluations in memory — per key, the latest evaluation time and the code default supplied — and writes
-/// them to the store in batches. Recording an already-seen key is lock- and allocation-free.
+/// them to the store in batches. Recording an already-seen key is lock- and allocation-free, and each key's time and
+/// default are published together atomically, so a flush never writes a torn pair or drops a newer evaluation.
 /// Disabled when <see cref="FlagonOptions.UsageTracking"/> is off or the store is read-only.
 /// </summary>
 internal sealed partial class UsageTracker(
@@ -46,11 +47,7 @@ internal sealed partial class UsageTracker(
             entry = _entries.GetOrAdd(key, static _ => new Entry());
         }
 
-        // Fields are written independently: a flush racing this call may pair a new time with an old default (or vice
-        // versa), but Dirty is set last, so the latest values are always written by the following flush.
-        Volatile.Write(ref entry.UtcTicks, time.GetUtcNow().UtcTicks);
-        Volatile.Write(ref entry.Default, defaultValue ? 1 : 0);
-        Volatile.Write(ref entry.Dirty, 1);
+        entry.Observe(time.GetUtcNow().UtcTicks, defaultValue);
     }
 
     /// <summary>Writes everything recorded since the last successful flush. On failure the entries stay pending and the error is rethrown.</summary>
@@ -68,11 +65,9 @@ internal sealed partial class UsageTracker(
             var taken = new List<Entry>();
             foreach (var (key, entry) in _entries)
             {
-                if (Interlocked.Exchange(ref entry.Dirty, 0) == 1)
+                if (entry.TryTakePending(out var utcTicks, out var defaultValue))
                 {
-                    var at = new DateTimeOffset(Volatile.Read(ref entry.UtcTicks), TimeSpan.Zero);
-                    var observedDefault = Volatile.Read(ref entry.Default) == 1 ? True : False;
-                    batch.Add(new FlagUsage(key, changes.ApplicationName, at, observedDefault));
+                    batch.Add(new FlagUsage(key, changes.ApplicationName, new DateTimeOffset(utcTicks, TimeSpan.Zero), defaultValue ? True : False));
                     taken.Add(entry);
                 }
             }
@@ -95,7 +90,7 @@ internal sealed partial class UsageTracker(
             {
                 foreach (var entry in taken)
                 {
-                    Volatile.Write(ref entry.Dirty, 1);
+                    entry.MarkPending();
                 }
 
                 LogFlushFailed(logger, ex, batch.Count);
@@ -111,11 +106,59 @@ internal sealed partial class UsageTracker(
     [LoggerMessage(EventId = 1501, Level = LogLevel.Warning, Message = "Flagon could not write usage for {Count} flag(s) to the store; it will be retried at the next flush.")]
     private static partial void LogFlushFailed(ILogger logger, Exception exception, int count);
 
+    /// <summary>
+    /// The latest evaluation of one key, packed into a single word so the time, the default and the pending (not yet
+    /// written) marker are always read and written together: <c>ticks &lt;&lt; 2 | default &lt;&lt; 1 | pending</c>.
+    /// UTC ticks are below 2^62, so the packed value fits in 64 unsigned bits. Recording never allocates.
+    /// </summary>
     private sealed class Entry
     {
-        public long UtcTicks;
-        public int Default;
-        public int Dirty;
+        private const ulong Pending = 1;
+        private const ulong DefaultTrue = 2;
+
+        private ulong _state;
+
+        /// <summary>Records an evaluation, unless a later one is already recorded (racing evaluations keep the latest).</summary>
+        public void Observe(long utcTicks, bool defaultValue)
+        {
+            var next = ((ulong)utcTicks << 2) | (defaultValue ? DefaultTrue : 0) | Pending;
+            var current = Volatile.Read(ref _state);
+            while ((current >> 2) <= (ulong)utcTicks && current != next)
+            {
+                var seen = Interlocked.CompareExchange(ref _state, next, current);
+                if (seen == current)
+                {
+                    return;
+                }
+
+                current = seen;
+            }
+        }
+
+        /// <summary>Takes the latest evaluation if it has not been written yet, clearing its pending marker atomically.</summary>
+        public bool TryTakePending(out long utcTicks, out bool defaultValue)
+        {
+            var current = Volatile.Read(ref _state);
+            while ((current & Pending) != 0)
+            {
+                var seen = Interlocked.CompareExchange(ref _state, current & ~Pending, current);
+                if (seen == current)
+                {
+                    utcTicks = (long)(current >> 2);
+                    defaultValue = (current & DefaultTrue) != 0;
+                    return true;
+                }
+
+                current = seen;
+            }
+
+            utcTicks = 0;
+            defaultValue = false;
+            return false;
+        }
+
+        /// <summary>Marks the latest evaluation as pending again after a failed write, so the next flush retries it.</summary>
+        public void MarkPending() => Interlocked.Or(ref _state, Pending);
     }
 }
 

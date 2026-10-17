@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 
 namespace Flagon;
@@ -30,7 +31,7 @@ public enum FlagSource
 
 /// <summary>Flagon's own metadata, stored inside the flagd document's <c>metadata</c> object.</summary>
 /// <param name="Description">Human-readable description.</param>
-/// <param name="Tags">Free-form tags. Tags may not contain commas (they are stored comma-separated to stay within flagd's metadata schema).</param>
+/// <param name="Tags">Free-form tags. Tags may not contain commas or start or end with whitespace (they are stored comma-separated to stay within flagd's metadata schema).</param>
 /// <param name="Source">How the flag came to exist.</param>
 /// <param name="CreatedAt">When the flag was created.</param>
 /// <param name="CreatedBy">Who (or which app) created the flag.</param>
@@ -71,11 +72,12 @@ public sealed record FlagDocument(
     /// <summary>Variant name a boolean flag uses for <c>false</c>.</summary>
     public const string OffVariant = "off";
 
+    // Shared by every boolean flag, so genuinely immutable: a cast to IDictionary cannot change other flags' variants.
     private static readonly IReadOnlyDictionary<string, JsonElement> BooleanVariants = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
     {
         [OnVariant] = JsonSerializer.SerializeToElement(true),
         [OffVariant] = JsonSerializer.SerializeToElement(false),
-    };
+    }.ToFrozenDictionary(StringComparer.Ordinal);
 
     /// <summary>Creates an <see cref="FlagState.Enabled"/> boolean flag serving <paramref name="enabled"/>.</summary>
     public static FlagDocument Boolean(bool enabled, FlagMetadata? metadata = null) =>

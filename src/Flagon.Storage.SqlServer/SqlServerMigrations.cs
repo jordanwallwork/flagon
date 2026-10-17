@@ -34,48 +34,67 @@ public static partial class SqlServerMigrations
     /// <summary>
     /// A complete, idempotent T-SQL deployment script (batches separated by <c>GO</c>) that creates the schema and
     /// applies every migration not yet recorded in its <c>schema_version</c> table — the same statements the store runs
-    /// when it migrates itself.
+    /// when it migrates itself. Each migration and its <c>schema_version</c> row run in one transaction
+    /// (<c>XACT_ABORT</c> with <c>TRY</c>/<c>CATCH</c>), so a failure rolls the migration back and the script can simply be run again.
     /// </summary>
     /// <exception cref="ArgumentException">The schema name is not a plain identifier.</exception>
     public static string GenerateScript(string schema = DefaultSchema)
     {
         var script = new StringBuilder();
-        foreach (var batch in GetBatches(schema))
+        script.AppendLine("SET XACT_ABORT ON;").AppendLine("GO").AppendLine();
+        script.AppendLine(Bootstrap(schema).TrimEnd()).AppendLine("GO").AppendLine();
+        foreach (var migration in GetMigrations(schema))
         {
-            script.AppendLine(batch.TrimEnd()).AppendLine("GO").AppendLine();
+            script.AppendLine($"""
+                BEGIN TRY
+                    BEGIN TRANSACTION;
+                {Guarded(schema, migration).TrimEnd()}
+                    COMMIT TRANSACTION;
+                END TRY
+                BEGIN CATCH
+                    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+                    THROW;
+                END CATCH
+                """).AppendLine("GO").AppendLine();
         }
 
         return script.ToString();
     }
 
-    /// <summary>The batches to run in order: the bootstrap, then each migration wrapped in its version guard.</summary>
+    /// <summary>
+    /// The batches the store runs (inside its own transaction) to migrate itself: the bootstrap, then each migration
+    /// wrapped in its version guard.
+    /// </summary>
     internal static IEnumerable<string> GetBatches(string schema)
     {
         var migrations = GetMigrations(schema);
-        yield return $"""
-            -- Flagon bootstrap: schema and schema_version table.
-            IF SCHEMA_ID(N'{schema}') IS NULL EXEC(N'CREATE SCHEMA [{schema}]');
-            IF OBJECT_ID(N'[{schema}].[schema_version]', N'U') IS NULL
-                CREATE TABLE [{schema}].[schema_version] (
-                    [version] int NOT NULL PRIMARY KEY,
-                    [name] nvarchar(256) NOT NULL,
-                    [applied_at] datetimeoffset(7) NOT NULL
-                );
-            """;
-
+        yield return Bootstrap(schema);
         foreach (var migration in migrations)
         {
-            yield return $"""
-                -- Flagon migration {migration.Name}
-                IF NOT EXISTS (SELECT 1 FROM [{schema}].[schema_version] WHERE [version] = {migration.Version})
-                BEGIN
-                {migration.Sql.Trim()}
-
-                INSERT INTO [{schema}].[schema_version] ([version], [name], [applied_at]) VALUES ({migration.Version}, N'{migration.Name}', SYSDATETIMEOFFSET());
-                END
-                """;
+            yield return Guarded(schema, migration);
         }
     }
+
+    private static string Bootstrap(string schema) => $"""
+        -- Flagon bootstrap: schema and schema_version table.
+        IF SCHEMA_ID(N'{schema}') IS NULL EXEC(N'CREATE SCHEMA [{schema}]');
+        IF OBJECT_ID(N'[{schema}].[schema_version]', N'U') IS NULL
+            CREATE TABLE [{schema}].[schema_version] (
+                [version] int NOT NULL PRIMARY KEY,
+                [name] nvarchar(256) NOT NULL,
+                [applied_at] datetimeoffset(7) NOT NULL
+            );
+        """;
+
+    private static string Guarded(string schema, SqlServerMigration migration) => $"""
+        -- Flagon migration {migration.Name}
+        IF NOT EXISTS (SELECT 1 FROM [{schema}].[schema_version] WHERE [version] = {migration.Version})
+        BEGIN
+        {migration.Sql.Trim()}
+
+        INSERT INTO [{schema}].[schema_version] ([version], [name], [applied_at]) VALUES ({migration.Version}, N'{migration.Name}', SYSDATETIMEOFFSET());
+        END
+        """;
 
     internal static void ValidateSchema(string schema)
     {

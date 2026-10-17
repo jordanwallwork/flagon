@@ -16,7 +16,7 @@ public sealed partial class FlagonOptions
     /// <param name="key">The flag key (see <see cref="FlagKey"/>).</param>
     /// <param name="defaultValue">The value a newly created flag serves.</param>
     /// <param name="description">Human-readable description.</param>
-    /// <param name="tags">Tags. Tags must be non-blank and may not contain commas.</param>
+    /// <param name="tags">Tags. Tags must be non-blank, may not contain commas and may not start or end with whitespace.</param>
     /// <exception cref="FlagValidationException">The key or a tag is invalid.</exception>
     /// <exception cref="ArgumentException">The key has already been defined.</exception>
     public FlagonOptions Define(string key, bool defaultValue = false, string? description = null, IEnumerable<string>? tags = null)

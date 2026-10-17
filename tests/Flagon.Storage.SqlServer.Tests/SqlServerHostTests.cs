@@ -105,6 +105,32 @@ public class SqlServerHostTests(SqlServerFixture db)
     }
 
     [Fact]
+    public async Task An_exported_script_that_fails_part_way_leaves_nothing_behind_and_can_be_retried()
+    {
+        var schema = SqlServerFixture.NewSchema();
+        // A stray table where the migration wants to create one makes it fail part way through.
+        await RunScriptAsync($"CREATE SCHEMA [{schema}]\nGO\nCREATE TABLE [{schema}].[flags] ([x] int)");
+        var script = SqlServerMigrations.GenerateScript(schema);
+
+        await Assert.ThrowsAsync<SqlException>(() => RunScriptAsync(script));
+
+        Assert.Null(await db.ScalarAsync<string>($"SELECT OBJECT_NAME(OBJECT_ID(N'[{schema}].[change_sequence]'))"));
+        Assert.Equal(0, await db.ScalarAsync<int>($"SELECT COUNT(*) FROM [{schema}].[schema_version]"));
+
+        await RunScriptAsync($"DROP TABLE [{schema}].[flags]");
+        await RunScriptAsync(script);
+
+        Assert.Equal(1, await db.ScalarAsync<int>($"SELECT MAX([version]) FROM [{schema}].[schema_version]"));
+        await using var app = await FlagonTestHost.StartAsync(o => o.Flagon = f =>
+        {
+            f.AutoMigrate = false;
+            f.UseSqlServerStorage(db.ConnectionString, schema: schema);
+        });
+        await app.Admin.CreateAsync(new CreateFlagRequest("installed-after-retry", Enabled: true));
+        Assert.True(app.Flagon.IsEnabled("installed-after-retry"));
+    }
+
+    [Fact]
     public void Schema_names_that_are_not_plain_identifiers_are_rejected()
     {
         Assert.Throws<ArgumentException>(() => new SqlServerFlagStore(db.ConnectionString, "flags]; DROP TABLE x; --"));

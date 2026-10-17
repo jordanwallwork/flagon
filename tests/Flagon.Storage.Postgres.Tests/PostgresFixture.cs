@@ -16,6 +16,9 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public Task DisposeAsync() => _container.DisposeAsync().AsTask();
 
+    /// <summary>Runs <paramref name="script"/> through <c>psql</c> inside the container, the way a DBA would deploy it.</summary>
+    public Task PsqlAsync(string script) => _container.ExecScriptAsync(script);
+
     public async Task DropSchemaAsync(string schema)
     {
         await using var connection = new NpgsqlConnection(ConnectionString);

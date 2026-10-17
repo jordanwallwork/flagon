@@ -22,9 +22,9 @@
   </main>
   <noscript><p class="notice error">The Flagon console needs JavaScript.</p></noscript>
 
-  <dialog id="conflict">
+  <dialog id="conflict" aria-labelledby="conflict-title">
     <form method="dialog">
-      <h2>This flag changed while you were looking at it</h2>
+      <h2 id="conflict-title">This flag changed while you were looking at it</h2>
       <p id="conflict-detail">Someone else saved a newer version. Your change was not applied.</p>
       <p>Reload to see the latest version, then make your change again.</p>
       <menu>
@@ -34,7 +34,7 @@
     </form>
   </dialog>
 
-  <dialog id="confirm">
+  <dialog id="confirm" aria-labelledby="confirm-title">
     <form method="dialog">
       <h2 id="confirm-title">Are you sure?</h2>
       <p id="confirm-detail"></p>

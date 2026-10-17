@@ -82,7 +82,7 @@ public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposabl
                 }
             }
 
-            foreach (var script in GetMigrationScripts(Schema).Where(s => !applied.Contains(s.Version)))
+            foreach (var script in PostgresMigrations.ForRunner(Schema).Where(s => !applied.Contains(s.Version)))
             {
                 await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
                 await ExecuteAsync(connection, transaction, script.Sql, cancellationToken).ConfigureAwait(false);

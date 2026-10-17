@@ -145,6 +145,27 @@ public class PostgresHostTests(PostgresFixture db) : IClassFixture<PostgresFixtu
         Assert.Equal((long)scripts.Count, await db.ScalarAsync($"SELECT COUNT(*) FROM \"{schema}\".schema_version"));
     }
 
+    [Fact]
+    public async Task An_exported_script_that_fails_part_way_leaves_nothing_behind_and_can_be_retried()
+    {
+        var schema = PostgresFixture.NewSchema();
+        // A stray table without the expected columns makes the migration fail part way through.
+        await db.ExecuteAsync($"CREATE SCHEMA \"{schema}\"; CREATE TABLE \"{schema}\".flags (key text)");
+        var script = PostgresFlagStore.GetMigrationScripts(schema)[0].Sql;
+
+        await db.PsqlAsync(script);
+
+        Assert.Null(await db.ScalarAsync($"SELECT to_regclass('\"{schema}\".schema_version')::text"));
+        Assert.Null(await db.ScalarAsync($"SELECT to_regclass('\"{schema}\".change_sequence')::text"));
+
+        await db.ExecuteAsync($"DROP TABLE \"{schema}\".flags");
+        await db.PsqlAsync(script);
+
+        Assert.Equal(1L, await db.ScalarAsync($"SELECT COUNT(*) FROM \"{schema}\".schema_version"));
+        await using var store = new PostgresFlagStore(db.ConnectionString, schema);
+        Assert.NotNull(await store.TryCreateAsync("works", FlagDocument.Boolean(true, new FlagMetadata())));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("1flags")]

@@ -120,7 +120,8 @@ Flagon's tables live in their own schema (default `flagon`). Apps that point at 
 flags; use different schemas to keep them apart.
 
 Tables are created and upgraded on startup, serialised across instances by a database lock. To manage the schema
-yourself, set `opts.AutoMigrate = false` and export the versioned scripts:
+yourself, set `opts.AutoMigrate = false` and export the versioned scripts. Each migration runs in its own transaction
+together with its `schema_version` row, so a run that fails part way leaves nothing behind and can simply be repeated:
 
 ```csharp
 using Flagon.Storage.Postgres;

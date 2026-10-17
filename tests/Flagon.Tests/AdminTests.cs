@@ -162,6 +162,9 @@ public class AdminTests
     [InlineData("has,comma")]
     [InlineData("")]
     [InlineData("  ")]
+    [InlineData(" web")]
+    [InlineData("web ")]
+    [InlineData("web\t")]
     public async Task Invalid_tags_are_rejected(string tag)
     {
         await using var host = await FlagonTestHost.StartAsync();

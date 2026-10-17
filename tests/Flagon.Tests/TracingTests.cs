@@ -188,7 +188,7 @@ public sealed class TracingTests : IDisposable
     [Fact]
     public async Task Auto_creating_a_flag_is_traced_with_its_key()
     {
-        await using var host = await FlagonTestHost.StartAsync();
+        await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.AutoCreate = true);
 
         host.Flagon.IsEnabled("brand-new", true);
         await host.StopAsync(); // drains the auto-create queue

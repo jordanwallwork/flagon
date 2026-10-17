@@ -7,12 +7,25 @@ namespace Flagon.Tests;
 
 public class AutoCreateTests
 {
+    /// <summary>Starts a host with auto-create on (the harness turns it off by default); <paramref name="configure"/> may still override it.</summary>
+    private static Task<FlagonTestHost> StartAsync(Action<FlagonTestHostOptions>? configure = null) =>
+        FlagonTestHost.StartAsync(o =>
+        {
+            configure?.Invoke(o);
+            var flagon = o.Flagon;
+            o.Flagon = f =>
+            {
+                f.AutoCreate = true;
+                flagon?.Invoke(f);
+            };
+        });
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task Evaluating_an_unknown_key_creates_the_flag_with_the_callers_default_and_source_auto(bool callerDefault)
     {
-        await using var host = await FlagonTestHost.StartAsync();
+        await using var host = await StartAsync();
 
         var details = host.Flagon.GetBooleanDetails("new-thing", callerDefault);
         Assert.Equal(callerDefault, details.Value);
@@ -34,7 +47,7 @@ public class AutoCreateTests
     [Fact]
     public async Task Auto_create_is_audited_with_the_application_name()
     {
-        await using var host = await FlagonTestHost.StartAsync(o => o.ApplicationName = "Checkout.Api");
+        await using var host = await StartAsync(o => o.ApplicationName = "Checkout.Api");
 
         host.Flagon.IsEnabled("new-thing", true);
         await host.StopAsync();
@@ -52,7 +65,7 @@ public class AutoCreateTests
     public async Task Repeated_evaluations_of_an_unknown_key_are_deduplicated_into_one_create()
     {
         var store = OutageFlagStore.Wrap();
-        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
+        await using var host = await StartAsync(o => o.Store = store.Store);
 
         await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
         {
@@ -76,7 +89,7 @@ public class AutoCreateTests
         for (var i = 0; i < 6; i++)
         {
             var name = $"App{i}";
-            hosts.Add(await FlagonTestHost.StartAsync(o => { o.Store = store; o.Time = time; o.ApplicationName = name; }));
+            hosts.Add(await StartAsync(o => { o.Store = store; o.Time = time; o.ApplicationName = name; }));
         }
 
         try
@@ -117,7 +130,7 @@ public class AutoCreateTests
     public async Task An_app_whose_snapshot_predates_an_archive_never_recreates_the_archived_key()
     {
         var store = OutageFlagStore.Wrap();
-        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
+        await using var host = await StartAsync(o => o.Store = store.Store);
         // Another app creates and archives the key; this app has not refreshed yet, so it looks missing here.
         var created = await store.Inner.TryCreateAsync("retired", FlagDocument.Boolean(true, new FlagMetadata()));
         await store.Inner.ArchiveAsync("retired", created!.Version);
@@ -135,7 +148,7 @@ public class AutoCreateTests
     public async Task An_archived_flag_is_not_auto_created_again()
     {
         var store = OutageFlagStore.Wrap();
-        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
+        await using var host = await StartAsync(o => o.Store = store.Store);
         var flag = await host.Admin.CreateAsync(new CreateFlagRequest("retired", Enabled: true));
         await host.Admin.ArchiveAsync("retired", flag.Version);
 
@@ -150,7 +163,7 @@ public class AutoCreateTests
     public async Task Nothing_is_created_when_auto_create_is_switched_off()
     {
         var store = OutageFlagStore.Wrap();
-        await using var host = await FlagonTestHost.StartAsync(o =>
+        await using var host = await StartAsync(o =>
         {
             o.Store = store.Store;
             o.Flagon = f => f.AutoCreate = false;
@@ -169,7 +182,7 @@ public class AutoCreateTests
     {
         var store = OutageFlagStore.Wrap();
         store.ReportsReadOnly = true;
-        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
+        await using var host = await StartAsync(o => o.Store = store.Store);
 
         Assert.True(host.Flagon.IsEnabled("unknown", true));
         await host.StopAsync();
@@ -183,7 +196,7 @@ public class AutoCreateTests
     public async Task Invalid_keys_are_never_auto_created()
     {
         var store = OutageFlagStore.Wrap();
-        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
+        await using var host = await StartAsync(o => o.Store = store.Store);
 
         host.Flagon.IsEnabled("has space", true);
         await host.StopAsync();
@@ -195,7 +208,7 @@ public class AutoCreateTests
     public async Task A_failed_auto_create_is_logged_and_retried_on_a_later_evaluation()
     {
         var store = OutageFlagStore.Wrap();
-        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
+        await using var host = await StartAsync(o => o.Store = store.Store);
         store.IsDown = true;
 
         Assert.True(host.Flagon.IsEnabled("flaky", true));

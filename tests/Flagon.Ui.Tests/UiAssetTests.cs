@@ -151,6 +151,23 @@ public class UiAssetTests
         Assert.Contains("new URL(\"_api/\", document.baseURI)", script, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Every_dialog_is_labelled_by_its_heading()
+    {
+        await using var host = await StartAsync();
+
+        var page = await host.CreateClient().GetStringAsync("/flags/");
+
+        var dialogs = System.Text.RegularExpressions.Regex.Matches(page, "<dialog\\b[^>]*>");
+        Assert.NotEmpty(dialogs);
+        Assert.All(dialogs, dialog =>
+        {
+            var labelledBy = System.Text.RegularExpressions.Regex.Match(dialog.Value, "aria-labelledby=\"([^\"]+)\"");
+            Assert.True(labelledBy.Success, $"{dialog.Value} has no aria-labelledby");
+            Assert.Matches($"<h2 id=\"{labelledBy.Groups[1].Value}\"", page);
+        });
+    }
+
     private static async Task<string> ImportsOfAppAsync(FlagonTestHost host) =>
         await host.CreateClient().GetStringAsync("/flags/app.js");
 }

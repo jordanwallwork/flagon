@@ -20,7 +20,11 @@ public class OfrepSideEffectTests
     [Fact]
     public async Task A_missing_flag_requested_over_ofrep_is_not_auto_created()
     {
-        await using var host = await StartAsync();
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Endpoints = app => app.MapFlagonOfrep();
+            o.Flagon = f => f.AutoCreate = true;
+        });
 
         var response = await host.CreateClient().PostAsJsonAsync("/ofrep/v1/evaluate/flags/made-up-by-a-client", EmptyContext);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);

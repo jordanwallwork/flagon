@@ -4,16 +4,18 @@ namespace Flagon.Internal;
 internal static class FlagTags
 {
     /// <summary>
-    /// Throws <see cref="FlagValidationException"/> unless every tag is non-blank and comma-free (tags are stored
-    /// comma-separated, because flagd metadata values must be primitives).
+    /// Throws <see cref="FlagValidationException"/> unless every tag is non-blank, comma-free and has no leading or
+    /// trailing whitespace (tags are stored comma-separated, because flagd metadata values must be primitives, and read
+    /// back trimmed — so a padded tag would not survive a round trip).
     /// </summary>
     public static void Validate(IEnumerable<string>? tags)
     {
         foreach (var tag in tags ?? [])
         {
-            if (string.IsNullOrWhiteSpace(tag) || tag.Contains(',', StringComparison.Ordinal))
+            if (string.IsNullOrWhiteSpace(tag) || tag.Contains(',', StringComparison.Ordinal) || tag.Trim().Length != tag.Length)
             {
-                throw new FlagValidationException($"'{tag}' is not a valid tag. Tags must be non-blank and may not contain commas.");
+                throw new FlagValidationException(
+                    $"'{tag}' is not a valid tag. Tags must be non-blank, may not contain commas and may not start or end with whitespace.");
             }
         }
     }

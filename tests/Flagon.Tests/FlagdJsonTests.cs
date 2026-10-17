@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Flagon.Tests;
@@ -69,5 +70,15 @@ public class FlagdJsonTests
         Assert.Equal(FlagdJson.Serialize(original), FlagdJson.Serialize(roundTripped));
         Assert.Equal(original.Metadata with { Tags = [] }, roundTripped.Metadata with { Tags = [] });
         Assert.Equal(original.Metadata.Tags, roundTripped.Metadata.Tags);
+    }
+
+    [Fact]
+    public void Boolean_flag_variants_cannot_be_mutated_even_through_a_dictionary_cast()
+    {
+        var variants = (IDictionary<string, JsonElement>)FlagDocument.Boolean(true).Variants;
+
+        Assert.Throws<NotSupportedException>(() => variants[FlagDocument.OnVariant] = JsonSerializer.SerializeToElement(false));
+        Assert.Throws<NotSupportedException>(() => variants.Clear());
+        Assert.True(FlagDocument.Boolean(false).Variants[FlagDocument.OnVariant].GetBoolean());
     }
 }

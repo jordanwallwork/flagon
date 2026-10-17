@@ -28,7 +28,11 @@ public sealed class FlagonTestHostOptions
     /// <summary>Host environment name.</summary>
     public string EnvironmentName { get; set; } = Environments.Development;
 
-    /// <summary>Extra Flagon configuration, applied inside <c>AddFlagon(opts =&gt; ...)</c>.</summary>
+    /// <summary>
+    /// Extra Flagon configuration, applied inside <c>AddFlagon(opts =&gt; ...)</c>. The harness turns
+    /// <see cref="FlagonOptions.AutoCreate"/> off first (evaluating an unknown key would otherwise race a background
+    /// create against the test's own assertions); tests that exercise auto-create opt back in here.
+    /// </summary>
     public Action<FlagonOptions>? Flagon { get; set; }
 
     /// <summary>Extra service registrations, applied after <c>AddFlagon</c>.</summary>
@@ -124,6 +128,7 @@ public sealed class FlagonTestHost : IAsyncDisposable
         services.AddSingleton<TimeProvider>(time);
         services.AddFlagon(o =>
         {
+            o.AutoCreate = false;
             if (options.Store is not null)
             {
                 o.UseStorage(options.Store);

@@ -164,6 +164,69 @@ public class UsageTrackingTests
         Assert.Empty(await store.LoadAllUsageAsync());
     }
 
+    [Fact]
+    public async Task Each_written_usage_pairs_an_evaluation_time_with_the_default_supplied_at_that_time()
+    {
+        var store = UsageRecordingStore.Wrap(new InMemoryFlagStore());
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store.Store;
+            o.Flagon = f => f.UsageFlushInterval = TimeSpan.FromSeconds(1);
+        });
+
+        // Every second the code default flips, and every second a flush runs concurrently with the next evaluation.
+        // A written row must never pair one evaluation's time with another evaluation's default.
+        for (var second = 1; second <= 5000; second++)
+        {
+            host.Time.Advance(TimeSpan.FromSeconds(1));
+            host.Flagon.IsEnabled("flip-flop", defaultValue: second % 2 == 0);
+        }
+
+        await host.StopAsync();
+
+        Assert.NotEmpty(store.Written);
+        Assert.All(store.Written, u =>
+        {
+            var second = (long)(u.LastEvaluatedAt - FlagonTestHost.Epoch).TotalSeconds;
+            Assert.Equal(second % 2 == 0, u.ObservedDefault!.Value.GetBoolean());
+        });
+        Assert.Equal(FlagonTestHost.Epoch.AddSeconds(5000), store.Written[^1].LastEvaluatedAt);
+    }
+
+    /// <summary>A store that forwards everything and keeps every usage row written, in order.</summary>
+    public class UsageRecordingStore : System.Reflection.DispatchProxy
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<FlagUsage> _written = new();
+        private IFlagStore _inner = null!;
+
+        public IFlagStore Store { get; private set; } = null!;
+
+        public IReadOnlyList<FlagUsage> Written => _written.ToArray();
+
+        public static UsageRecordingStore Wrap(IFlagStore inner)
+        {
+            var proxy = Create<IFlagStore, UsageRecordingStore>();
+            var store = (UsageRecordingStore)(object)proxy;
+            store._inner = inner;
+            store.Store = proxy;
+            return store;
+        }
+
+        protected override object? Invoke(System.Reflection.MethodInfo? targetMethod, object?[]? args)
+        {
+            ArgumentNullException.ThrowIfNull(targetMethod);
+            if (targetMethod.Name == nameof(IFlagStore.UpsertUsageAsync))
+            {
+                foreach (var usage in (IEnumerable<FlagUsage>)args![0]!)
+                {
+                    _written.Enqueue(usage);
+                }
+            }
+
+            return targetMethod.Invoke(_inner, args);
+        }
+    }
+
     /// <summary>A store that reports itself read-only and counts (but forwards) usage writes, to prove none are attempted.</summary>
     public class ReadOnlyFlagStore : System.Reflection.DispatchProxy
     {

@@ -7,8 +7,8 @@ namespace Flagon.Storage.Postgres;
 /// <param name="Version">The schema version the script installs (scripts run in ascending order).</param>
 /// <param name="Name">The script name, e.g. <c>0001_initial</c>.</param>
 /// <param name="Sql">
-/// The complete script for one schema: it creates the schema and its <c>schema_version</c> table if missing, applies
-/// the change idempotently and records <paramref name="Version"/> in <c>schema_version</c>.
+/// The complete script for one schema, in one transaction: it creates the schema and its <c>schema_version</c> table if
+/// missing, applies the change idempotently and records <paramref name="Version"/> in <c>schema_version</c>.
 /// </param>
 public sealed record PostgresMigrationScript(int Version, string Name, string Sql);
 
@@ -41,7 +41,17 @@ internal static partial class PostgresMigrations
         );
         """;
 
-    public static IReadOnlyList<PostgresMigrationScript> For(string schema)
+    /// <summary>
+    /// The exported scripts: each runs in its own transaction (<c>BEGIN</c> ... <c>COMMIT</c>), so a script that fails part
+    /// way leaves nothing behind (in <c>psql</c>, the failed transaction's <c>COMMIT</c> rolls back) and can be run again.
+    /// </summary>
+    public static IReadOnlyList<PostgresMigrationScript> For(string schema) =>
+        ForRunner(schema)
+            .Select(s => s with { Sql = $"BEGIN;\n\n{s.Sql}\n\nCOMMIT;\n" })
+            .ToArray();
+
+    /// <summary>The scripts without transaction control, for the store's own runner (which wraps each in a transaction).</summary>
+    public static IReadOnlyList<PostgresMigrationScript> ForRunner(string schema)
     {
         ValidateSchema(schema);
         return Templates.Value
