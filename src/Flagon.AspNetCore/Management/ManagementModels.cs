@@ -18,6 +18,7 @@ internal sealed record FlagResponse(
     string? CreatedBy,
     DateTimeOffset? UpdatedAt,
     string? UpdatedBy,
+    JsonElement? Targeting,
     FlagUsageResponse Usage)
 {
     public static FlagResponse From(FlagRecord record, FlagUsageReport? usage)
@@ -40,6 +41,7 @@ internal sealed record FlagResponse(
             metadata.CreatedBy,
             metadata.UpdatedAt,
             metadata.UpdatedBy,
+            document.Targeting,
             FlagUsageResponse.From(usage));
     }
 }
@@ -84,7 +86,10 @@ internal sealed record FlagAuditEntryResponse(
         document is null ? null : JsonDocument.Parse(FlagdJson.Serialize(document)).RootElement.Clone();
 }
 
-internal sealed record CreateFlagBody(string? Key, bool Enabled = false, string? Description = null, IReadOnlyList<string>? Tags = null);
+internal sealed record CreateFlagBody(string? Key, bool Enabled = false, string? Description = null, IReadOnlyList<string>? Tags = null, JsonElement? Targeting = null);
+
+/// <summary><c>targeting</c> is required: a rule, or JSON <c>null</c> to remove it (an absent field is Undefined).</summary>
+internal sealed record SetTargetingBody(JsonElement Targeting = default, long? Version = null);
 
 internal sealed record UpdateMetadataBody(string? Description = null, IReadOnlyList<string>? Tags = null, long? Version = null);
 

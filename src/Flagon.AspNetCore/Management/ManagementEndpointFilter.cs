@@ -26,6 +26,15 @@ internal static class ManagementEndpointFilter
         {
             return await next(context).ConfigureAwait(false);
         }
+        catch (FlagTargetingException ex)
+        {
+            return Problem(StatusCodes.Status400BadRequest, "Invalid targeting rule", ex.Message, new Dictionary<string, object?>
+            {
+                ["key"] = ex.Key,
+                ["operator"] = ex.Operator,
+                ["path"] = ex.Path,
+            });
+        }
         catch (FlagValidationException ex)
         {
             return Problem(StatusCodes.Status400BadRequest, "Invalid request", ex.Message);

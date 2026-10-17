@@ -17,15 +17,19 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// <item><c>GET {path}/flags</c>: lists flags; optional filters <c>q</c> (key/description contains, case-insensitive),
     /// <c>tag</c>, <c>source</c> (<c>manual</c>|<c>auto</c>|<c>code</c>), <c>enabled</c> and <c>archived</c> (<c>true</c>|<c>false</c>).</item>
     /// <item><c>GET {path}/flags/{key}</c>: one flag (with an <c>ETag</c> of its version).</item>
-    /// <item><c>POST {path}/flags</c>: creates a flag from <c>{ key, enabled?, description?, tags? }</c>.</item>
+    /// <item><c>POST {path}/flags</c>: creates a flag from <c>{ key, enabled?, description?, tags?, targeting? }</c>.</item>
     /// <item><c>PATCH {path}/flags/{key}</c>: updates <c>{ description?, tags? }</c> (omitted fields are unchanged).</item>
     /// <item><c>PUT {path}/flags/{key}/enabled</c>: toggles the flag from <c>{ enabled }</c>.</item>
+    /// <item><c>PUT {path}/flags/{key}/targeting</c>: replaces the flag's flagd targeting rule from <c>{ targeting }</c>
+    /// (<c>null</c> removes it).</item>
     /// <item><c>POST {path}/flags/{key}/archive</c>, <c>POST {path}/flags/{key}/restore</c>, <c>DELETE {path}/flags/{key}</c> (purge).</item>
     /// <item><c>GET {path}/flags/{key}/audit</c>: audit history, newest first.</item>
     /// </list>
     /// Writes to an existing flag need the version the caller last saw, as an <c>If-Match</c> header (the flag's <c>ETag</c>)
     /// or a <c>version</c> body field; a stale version is answered with <c>409</c> problem details carrying <c>currentVersion</c>.
-    /// Invalid requests get <c>400</c> problem details.
+    /// Invalid requests get <c>400</c> problem details; a targeting rule that does not compile is one, titled
+    /// <c>Invalid targeting rule</c> and carrying the flag <c>key</c>, the failing <c>operator</c> and a JSON Pointer
+    /// <c>path</c> to it within the rule.
     /// <para>
     /// Security: unless authorization is added to the returned builder (e.g. <c>.RequireAuthorization("flag-admins")</c>),
     /// the endpoints only serve in the <c>Development</c> environment and answer <c>404</c> elsewhere, so an unauthenticated
@@ -48,6 +52,7 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
         group.MapGet("/flags/{key}", ManagementEndpoints.GetAsync);
         group.MapPatch("/flags/{key}", ManagementEndpoints.UpdateMetadataAsync);
         group.MapPut("/flags/{key}/enabled", ManagementEndpoints.SetEnabledAsync);
+        group.MapPut("/flags/{key}/targeting", ManagementEndpoints.SetTargetingAsync);
         group.MapPost("/flags/{key}/archive", ManagementEndpoints.ArchiveAsync);
         group.MapPost("/flags/{key}/restore", ManagementEndpoints.RestoreAsync);
         group.MapDelete("/flags/{key}", ManagementEndpoints.PurgeAsync);
