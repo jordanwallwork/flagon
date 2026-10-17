@@ -16,7 +16,7 @@ internal static class UiAssets
     // The page loads only its own scripts and styles and calls only its own API.
     private const string ContentSecurityPolicy =
         "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; " +
-        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
     private static readonly Lazy<FrozenDictionary<string, Asset>> Assets = new(Load);
 

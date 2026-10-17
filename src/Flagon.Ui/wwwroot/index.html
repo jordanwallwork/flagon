@@ -1,2 +1,51 @@
 <!doctype html>
-<title>Flagon</title>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Flagon</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">Flagon</a>
+    <nav>
+      <a href="#/" data-nav="list">Flags</a>
+      <a href="#/new" data-nav="new" class="button primary">New flag</a>
+    </nav>
+  </header>
+  <div id="notice" class="notice" role="alert" hidden></div>
+  <main id="view" aria-live="polite">
+    <p class="muted">Loading&hellip;</p>
+  </main>
+  <noscript><p class="notice error">The Flagon console needs JavaScript.</p></noscript>
+
+  <dialog id="conflict">
+    <form method="dialog">
+      <h2>This flag changed while you were looking at it</h2>
+      <p id="conflict-detail">Someone else saved a newer version. Your change was not applied.</p>
+      <p>Reload to see the latest version, then make your change again.</p>
+      <menu>
+        <button value="cancel">Cancel</button>
+        <button value="reload" class="primary">Reload</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="confirm">
+    <form method="dialog">
+      <h2 id="confirm-title">Are you sure?</h2>
+      <p id="confirm-detail"></p>
+      <label id="confirm-typed-label" hidden>Type <code id="confirm-expected"></code> to confirm
+        <input id="confirm-typed" autocomplete="off" spellcheck="false">
+      </label>
+      <menu>
+        <button value="cancel">Cancel</button>
+        <button value="ok" id="confirm-ok" class="danger">Confirm</button>
+      </menu>
+    </form>
+  </dialog>
+</body>
+</html>
