@@ -9,7 +9,7 @@ namespace Flagon.Ui.Tests;
 
 public class UiAuthorizationTests
 {
-    private static readonly string[] ConsolePaths = ["/flags/", "/flags/app.js", "/flags/api/flags", "/flags/api/flags/new-checkout"];
+    private static readonly string[] ConsolePaths = ["/flags/", "/flags/app.js", "/flags/_api/flags", "/flags/_api/flags/new-checkout"];
 
     private static async Task<FlagonTestHost> StartWithFlagAsync(Action<FlagonTestHostOptions> configure)
     {
@@ -35,7 +35,7 @@ public class UiAuthorizationTests
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(path)).StatusCode);
         }
 
-        var write = await client.PutAsJsonAsync("/flags/api/flags/new-checkout/enabled", new { enabled = true, version = 1 });
+        var write = await client.PutAsJsonAsync("/flags/_api/flags/new-checkout/enabled", new { enabled = true, version = 1 });
         Assert.Equal(HttpStatusCode.NotFound, write.StatusCode);
         Assert.False(host.Flagon.IsEnabled("new-checkout"));
     }
@@ -74,7 +74,7 @@ public class UiAuthorizationTests
             Assert.Equal(HttpStatusCode.OK, (await host.CreateClient("alice", "flag-admin").GetAsync(path)).StatusCode);
         }
 
-        var bobToggle = await host.CreateClient("bob").PutAsJsonAsync("/flags/api/flags/new-checkout/enabled", new { enabled = true, version = 1 });
+        var bobToggle = await host.CreateClient("bob").PutAsJsonAsync("/flags/_api/flags/new-checkout/enabled", new { enabled = true, version = 1 });
         Assert.Equal(HttpStatusCode.Forbidden, bobToggle.StatusCode);
         Assert.False(host.Flagon.IsEnabled("new-checkout"));
     }

@@ -70,6 +70,11 @@ FlagEvaluationDetails<bool> details = flags.GetBooleanDetails("new-checkout");
 // details.ErrorCode (None, FlagNotFound, ...)
 ```
 
+Every evaluation method takes an optional `EvaluationContext` (targeting key plus attributes). When you don't pass one,
+Flagon uses the ambient context: with `builder.Services.AddFlagonAmbientContext()` (Flagon.AspNetCore) that is the
+current request's user. MVP flags have no targeting rules yet, so the context doesn't change results today, but call
+sites written now keep working when targeting arrives.
+
 The first time code evaluates an unknown key, Flagon creates the flag (in the background, off the evaluation path) with
 the default the code supplied, marked `source: auto`. Archived keys are never re-created.
 
@@ -140,21 +145,24 @@ var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapFlagonUi("/flags").RequireAuthorization("flag-admins");   // console at /flags, its API at /flags/api
+app.MapFlagonUi("/flags").RequireAuthorization("flag-admins");   // console at /flags
+app.MapFlagonApi().RequireAuthorization("flag-admins");          // optional: API for your own tools at /flagon/api
 app.MapFlagonOfrep();                                            // POST /ofrep/v1/evaluate/flags[/{key}]
 app.MapHealthChecks("/health");
 ```
 
 - **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags; toggle, edit, archive,
   restore and purge them; view audit history, last-evaluated time per app, and default-mismatch warnings. It is plain
-  HTML/JavaScript embedded in the package and mounts its own management API at `{path}/api`.
-- **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): use it on its own if you want the API without the UI
+  HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
+  `{path}/_api`, so it never collides with `MapFlagonApi()`.
+- **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI
   (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `POST /flags/{key}/archive|restore`,
   `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
   version gets `409 Conflict`.
 - **Safe by default:** the UI and the management API answer `404` outside the `Development` environment unless you add
   authorization to them. Changes made through them are recorded in the audit log under the signed-in user's name.
-- **OFREP** (`MapFlagonOfrep(prefix)`) is public unless you call `.RequireAuthorization(...)` on it.
+- **OFREP** (`MapFlagonOfrep(prefix)`) is public unless you call `.RequireAuthorization(...)` on it. It evaluates with
+  the context in the request body only, and remote evaluations never auto-create flags or count as the app's usage.
 - **Health check:** `AddHealthChecks().AddFlagon()` reports `Degraded` when the store is unreachable or the snapshot is stale.
 
 To manage flags from your own code, inject `IFlagonAdmin`:

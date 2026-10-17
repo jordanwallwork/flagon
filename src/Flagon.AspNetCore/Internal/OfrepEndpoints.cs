@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Flagon.Internal;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Net.Http.Headers;
 
@@ -10,7 +11,7 @@ namespace Flagon.AspNetCore.Internal;
 /// <summary>OFREP request handling: parses the evaluation context and maps Flagon evaluation details onto OFREP responses.</summary>
 internal static class OfrepEndpoints
 {
-    public static async Task<IResult> EvaluateAsync(string key, HttpContext http, IFlagon flagon)
+    public static async Task<IResult> EvaluateAsync(string key, HttpContext http, FlagonEvaluator flagon)
     {
         var (context, contextError) = await ReadContextAsync(http).ConfigureAwait(false);
         if (contextError is not null)
@@ -20,7 +21,7 @@ internal static class OfrepEndpoints
 
         // OFREP has no caller default: "false" never reaches the client because every outcome that would return the
         // caller's default (missing, disabled, error) is reported without a value.
-        var details = flagon.GetBooleanDetails(key, defaultValue: false, context);
+        var details = flagon.GetRemoteBooleanDetails(key, context);
         return details.ErrorCode switch
         {
             ErrorCode.None => Json(Success(details), StatusCodes.Status200OK),
@@ -29,7 +30,7 @@ internal static class OfrepEndpoints
         };
     }
 
-    public static async Task<IResult> EvaluateAllAsync(HttpContext http, IFlagon flagon)
+    public static async Task<IResult> EvaluateAllAsync(HttpContext http, FlagonEvaluator flagon)
     {
         var (context, contextError) = await ReadContextAsync(http).ConfigureAwait(false);
         if (contextError is not null)
@@ -37,7 +38,7 @@ internal static class OfrepEndpoints
             return Json(new JsonObject { ["errorCode"] = "INVALID_CONTEXT", ["errorDetails"] = contextError }, StatusCodes.Status400BadRequest);
         }
 
-        var evaluation = flagon.GetAllBooleanDetails(context);
+        var evaluation = flagon.GetAllRemoteBooleanDetails(context);
 
         // The ETag is the snapshot version: any flag change (in this app or, after a refresh, another app) moves it.
         // The MVP engine ignores the context, so the version alone identifies the response.

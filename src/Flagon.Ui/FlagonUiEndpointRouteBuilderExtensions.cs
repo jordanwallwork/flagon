@@ -12,10 +12,19 @@ public static class FlagonUiEndpointRouteBuilderExtensions
     public const string DefaultPath = "/flagon";
 
     /// <summary>
+    /// Where, under the console's path, the console's own management API instance is mounted. Deliberately not
+    /// <c>/api</c>, so the console at its default path and <see cref="FlagonManagementEndpointRouteBuilderExtensions.MapFlagonApi"/>
+    /// at its default path (<c>/flagon/api</c>) can be mapped side by side.
+    /// </summary>
+    private const string ConsoleApiPath = "/_api";
+
+    /// <summary>
     /// Mounts the management console at <paramref name="path"/>: a plain HTML/JavaScript page (embedded in this package,
     /// no Node build) for finding, toggling, editing, archiving and auditing flags. The console talks only to the
-    /// management API, which this call maps for it at <c>{path}/api</c> (see
-    /// <see cref="FlagonManagementEndpointRouteBuilderExtensions.MapFlagonApi"/>); don't map the API yourself at that same path.
+    /// management API, which this call maps for its own use at <c>{path}/_api</c> (see
+    /// <see cref="FlagonManagementEndpointRouteBuilderExtensions.MapFlagonApi"/>). That is internal to the console:
+    /// to expose the API to your own tools, map <c>MapFlagonApi()</c> as well; with both defaults the console is at
+    /// <c>/flagon</c> and the API at <c>/flagon/api</c>.
     /// <para>
     /// Security: conventions applied to the returned builder cover both the page and its API, so
     /// <c>app.MapFlagonUi("/flags").RequireAuthorization("flag-admins")</c> protects the whole console. Without
@@ -31,7 +40,7 @@ public static class FlagonUiEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
 
         var group = endpoints.MapGroup(NormalizePath(path));
-        group.MapFlagonApi("/api");
+        group.MapFlagonApi(ConsoleApiPath);
         group.MapGet("/{**asset}", UiAssets.ServeAsync).AddEndpointFilter(UiAssets.GateAsync).ExcludeFromDescription();
         return group;
     }

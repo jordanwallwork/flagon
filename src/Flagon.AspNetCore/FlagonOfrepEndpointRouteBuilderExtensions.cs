@@ -1,5 +1,6 @@
 using Flagon;
 using Flagon.AspNetCore.Internal;
+using Flagon.Internal;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
@@ -26,8 +27,8 @@ public static class FlagonOfrepEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
 
         var group = endpoints.MapGroup(CombinePrefix(prefix) + "/ofrep/v1/evaluate/flags");
-        group.MapPost("/{key}", (string key, HttpContext http, IFlagon flagon) => OfrepEndpoints.EvaluateAsync(key, http, flagon));
-        group.MapPost("/", (HttpContext http, IFlagon flagon) => OfrepEndpoints.EvaluateAllAsync(http, flagon));
+        group.MapPost("/{key}", (string key, HttpContext http, FlagonEvaluator flagon) => OfrepEndpoints.EvaluateAsync(key, http, flagon));
+        group.MapPost("/", (HttpContext http, FlagonEvaluator flagon) => OfrepEndpoints.EvaluateAllAsync(http, flagon));
         return group;
     }
 

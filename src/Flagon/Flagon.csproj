@@ -10,4 +10,8 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- OFREP evaluates through FlagonEvaluator's remote path (no usage, auto-create or ambient context). Packages ship in lockstep. -->
+    <InternalsVisibleTo Include="Flagon.AspNetCore" />
+  </ItemGroup>
 </Project>

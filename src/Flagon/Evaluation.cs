@@ -111,6 +111,11 @@ public sealed class EvaluationContext
 /// In-process flag evaluation. Evaluation never performs I/O: it reads an in-memory snapshot of the store.
 /// Missing flags return the caller's default.
 /// </summary>
+/// <remarks>
+/// Every method takes an optional <see cref="EvaluationContext"/>. When none is passed, the ambient context from the
+/// registered <see cref="IEvaluationContextAccessor"/> is used (e.g. the current request's user with
+/// <c>Flagon.AspNetCore</c>'s <c>AddFlagonAmbientContext()</c>); an explicitly passed context always wins.
+/// </remarks>
 public interface IFlagon
 {
     /// <summary>Returns whether the boolean flag <paramref name="key"/> is on, or <paramref name="defaultValue"/> if it cannot be evaluated.</summary>

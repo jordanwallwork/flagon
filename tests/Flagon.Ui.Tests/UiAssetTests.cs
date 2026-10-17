@@ -102,8 +102,8 @@ public class UiAssetTests
         await using var host = await StartAsync();
         var client = host.CreateClient("alice");
 
-        var created = await client.PostAsJsonAsync("/flags/api/flags", new { key = "new-checkout", description = "From the console" });
-        var request = new HttpRequestMessage(HttpMethod.Put, "/flags/api/flags/new-checkout/enabled")
+        var created = await client.PostAsJsonAsync("/flags/_api/flags", new { key = "new-checkout", description = "From the console" });
+        var request = new HttpRequestMessage(HttpMethod.Put, "/flags/_api/flags/new-checkout/enabled")
         {
             Content = JsonContent.Create(new { enabled = true }),
         };
@@ -115,8 +115,40 @@ public class UiAssetTests
         Assert.True(host.Flagon.IsEnabled("new-checkout"));
         Assert.All(await host.Admin.GetAuditHistoryAsync("new-checkout"), e => Assert.Equal("alice", e.Actor));
 
-        using var list = JsonDocument.Parse(await client.GetStringAsync("/flags/api/flags"));
+        using var list = JsonDocument.Parse(await client.GetStringAsync("/flags/_api/flags"));
         Assert.Equal("new-checkout", Assert.Single(list.RootElement.EnumerateArray()).GetProperty("key").GetString());
+    }
+
+    [Fact]
+    public async Task The_console_and_the_management_api_can_both_be_mapped_with_their_default_paths()
+    {
+        await using var host = await FlagonTestHost.StartAsync(o => o.Endpoints = app =>
+        {
+            app.MapFlagonUi();
+            app.MapFlagonApi();
+        });
+        var client = host.CreateClient("alice");
+        await host.Admin.CreateAsync(new CreateFlagRequest("new-checkout"));
+
+        var page = await client.GetAsync("/flagon/");
+        var viaApi = await client.GetAsync("/flagon/api/flags/new-checkout");
+        var viaConsole = await client.GetAsync("/flagon/_api/flags/new-checkout");
+
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+        Assert.Equal("text/html", page.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(HttpStatusCode.OK, viaApi.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, viaConsole.StatusCode);
+        Assert.Equal("new-checkout", (await viaApi.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("key").GetString());
+    }
+
+    [Fact]
+    public async Task The_console_script_calls_the_api_mounted_under_the_console()
+    {
+        await using var host = await StartAsync();
+
+        var script = await host.CreateClient().GetStringAsync("/flags/api.js");
+
+        Assert.Contains("new URL(\"_api/\", document.baseURI)", script, StringComparison.Ordinal);
     }
 
     private static async Task<string> ImportsOfAppAsync(FlagonTestHost host) =>

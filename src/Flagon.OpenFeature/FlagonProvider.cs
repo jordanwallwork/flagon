@@ -68,7 +68,9 @@ public sealed class FlagonProvider : FeatureProvider
 
     private static Flagon.EvaluationContext? ToFlagonContext(OfEvaluationContext? context)
     {
-        if (context is null)
+        // OpenFeature always hands providers a merged context, empty when nothing was set anywhere. Treat empty as
+        // "no context" so Flagon falls back to its ambient context (IEvaluationContextAccessor), e.g. the request's user.
+        if (context is null || (context.Count == 0 && context.TargetingKey is null))
         {
             return null;
         }

@@ -28,7 +28,7 @@ internal static class UiAssets
     {
         if (string.IsNullOrEmpty(asset))
         {
-            // Serve the page at "{path}/" so its relative URLs (./app.js, ./api/flags) resolve under the mount path.
+            // Serve the page at "{path}/" so its relative URLs (./app.js, ./_api/flags) resolve under the mount path.
             if (!http.Request.Path.Value!.EndsWith('/'))
             {
                 return Task.FromResult(Results.Redirect($"{http.Request.PathBase}{http.Request.Path}/{http.Request.QueryString}"));

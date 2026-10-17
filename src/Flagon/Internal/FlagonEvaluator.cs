@@ -11,7 +11,8 @@ internal sealed partial class FlagonEvaluator(
     UsageTracker usage,
     FlagonInstrumentation instrumentation,
     ILogger<FlagonEvaluator> logger,
-    FlagAutoCreator autoCreator) : IFlagon
+    FlagAutoCreator autoCreator,
+    IEvaluationContextAccessor ambientContext) : IFlagon
 {
     private readonly ConcurrentDictionary<string, byte> _warnedMissingKeys = new(StringComparer.Ordinal);
 
@@ -24,25 +25,54 @@ internal sealed partial class FlagonEvaluator(
     public FlagEvaluationDetails<bool> GetBooleanDetails(string key, bool defaultValue = false, EvaluationContext? context = null)
     {
         usage.Record(key, defaultValue);
-        var details = Evaluate(key, defaultValue);
+        var details = Evaluate(key, defaultValue, context ?? ambientContext.Current);
+        if (details.ErrorCode == ErrorCode.FlagNotFound)
+        {
+            WarnMissingOnce(details.FlagKey);
+            autoCreator.Enqueue(details.FlagKey, defaultValue);
+        }
+
         instrumentation.RecordEvaluation(details);
         return details;
     }
 
-    private FlagEvaluationDetails<bool> Evaluate(string key, bool defaultValue)
+    /// <summary>
+    /// Evaluates <paramref name="key"/> for a remote caller (OFREP). Unlike <see cref="GetBooleanDetails"/>, a remote
+    /// evaluation is not this app's code using a flag, so it records no usage, never auto-creates or logs a missing key,
+    /// and uses only the <paramref name="context"/> the caller sent (never the ambient one). Missing keys are not counted
+    /// on the evaluation metric either, so arbitrary keys sent by clients cannot inflate its cardinality.
+    /// </summary>
+    internal FlagEvaluationDetails<bool> GetRemoteBooleanDetails(string key, EvaluationContext context)
     {
-        // The MVP boolean engine does not use the context; it is accepted so call sites survive targeting arriving.
+        var details = Evaluate(key, defaultValue: false, context);
+        if (details.ErrorCode != ErrorCode.FlagNotFound)
+        {
+            instrumentation.RecordEvaluation(details);
+        }
+
+        return details;
+    }
+
+    /// <summary>Bulk counterpart of <see cref="GetRemoteBooleanDetails"/>: uses only <paramref name="context"/>.</summary>
+    internal FlagEvaluationSet<bool> GetAllRemoteBooleanDetails(EvaluationContext context) => EvaluateAll(context);
+
+    /// <summary>Pure evaluation against the current snapshot: no usage, auto-create, logging or metrics.</summary>
+    private FlagEvaluationDetails<bool> Evaluate(string key, bool defaultValue, EvaluationContext? context)
+    {
+        // The MVP boolean engine does not use the context (explicit, else ambient); it is threaded through so call sites
+        // and the ambient fallback already work when targeting arrives.
+        _ = context;
         if (key is null || !snapshots.Current.Flags.TryGetValue(key, out var flag))
         {
-            WarnMissingOnce(key ?? string.Empty);
-            autoCreator.Enqueue(key ?? string.Empty, defaultValue);
             return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 
         return Evaluate(key, flag, defaultValue);
     }
 
-    public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null)
+    public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null) => EvaluateAll(context ?? ambientContext.Current);
+
+    private FlagEvaluationSet<bool> EvaluateAll(EvaluationContext? context)
     {
         // Read the snapshot once so the version and the flags agree.
         var snapshot = snapshots.Current;

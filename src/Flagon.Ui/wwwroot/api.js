@@ -1,6 +1,6 @@
-// Thin client for the Flagon management API, which MapFlagonUi mounts at "./api" next to this page.
+// Thin client for the Flagon management API, which MapFlagonUi mounts at "./_api" next to this page.
 
-const base = new URL("api/", document.baseURI);
+const base = new URL("_api/", document.baseURI);
 
 /** An error response from the management API (problem details in `problem`). */
 export class ApiError extends Error {

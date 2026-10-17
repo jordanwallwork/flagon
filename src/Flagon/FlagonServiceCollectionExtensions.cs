@@ -39,7 +39,8 @@ public static class FlagonServiceCollectionExtensions
         services.AddSingleton<FlagonInstrumentation>();
         services.AddSingleton<FlagSnapshotManager>();
         services.AddSingleton<IFlagonSnapshotStatus>(sp => sp.GetRequiredService<FlagSnapshotManager>());
-        services.AddSingleton<IFlagon, FlagonEvaluator>();
+        services.AddSingleton<FlagonEvaluator>();
+        services.AddSingleton<IFlagon>(sp => sp.GetRequiredService<FlagonEvaluator>());
         services.TryAddSingleton<IEvaluationContextAccessor>(NullEvaluationContextAccessor.Instance);
         services.TryAddSingleton<IFlagonActorAccessor, AmbientFlagonActorAccessor>();
         services.AddSingleton(sp => new FlagChangeStamper(
