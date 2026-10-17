@@ -13,5 +13,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Flagon.Tests.Support\Flagon.Tests.Support.csproj" />
     <ProjectReference Include="..\..\src\Flagon.OpenFeature\Flagon.OpenFeature.csproj" />
+    <ProjectReference Include="..\..\src\Flagon.AspNetCore\Flagon.AspNetCore.csproj" />
   </ItemGroup>
 </Project>

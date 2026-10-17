@@ -45,6 +45,30 @@ public class TelemetryTests
     }
 
     [Fact]
+    public async Task A_targeted_evaluation_is_counted_with_reason_targeting_match_and_no_context_tags()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        await host.Admin.CreateAsync(new CreateFlagRequest("gb-only", Targeting: System.Text.Json.JsonDocument.Parse(
+            """{ "if": [ { "==": [ { "var": "country" }, "GB" ] }, "on", null ] }""").RootElement));
+        using var evaluations = Collect<long>(host, "flagon.evaluations");
+
+        for (var i = 0; i < 3; i++)
+        {
+            host.Flagon.IsEnabled("gb-only", context: new EvaluationContext($"user-{i}", new Dictionary<string, object?> { ["country"] = "GB" }));
+        }
+
+        host.Flagon.IsEnabled("gb-only", context: new EvaluationContext("user-fr", new Dictionary<string, object?> { ["country"] = "FR" }));
+
+        var measurements = evaluations.GetMeasurementSnapshot();
+        Assert.Equal(["default", "targeting_match", "targeting_match", "targeting_match"],
+            measurements.Select(m => (string)m.Tags["feature_flag.result.reason"]!).Order(StringComparer.Ordinal));
+        // Only the flag, reason and variant: no tag per targeting key or attribute, so cardinality does not grow with users.
+        Assert.All(measurements, m => Assert.Equal(
+            ["feature_flag.key", "feature_flag.result.reason", "feature_flag.result.variant"],
+            m.Tags.Keys.Order(StringComparer.Ordinal)));
+    }
+
+    [Fact]
     public async Task An_archived_flag_is_counted_with_reason_archived()
     {
         await using var host = await FlagonTestHost.StartAsync();
