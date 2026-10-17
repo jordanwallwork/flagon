@@ -159,6 +159,28 @@ public class TargetingWriteTests
         Assert.Null(updated.Document.Targeting);
     }
 
+    [Fact]
+    public async Task The_readme_targeting_example_turns_the_flag_on_for_staff_and_a_tenth_of_everyone_else()
+    {
+        const string rule = """
+            {
+              "if": [
+                { "ends_with": [ { "var": "email" }, "@example.com" ] }, "on",
+                { "fractional": [ [ "on", 10 ], [ "off", 90 ] ] }
+              ]
+            }
+            """;
+        await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.Define("new-checkout", defaultValue: false, targeting: rule));
+
+        var staff = host.Flagon.GetBooleanDetails("new-checkout", context: new EvaluationContext("user-123",
+            new Dictionary<string, object?> { ["email"] = "ada@example.com" }));
+        var others = Enumerable.Range(0, 1000).Count(i => host.Flagon.IsEnabled("new-checkout", context: new EvaluationContext($"user-{i}",
+            new Dictionary<string, object?> { ["email"] = $"user-{i}@elsewhere.test" })));
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("new-checkout", true, "on", EvaluationReason.TargetingMatch), staff);
+        Assert.InRange(others, 70, 130);
+    }
+
     [Theory]
     [InlineData("""{ "if": [ { "unknown_op": [1] }, "on", null ] }""", "unknown_op")]
     [InlineData("""{ "if": [ { "$ref": "is_staff" }, "on", null ] }""", "$ref")]

@@ -66,14 +66,14 @@ bool on = flags.IsEnabled("new-checkout");                        // default: fa
 bool on2 = await flags.IsEnabledAsync("new-checkout", true);
 
 FlagEvaluationDetails<bool> details = flags.GetBooleanDetails("new-checkout");
-// details.Value, details.Variant ("on"/"off"), details.Reason (Static, Disabled, Archived, Error, ...),
+// details.Value, details.Variant ("on"/"off"), details.Reason (Static, TargetingMatch, Default, Disabled, Archived, Error, ...),
 // details.ErrorCode (None, FlagNotFound, ...)
 ```
 
 Every evaluation method takes an optional `EvaluationContext` (targeting key plus attributes). When you don't pass one,
 Flagon uses the ambient context: with `builder.Services.AddFlagonAmbientContext()` (Flagon.AspNetCore) that is the
-current request's user. A flag's flagd `targeting` rule (JsonLogic plus `fractional`, `sem_ver`, `starts_with` and
-`ends_with`) is evaluated against that context, compiled once when the snapshot loads.
+current request's user; a context you pass always wins. A flag's flagd `targeting` rule is evaluated against that
+context (see [Targeting](#targeting)).
 
 The first time code evaluates an unknown key, Flagon creates the flag (in the background, off the evaluation path) with
 the default the code supplied, marked `source: auto`. Archived keys are never re-created.
@@ -91,13 +91,76 @@ builder.Services.AddFlagon(opts =>
     opts.FailFastOnStartup = false;                   // true: throw at startup if the store is unreachable
 
     // Flags as code: created on startup if missing; description and tags are kept in sync,
-    // but the on/off state an admin has chosen is never overwritten.
+    // but the on/off state (and any targeting) an admin has chosen is never overwritten.
     opts.Define("new-checkout", defaultValue: false, description: "New checkout flow", tags: ["checkout"]);
 });
 ```
 
 If the store is unavailable at startup, the app still boots with code defaults and keeps retrying; if it fails later,
 Flagon keeps serving the last snapshot it loaded.
+
+## Targeting
+
+A flag can carry a flagd [`targeting` rule](https://flagd.dev/reference/flag-definitions/#targeting-rules): JsonLogic
+plus flagd's `fractional`, `sem_ver`, `starts_with` and `ends_with`. The rule is evaluated against the
+`EvaluationContext` and names the variant to serve. This one turns `new-checkout` on for staff and for 10% of everyone
+else, bucketed on the targeting key exactly as flagd buckets it:
+
+```json
+{
+  "if": [
+    { "ends_with": [ { "var": "email" }, "@example.com" ] }, "on",
+    { "fractional": [ [ "on", 10 ], [ "off", 90 ] ] }
+  ]
+}
+```
+
+```csharp
+// rule: the JSON above, as a string.
+// In code: created with the rule if the flag is missing (an existing flag keeps its targeting).
+opts.Define("new-checkout", defaultValue: false, targeting: rule);
+
+// Or at runtime, through IFlagonAdmin (null removes the rule).
+await admin.SetTargetingAsync("new-checkout", JsonDocument.Parse(rule).RootElement, expectedVersion: flag.Version);
+
+// The context: a targeting key (fractional's default bucketing input) and attributes for "var".
+flags.IsEnabled("new-checkout", context: new EvaluationContext("user-123", new Dictionary<string, object?>
+{
+    ["email"] = "ada@example.com",
+}));
+```
+
+The management API takes the rule on `POST /flags` (`targeting`) and `PUT /flags/{key}/targeting` (`{ "targeting": ... }`).
+OFREP and the OpenFeature provider pass the caller's context through, so all three agree with in-process `IFlagon`.
+
+| The rule... | Result |
+|---|---|
+| is absent or `{}` | the default variant, reason `STATIC` |
+| names a variant | that variant, reason `TARGETING_MATCH` (including `fractional`; flagd never reports `SPLIT`) |
+| returns `null` (no match) | the default variant, reason `DEFAULT`; with no `defaultVariant`, the caller's default |
+| names a variant the flag doesn't have | the caller's default, `ERROR` / `GENERAL` |
+| cannot compile, or fails while evaluating (e.g. `cat` on a boolean) | the caller's default, `ERROR` / `PARSE_ERROR` |
+
+A disabled or archived flag never runs its rule. Each rule is compiled once when the snapshot loads, not per
+evaluation, and common rules evaluate without allocating. A rule that cannot compile breaks only its own flag and is
+logged once per snapshot version.
+
+**Validated on write.** `IFlagonAdmin`, the management API and `Define` compile the rule with the same engine before
+anything is stored. A rule that does not compile throws `FlagTargetingException` (a `FlagValidationException`) naming
+the failing operator and a JSON Pointer to it; the management API answers `400` problem details titled
+`Invalid targeting rule` with `key`, `operator` and `path` (e.g. `/if/0`) extensions.
+
+**`$ref` and `$evaluators`.** In flagd, `$evaluators` belong to a flag-set file and `{"$ref": "name"}` is replaced with
+the named rule when the file loads. Flagon stores each flag on its own and has no flag sets, so inline the shared rule
+where each `$ref` stands before writing the flag. A rule that still contains `$ref` is rejected on write (`400`); one
+written to the store by another tool evaluates to `PARSE_ERROR`, as an unresolved `$ref` does in flagd.
+
+**flagd parity.** Flagon follows flagd 0.18 rather than generic JsonLogic: only the operators in flagd's targeting
+schema, Go JsonLogic's coercions and truthiness, `targetingKey`, `$flagd.flagKey` and `$flagd.timestamp` in the context,
+and flagd's `fractional` (v3) bucketing. The vendored [flagd-testbed](https://github.com/open-feature/flagd-testbed)
+evaluation suite (boolean subset) passes in full. Flagon evaluates boolean flags only; the flags it creates have the
+variants `on` and `off`.
+See [ADR 0001](docs/adr/0001-targeting-engine.md) for the engine choice.
 
 ## Storage
 
@@ -161,8 +224,8 @@ app.MapHealthChecks("/health");
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
 - **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI
-  (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `POST /flags/{key}/archive|restore`,
-  `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
+  (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT /flags/{key}/targeting`,
+  `POST /flags/{key}/archive|restore`, `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
   version gets `409 Conflict`.
 - **Safe by default:** the UI and the management API answer `404` outside the `Development` environment unless you add
   authorization to them. Changes made through them are recorded in the audit log under the signed-in user's name.
@@ -218,27 +281,29 @@ curl -X POST https://my-app.example.com/ofrep/v1/evaluate/flags/new-checkout \
 ```
 
 The bulk endpoint (`POST /ofrep/v1/evaluate/flags`) supports `ETag`/`If-None-Match`, so polling clients only download
-flags when something has changed.
+flags when something has changed. The ETag tracks flag changes, not the context: a client that changes its context
+should drop its ETag.
 
 ## Observability
 
 - Metrics and traces on a `Meter` and `ActivitySource` named `Flagon` (`FlagonDiagnostics.MeterName`), e.g. the
-  `flagon.evaluations` counter tagged by flag key, variant and reason.
+  `flagon.evaluations` counter tagged by flag key, variant and reason (never by targeting key or attribute, so its
+  cardinality does not grow with your users).
 - Structured logs for refresh failures, migrations, auto-creation and version conflicts.
 
 ## Roadmap
 
-Flagon's MVP evaluates boolean flags. The flagd document format already accommodates what comes next, in roughly this order:
+Flagon evaluates boolean flags, with flagd targeting rules and `fractional` rollouts. The flagd document format already
+accommodates what comes next, in roughly this order:
 
-1. Targeting rules and `fractional` percentage rollouts
-2. String, number and JSON flags
-3. Redis store, cache decorator and push-based invalidation
-4. MongoDB, MySQL and SQLite stores
-5. `Flagon.Testing` package
-6. Segments; scheduled changes and flag expiry
-7. Kill-switch / prerequisite flags, approval workflows and webhooks
-8. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
-9. Direct-database clients for other languages; experimentation exposure events
+1. String, number and JSON flags; rule editing and rollout sliders in the UI
+2. Redis store, cache decorator and push-based invalidation
+3. MongoDB, MySQL and SQLite stores
+4. `Flagon.Testing` package
+5. Segments; scheduled changes and flag expiry
+6. Kill-switch / prerequisite flags, approval workflows and webhooks
+7. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
+8. Direct-database clients for other languages; experimentation exposure events
 
 ## Contributing and releasing
 

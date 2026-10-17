@@ -41,6 +41,6 @@ licensing, and those are the criteria spec #19 names. Numbers: [`benchmarks/resu
   vendored flagd-testbed (`tests/Flagon.Tests/FlagdParity`) is the guard: bump the fixtures, and every case that
   diverges fails `DefaultCompilerParityTests`.
 - Core stays dependency-free beyond `Microsoft.Extensions.*` abstractions and the BCL.
-- Two known divergences are seam-level and shared by both candidates; they are left for the hardening work. A
-  runtime panic in Go gives PARSE_ERROR in flagd but GENERAL in Flagon. `targeting: {}` gives STATIC in flagd but
-  DEFAULT in Flagon.
+- Two known divergences were seam-level and shared by both candidates, and were left for the hardening work: a
+  runtime panic in Go gave PARSE_ERROR in flagd but GENERAL in Flagon, and `targeting: {}` gave STATIC in flagd but
+  DEFAULT in Flagon. Both now follow flagd (#25).
