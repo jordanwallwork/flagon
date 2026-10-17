@@ -16,7 +16,7 @@ internal static class OfrepEndpoints
         var (context, contextError) = await ReadContextAsync(http).ConfigureAwait(false);
         if (contextError is not null)
         {
-            return Json(Failure(key, "INVALID_CONTEXT", contextError), StatusCodes.Status400BadRequest);
+            return Json(Failure(key, ErrorCode.InvalidContext.ToWireName(), contextError), StatusCodes.Status400BadRequest);
         }
 
         // OFREP has no caller default: "false" never reaches the client because every outcome that would return the
@@ -25,7 +25,7 @@ internal static class OfrepEndpoints
         return details.ErrorCode switch
         {
             ErrorCode.None => Json(Success(details), StatusCodes.Status200OK),
-            ErrorCode.FlagNotFound => Json(Failure(key, "FLAG_NOT_FOUND", details.ErrorMessage), StatusCodes.Status404NotFound),
+            ErrorCode.FlagNotFound => Json(Failure(key, ErrorCode.FlagNotFound.ToWireName(), details.ErrorMessage), StatusCodes.Status404NotFound),
             _ => Json(Failure(key, ToOfrepErrorCode(details.ErrorCode), details.ErrorMessage), StatusCodes.Status400BadRequest),
         };
     }
@@ -35,7 +35,7 @@ internal static class OfrepEndpoints
         var (context, contextError) = await ReadContextAsync(http).ConfigureAwait(false);
         if (contextError is not null)
         {
-            return Json(new JsonObject { ["errorCode"] = "INVALID_CONTEXT", ["errorDetails"] = contextError }, StatusCodes.Status400BadRequest);
+            return Json(new JsonObject { ["errorCode"] = ErrorCode.InvalidContext.ToWireName(), ["errorDetails"] = contextError }, StatusCodes.Status400BadRequest);
         }
 
         var evaluation = flagon.GetAllRemoteBooleanDetails(context);
@@ -144,11 +144,12 @@ internal static class OfrepEndpoints
         var result = new JsonObject
         {
             ["key"] = details.FlagKey,
-            ["reason"] = ToUpperSnake(details.Reason.ToString()),
+            ["reason"] = details.Reason.ToWireName(),
         };
 
         // No variant means the caller's default applies (disabled flags, and any future "use the code default" outcome):
-        // OFREP expresses that by omitting the value.
+        // OFREP expresses that by omitting the value: the spec's `codeDefaultFlag` success shape (protocol ADR 0006),
+        // which tells the provider to use the code default.
         if (details.Variant is not null)
         {
             result["variant"] = details.Variant;
@@ -170,36 +171,13 @@ internal static class OfrepEndpoints
     }
 
     /// <summary>
-    /// Maps to OFREP's evaluation-failure error codes (PARSE_ERROR, TARGETING_KEY_MISSING, INVALID_CONTEXT, GENERAL).
-    /// Anything OFREP has no code for (e.g. a non-boolean variant) is GENERAL.
+    /// Maps to OFREP's evaluation-failure error codes, which are a subset of the OpenFeature names
+    /// (PARSE_ERROR, TARGETING_KEY_MISSING, INVALID_CONTEXT, GENERAL). Anything else (e.g. TYPE_MISMATCH) is GENERAL.
     /// </summary>
-    private static string ToOfrepErrorCode(ErrorCode code) => code switch
-    {
-        ErrorCode.ParseError => "PARSE_ERROR",
-        ErrorCode.TargetingKeyMissing => "TARGETING_KEY_MISSING",
-        ErrorCode.InvalidContext => "INVALID_CONTEXT",
-        _ => "GENERAL",
-    };
-
-    /// <summary>
-    /// OpenFeature reason codes are Flagon's enum names in UPPER_SNAKE_CASE (Static -> STATIC, TargetingMatch -> TARGETING_MATCH),
-    /// so reasons added later map without changes here.
-    /// </summary>
-    private static string ToUpperSnake(string pascal)
-    {
-        var builder = new StringBuilder(pascal.Length + 4);
-        for (var i = 0; i < pascal.Length; i++)
-        {
-            if (i > 0 && char.IsUpper(pascal[i]))
-            {
-                builder.Append('_');
-            }
-
-            builder.Append(char.ToUpperInvariant(pascal[i]));
-        }
-
-        return builder.ToString();
-    }
+    private static string ToOfrepErrorCode(ErrorCode code) =>
+        code is ErrorCode.ParseError or ErrorCode.TargetingKeyMissing or ErrorCode.InvalidContext
+            ? code.ToWireName()
+            : ErrorCode.General.ToWireName();
 
     private static IResult Json(JsonNode body, int statusCode) =>
         Results.Text(body.ToJsonString(), "application/json", Encoding.UTF8, statusCode);

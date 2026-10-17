@@ -131,31 +131,29 @@ internal sealed class FlagonInstrumentation : IDisposable
 
     public void Dispose() => _ownedMeter?.Dispose();
 
-    private static string ReasonTag(EvaluationReason reason) => reason switch
-    {
-        EvaluationReason.Static => "static",
-        EvaluationReason.Default => "default",
-        EvaluationReason.TargetingMatch => "targeting_match",
-        EvaluationReason.Split => "split",
-        EvaluationReason.Cached => "cached",
-        EvaluationReason.Disabled => "disabled",
-        EvaluationReason.Stale => "stale",
-        EvaluationReason.Error => "error",
-        EvaluationReason.Archived => "archived",
-        _ => "unknown",
-    };
+    // OpenTelemetry's feature_flag.result.reason / error.type values are the OpenFeature names in lower snake case.
+    // Precomputed from the shared wire names so the hot path does not allocate.
+    private static readonly string[] ReasonTags = LowerWireNames<EvaluationReason>(r => r.ToWireName());
+    private static readonly string[] ErrorTags = LowerWireNames<ErrorCode>(c => c.ToWireName());
 
-    private static string ErrorTag(ErrorCode code) => code switch
+    private static string ReasonTag(EvaluationReason reason) =>
+        (uint)reason < (uint)ReasonTags.Length ? ReasonTags[(int)reason] : "unknown";
+
+    private static string ErrorTag(ErrorCode code) =>
+        (uint)code < (uint)ErrorTags.Length ? ErrorTags[(int)code] : "general";
+
+    private static string[] LowerWireNames<TEnum>(Func<TEnum, string> wireName)
+        where TEnum : struct, Enum
     {
-        ErrorCode.ProviderNotReady => "provider_not_ready",
-        ErrorCode.FlagNotFound => "flag_not_found",
-        ErrorCode.ParseError => "parse_error",
-        ErrorCode.TypeMismatch => "type_mismatch",
-        ErrorCode.TargetingKeyMissing => "targeting_key_missing",
-        ErrorCode.InvalidContext => "invalid_context",
-        ErrorCode.ProviderFatal => "provider_fatal",
-        _ => "general",
-    };
+        var values = Enum.GetValues<TEnum>();
+        var names = new string[values.Max(v => Convert.ToInt32(v, System.Globalization.CultureInfo.InvariantCulture)) + 1];
+        foreach (var value in values)
+        {
+            names[Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture)] = wireName(value).ToLowerInvariant();
+        }
+
+        return names;
+    }
 
     public static string OutcomeTag(RefreshOutcome outcome) => outcome switch
     {

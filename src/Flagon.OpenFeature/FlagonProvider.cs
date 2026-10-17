@@ -37,7 +37,8 @@ public sealed class FlagonProvider : FeatureProvider
             details.FlagKey,
             details.Value,
             ToErrorType(details.ErrorCode),
-            ToReason(details.Reason),
+            // OpenFeature reason codes are Flagon's shared wire names; Flagon-only reasons (ARCHIVED) are custom reasons.
+            details.Reason.ToWireName(),
             details.Variant,
             details.ErrorMessage));
     }
@@ -96,33 +97,4 @@ public sealed class FlagonProvider : FeatureProvider
         ErrorCode.ProviderFatal => ErrorType.ProviderFatal,
         _ => ErrorType.General,
     };
-
-    private static string ToReason(EvaluationReason reason) => reason switch
-    {
-        EvaluationReason.Static => Reason.Static,
-        EvaluationReason.Default => Reason.Default,
-        EvaluationReason.TargetingMatch => Reason.TargetingMatch,
-        EvaluationReason.Split => Reason.Split,
-        EvaluationReason.Cached => Reason.Cached,
-        EvaluationReason.Disabled => Reason.Disabled,
-        EvaluationReason.Unknown => Reason.Unknown,
-        EvaluationReason.Stale => "STALE",
-        EvaluationReason.Error => Reason.Error,
-        // Reasons Flagon adds later (e.g. Archived) surface as OpenFeature custom reasons in SCREAMING_SNAKE_CASE.
-        _ => ToScreamingSnakeCase(reason.ToString()),
-    };
-
-    private static string ToScreamingSnakeCase(string name)
-    {
-        var builder = new System.Text.StringBuilder(name.Length + 4);
-        for (var i = 0; i < name.Length; i++)
-        {
-            if (i > 0 && char.IsUpper(name[i]))
-            {
-                builder.Append('_');
-            }
-            builder.Append(char.ToUpperInvariant(name[i]));
-        }
-        return builder.ToString();
-    }
 }
