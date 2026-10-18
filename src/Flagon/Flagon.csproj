@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>Flagon</PackageId>
+    <PackageId>Jorrk.Flagon</PackageId>
     <Description>Self-hosted, OpenFeature-compatible feature flags for .NET: in-process evaluation over flagd-schema flags stored in your own database.</Description>
     <RootNamespace>Flagon</RootNamespace>
   </PropertyGroup>
