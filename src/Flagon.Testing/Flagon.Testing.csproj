@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>Flagon.Testing</PackageId>
+    <PackageId>Jorrk.Flagon.Testing</PackageId>
     <Description>Test support for code that uses Flagon: a standalone IFlagon running the real engine over an in-memory store, with synchronous flag setup. Works with any test framework.</Description>
     <RootNamespace>Flagon.Testing</RootNamespace>
     <PackageTags>$(PackageTags);testing</PackageTags>

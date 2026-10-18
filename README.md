@@ -17,28 +17,28 @@ other apps (including non-.NET ones, over [OFREP](https://openfeature.dev/specif
 
 | Package | What it adds |
 | --- | --- |
-| `Flagon` | Core engine: `AddFlagon`, `IFlagon` (evaluation), `IFlagonAdmin` (management), in-memory store |
-| `Flagon.Storage.Postgres` | `UsePostgresStorage(...)` |
-| `Flagon.Storage.SqlServer` | `UseSqlServerStorage(...)` |
-| `Flagon.AspNetCore` | OFREP endpoints, management HTTP API, ambient evaluation context, health check |
-| `Flagon.Ui` | Embeddable management console: `MapFlagonUi(path)` |
-| `Flagon.OpenFeature` | OpenFeature provider for the standard `IFeatureClient` API |
-| `Flagon.Storage.Conformance` | xUnit conformance suite for writing your own `IFlagStore` provider |
-| `Flagon.Testing` | `TestFlagon`: a real `IFlagon` over an in-memory store for unit tests, with one-line setup of any flag type, variants, targeting and state |
+| `Jorrk.Flagon` | Core engine: `AddFlagon`, `IFlagon` (evaluation), `IFlagonAdmin` (management), in-memory store |
+| `Jorrk.Flagon.Storage.Postgres` | `UsePostgresStorage(...)` |
+| `Jorrk.Flagon.Storage.SqlServer` | `UseSqlServerStorage(...)` |
+| `Jorrk.Flagon.AspNetCore` | OFREP endpoints, management HTTP API, ambient evaluation context, health check |
+| `Jorrk.Flagon.Ui` | Embeddable management console: `MapFlagonUi(path)` |
+| `Jorrk.Flagon.OpenFeature` | OpenFeature provider for the standard `IFeatureClient` API |
+| `Jorrk.Flagon.Storage.Conformance` | xUnit conformance suite for writing your own `IFlagStore` provider |
+| `Jorrk.Flagon.Testing` | `TestFlagon`: a real `IFlagon` over an in-memory store for unit tests, with one-line setup of any flag type, variants, targeting and state |
 
 ## Install
 
 ```sh
-dotnet add package Flagon
+dotnet add package Jorrk.Flagon
 ```
 
 Add a storage provider and the ASP.NET Core packages as you need them:
 
 ```sh
-dotnet add package Flagon.Storage.Postgres     # or Flagon.Storage.SqlServer
-dotnet add package Flagon.AspNetCore
-dotnet add package Flagon.Ui
-dotnet add package Flagon.OpenFeature
+dotnet add package Jorrk.Flagon.Storage.Postgres     # or Jorrk.Flagon.Storage.SqlServer
+dotnet add package Jorrk.Flagon.AspNetCore
+dotnet add package Jorrk.Flagon.Ui
+dotnet add package Jorrk.Flagon.OpenFeature
 ```
 
 ## Quickstart
@@ -473,11 +473,11 @@ should drop its ETag.
 
 ## Testing
 
-`Flagon.Testing` gives tests a real `IFlagon`: the same snapshot, targeting and evaluation as production, over an
+`Jorrk.Flagon.Testing` gives tests a real `IFlagon`: the same snapshot, targeting and evaluation as production, over an
 in-memory store. It works with any test framework and needs no host or DI.
 
 ```sh
-dotnet add package Flagon.Testing
+dotnet add package Jorrk.Flagon.Testing
 ```
 
 ```csharp
@@ -574,11 +574,10 @@ N-variant percentage splits. The flagd document format already accommodates what
 
 1. Redis store, cache decorator and push-based invalidation
 2. MongoDB, MySQL and SQLite stores
-3. `Flagon.Testing` package
-4. Segments; scheduled changes and flag expiry
-5. Kill-switch / prerequisite flags, approval workflows and webhooks
-6. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
-7. Direct-database clients for other languages; experimentation exposure events
+3. Segments; scheduled changes and flag expiry
+4. Kill-switch / prerequisite flags, approval workflows and webhooks
+5. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
+6. Direct-database clients for other languages; experimentation exposure events
 
 ## Contributing and releasing
 

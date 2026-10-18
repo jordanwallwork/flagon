@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>Flagon.OpenFeature</PackageId>
+    <PackageId>Jorrk.Flagon.OpenFeature</PackageId>
     <Description>OpenFeature provider for Flagon: use the standard OpenFeature IFeatureClient API backed by Flagon's in-process flag evaluation.</Description>
     <RootNamespace>Flagon.OpenFeature</RootNamespace>
   </PropertyGroup>

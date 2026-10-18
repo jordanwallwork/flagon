@@ -8,15 +8,8 @@ Packages are published to nuget.org by `.github/workflows/release.yml`, which ru
 (`v1.2.0` -> `1.2.0`). Untagged commits build as `<next patch>-alpha.0.<height>` pre-releases, so CI packages never
 collide with released versions. All packages in the repo share one version.
 
-## One-time setup
-
-1. **Reserve the `Flagon.*` package ID prefix on nuget.org before the first publish.** Email `account@nuget.org` from
-   the owning account asking for the `Flagon` prefix to be reserved (see
-   [ID prefix reservation](https://learn.microsoft.com/nuget/nuget-org/id-prefix-reservation)). Reservation marks the
-   packages as verified and stops anyone else publishing `Flagon.*` IDs. No packages named or prefixed `Flagon` existed
-   on nuget.org as of 2026-10-16.
-2. Create a nuget.org API key scoped to **Push new packages and package versions** with the glob pattern `Flagon*`.
-3. Add it as a repository secret named `NUGET_API_KEY` (Settings -> Secrets and variables -> Actions).
+Every package ID is prefixed `Jorrk.` (e.g. `Jorrk.Flagon`, `Jorrk.Flagon.AspNetCore`). The release workflow fails if any
+package falls outside that prefix. The `NUGET_API_KEY` repository secret must be a nuget.org key that can push `Jorrk*` packages.
 
 ## Cutting a release
 
