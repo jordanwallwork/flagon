@@ -23,7 +23,7 @@ internal interface IFlagonEvaluationObserver
 /// <param name="ErrorCode">The error, if any.</param>
 /// <param name="ErrorMessage">The error's description, if any.</param>
 /// <param name="Context">The effective context: the caller's, or the ambient one; null when there was neither.</param>
-/// <param name="Remote">True for a remote (OFREP) evaluation.</param>
+/// <param name="Origin">Whether this app's code or a remote (OFREP) caller evaluated it.</param>
 internal readonly record struct ObservedEvaluation(
     string FlagKey,
     FlagType? RequestedType,
@@ -33,4 +33,14 @@ internal readonly record struct ObservedEvaluation(
     ErrorCode ErrorCode,
     string? ErrorMessage,
     EvaluationContext? Context,
-    bool Remote);
+    EvaluationOrigin Origin);
+
+/// <summary>Where an evaluation came from; <c>Flagon.Testing</c> maps it to its public <c>EvaluationSource</c>.</summary>
+internal enum EvaluationOrigin
+{
+    /// <summary>This app's code, through <see cref="IFlagon"/> (typed getters and bulk).</summary>
+    InProcess,
+
+    /// <summary>A remote caller, through the OFREP endpoints.</summary>
+    Remote,
+}

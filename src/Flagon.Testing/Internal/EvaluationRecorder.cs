@@ -26,7 +26,15 @@ internal sealed class EvaluationRecorder(EvaluationLog log, FlagonTestingSwitche
             evaluation.ErrorCode,
             evaluation.ErrorMessage,
             evaluation.Context ?? EvaluationContext.Empty,
-            evaluation.Remote ? EvaluationSource.Remote : EvaluationSource.InProcess,
+            Source(evaluation.Origin),
             time.GetUtcNow()));
     }
+
+    /// <summary>The public name of the engine's <see cref="EvaluationOrigin"/>.</summary>
+    private static EvaluationSource Source(EvaluationOrigin origin) => origin switch
+    {
+        EvaluationOrigin.InProcess => EvaluationSource.InProcess,
+        EvaluationOrigin.Remote => EvaluationSource.Remote,
+        _ => throw new ArgumentOutOfRangeException(nameof(origin), origin, null),
+    };
 }
