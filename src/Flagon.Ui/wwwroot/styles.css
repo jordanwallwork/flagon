@@ -139,3 +139,14 @@ textarea.code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; 
 .tryit-result dl { display: grid; grid-template-columns: auto 1fr; gap: .2rem .75rem; margin: 0; }
 .tryit-result dt { color: var(--muted); }
 .tryit-result dd { margin: 0; word-break: break-word; }
+
+.badge.type { background: var(--bg); color: var(--muted); }
+.value-summary .variant { font-weight: 600; }
+.value-summary code { font-size: 12px; }
+pre.value { margin: 0; padding: .4rem .6rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  max-height: 16rem; overflow: auto; }
+fieldset.variants-editor { border: 1px solid var(--border); border-radius: 6px; padding: .75rem; margin: 0; }
+fieldset.variants-editor legend { font-weight: 600; padding: 0 .3rem; }
+fieldset.variants-editor p { margin: 0; }
+.variant-row { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 2fr) auto; gap: .4rem; align-items: start; }
+.variant-rows:empty { display: none; }

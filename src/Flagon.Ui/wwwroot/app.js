@@ -64,8 +64,33 @@ function parseTags(text) {
   return [...new Set(text.split(",").map((t) => t.trim()).filter(Boolean))];
 }
 
+/** True for a boolean flag, the only kind with the on/off toggle and percentage rollout slider. */
+const isBoolean = (flag) => flag.type === "boolean";
+
+/** A variant value as text: JSON (strings quoted), pretty-printed over several lines for objects when `pretty`. */
+const formatValue = (value, pretty = false) => JSON.stringify(value, null, pretty && typeof value === "object" ? 2 : undefined);
+
+const truncate = (text, max = 40) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/** A served (or default) value: pretty JSON for objects; "none" when no variant is served (each app gets its code default). */
+function valueView(value) {
+  if (value === null || value === undefined) return h("span", { class: "muted" }, "none (each app gets its code default)");
+  return typeof value === "object" ? h("pre", { class: "value" }, formatValue(value, true)) : h("code", {}, formatValue(value));
+}
+
+/** The list's value cell for a non-boolean flag: its default variant and (truncated) value, or that it has none. */
+function valueSummary(flag) {
+  if (flag.defaultVariant === null || flag.defaultVariant === undefined) {
+    return h("span", { class: "muted small", title: "No default variant: each app gets its code default unless a rule matches" }, "no default");
+  }
+  const text = formatValue(flag.value);
+  return h("span", { class: "value-summary", title: text },
+    h("span", { class: "variant" }, flag.defaultVariant), " ", h("code", {}, truncate(text)));
+}
+
 function badges(flag) {
   return h("span", { class: "badges" },
+    flag.type && h("span", { class: `badge type type-${flag.type}`, title: `A ${flag.type} flag` }, flag.type),
     flag.archived && h("span", { class: "badge archived", title: "Archived: evaluates to the code default" }, "archived"),
     flag.state === "disabled" && h("span", { class: "badge warn", title: "flagd state DISABLED: evaluates to the code default" }, "disabled"),
     flag.source === "auto" && h("span", { class: "badge auto", title: "Created automatically on first evaluation" }, "auto"),
@@ -188,7 +213,7 @@ function errorView(e) {
 
 // ---------------------------------------------------------------- list
 
-const listState = { q: "", tag: "", state: "", source: "", archived: "active", hygiene: "", targeting: "" };
+const listState = { q: "", tag: "", type: "", state: "", source: "", archived: "active", hygiene: "", targeting: "" };
 
 async function renderList() {
   let flags;
@@ -211,8 +236,10 @@ async function renderList() {
     const q = listState.q.trim().toLowerCase();
     if (q && !f.key.toLowerCase().includes(q) && !(f.description ?? "").toLowerCase().includes(q)) return false;
     if (listState.tag && !f.tags.includes(listState.tag)) return false;
-    if (listState.state === "on" && !f.enabled) return false;
-    if (listState.state === "off" && f.enabled) return false;
+    if (listState.type && f.type !== listState.type) return false;
+    // On/off is the boolean toggle: non-boolean flags (enabled null) match neither.
+    if (listState.state === "on" && f.enabled !== true) return false;
+    if (listState.state === "off" && f.enabled !== false) return false;
     if (listState.source && f.source !== listState.source) return false;
     if (listState.archived === "active" && f.archived) return false;
     if (listState.archived === "archived" && !f.archived) return false;
@@ -227,12 +254,14 @@ async function renderList() {
   function row(f) {
     const apps = f.usage?.applications ?? [];
     return h("tr", { class: f.archived ? "is-archived" : undefined },
-      h("td", {}, toggle(f, (enabled) => write(async () => {
-        await api.setEnabled(f.key, f.version, enabled);
-        showNotice(`${f.key} ${enabled ? "enabled" : "disabled"}.`, "success");
-        await refresh();
-        return true;
-      }, refresh))),
+      h("td", {}, isBoolean(f)
+        ? toggle(f, (enabled) => write(async () => {
+          await api.setEnabled(f.key, f.version, enabled);
+          showNotice(`${f.key} ${enabled ? "enabled" : "disabled"}.`, "success");
+          await refresh();
+          return true;
+        }, refresh))
+        : valueSummary(f)),
       h("td", {}, h("a", { href: flagHref(f.key), class: "key" }, f.key), " ", badges(f),
         f.description && h("div", { class: "muted small" }, f.description)),
       h("td", {}, f.tags.map((t) => h("span", { class: "tag" }, t))),
@@ -267,6 +296,7 @@ async function renderList() {
   const filters = h("div", { class: "filters" },
     search,
     select("tag", "Tag", [["", "Any"], ...tags.map((t) => [t, t])]),
+    select("type", "Type", [["", "Any"], ["boolean", "Boolean"], ["string", "String"], ["number", "Number"], ["object", "Object"]]),
     select("state", "State", [["", "Any"], ["on", "On"], ["off", "Off"]]),
     select("source", "Source", [["", "Any"], ["manual", "Manual"], ["auto", "Auto"], ["code", "Code"]]),
     select("archived", "Show", [["active", "Active"], ["archived", "Archived"], ["all", "All"]]),
@@ -284,7 +314,7 @@ async function renderList() {
     h("div", { class: "title-row" }, h("h1", {}, "Flags"), count),
     filters,
     h("table", { class: "flags" },
-      h("thead", {}, h("tr", {}, h("th", { class: "narrow" }, "On"), h("th", {}, "Flag"), h("th", {}, "Tags"), h("th", {}, "Last evaluated"))),
+      h("thead", {}, h("tr", {}, h("th", {}, "Value"), h("th", {}, "Flag"), h("th", {}, "Tags"), h("th", {}, "Last evaluated"))),
       tbody),
   ];
 }
@@ -303,11 +333,11 @@ function parseRule(text) {
 }
 
 /**
- * The flagd document the server evaluates for an unsaved rule: the stored flag's state and default variant with the
- * console's boolean variants. Used by Validate and by draft evaluation elsewhere on the detail view.
+ * The flagd document the server evaluates for an unsaved rule: the stored flag's state, variants and default variant.
+ * Used by Validate and by draft evaluation elsewhere on the detail view.
  */
 function draftDocument(flag, rule) {
-  const document = { state: flag.state === "enabled" ? "ENABLED" : "DISABLED", variants: { on: true, off: false }, defaultVariant: flag.defaultVariant };
+  const document = { state: flag.state === "enabled" ? "ENABLED" : "DISABLED", variants: flag.variants, defaultVariant: flag.defaultVariant };
   if (rule !== null) document.targeting = rule;
   return document;
 }
@@ -355,7 +385,8 @@ function targetingCard(flag, reload) {
       h("h2", {}, "Targeting"),
       custom
         ? [h("p", { class: "small muted" }, "Custom rule: edit as JSON."), h("pre", { class: "rule" }, saved)]
-        : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."), rolloutControl()],
+        // The percentage slider splits on/off, so only boolean flags get it.
+        : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."), isBoolean(flag) && rolloutControl()],
       h("div", { class: "actions" },
         h("button", { disabled: flag.archived, title: locked, onclick: () => edit(saved) }, hasTargeting(flag) ? "Edit JSON" : "Add rule"),
         custom && h("button", { class: "danger", disabled: flag.archived, title: locked, onclick: clear }, "Clear…")),
@@ -399,7 +430,8 @@ function targetingCard(flag, reload) {
       button.disabled = true;
       try {
         const result = await api.evaluate(flag.key, {}, draftDocument(flag, p.rule));
-        if (current()) status(["Valid rule. With an empty context it returns ", h("code", {}, result.variant ?? JSON.stringify(result.value)), ` (${result.reason}).`], "ok");
+        const served = result.variant ?? "no variant (each app gets its code default)";
+        if (current()) status(["Valid rule. With an empty context it returns ", h("code", {}, served), ` (${result.reason}).`], "ok");
       } catch (err) {
         if (current()) status(ruleError(err));
       } finally {
@@ -420,7 +452,8 @@ function targetingCard(flag, reload) {
 
     card.replaceChildren(h("form", { class: "stack", onsubmit: save },
       h("h2", {}, "Targeting"),
-      h("p", { class: "small muted" }, "A JSON Logic rule returning a variant name (", h("code", {}, "on"), " or ", h("code", {}, "off"),
+      h("p", { class: "small muted" }, "A JSON Logic rule returning a variant name (",
+        Object.keys(flag.variants ?? {}).flatMap((name, i, all) => [i ? (i === all.length - 1 ? " or " : ", ") : "", h("code", {}, name)]),
         "); when it matches nothing, the default variant applies. Leave it empty for no targeting."),
       editor,
       message,
@@ -578,7 +611,7 @@ function tryItCard(flag, draft) {
 
   function describeResult(r) {
     return h("dl", {},
-      h("dt", {}, "Value"), h("dd", {}, h("code", {}, JSON.stringify(r.value))),
+      h("dt", {}, "Value"), h("dd", {}, valueView(r.value)),
       h("dt", {}, "Variant"), h("dd", {}, r.variant != null ? h("code", {}, r.variant) : h("span", { class: "muted" }, "none")),
       h("dt", {}, "Reason"), h("dd", {}, r.reason),
       r.errorCode && [h("dt", {}, "Error"), h("dd", { class: "error-text" }, r.errorCode, r.errorMessage ? `: ${r.errorMessage}` : "")]);
@@ -741,7 +774,7 @@ async function renderDetail(key) {
   return [
     h("p", {}, h("a", { href: "#/" }, "← Flags")),
     h("div", { class: "title-row" },
-      toggle(flag, async (enabled) => {
+      isBoolean(flag) && toggle(flag, async (enabled) => {
         if (await write(() => api.setEnabled(flag.key, flag.version, enabled), reload)) {
           showNotice(`${flag.key} ${enabled ? "enabled" : "disabled"}.`, "success");
           await reload();
@@ -754,11 +787,26 @@ async function renderDetail(key) {
       `Version ${flag.version} · source ${flag.source} · created `, time(flag.createdAt), flag.createdBy ? ` by ${flag.createdBy}` : "",
       " · updated ", time(flag.updatedAt), flag.updatedBy ? ` by ${flag.updatedBy}` : ""),
     h("div", { class: "grid" }, metadata, lifecycle),
+    !isBoolean(flag) && variantsCard(flag),
     targeting.card,
     tryItCard(flag, targeting.draft),
     usage,
     history,
   ];
+}
+
+/** The variants of a non-boolean flag, with the default variant marked. */
+function variantsCard(flag) {
+  const names = Object.keys(flag.variants ?? {});
+  return h("section", { class: "card variants" },
+    h("h2", {}, "Variants"),
+    h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Value"))),
+      h("tbody", {}, names.map((name) => h("tr", {},
+        h("td", {}, h("code", {}, name), name === flag.defaultVariant && [" ", h("span", { class: "badge targeting", title: "Served when no targeting rule matches" }, "default")]),
+        h("td", {}, valueView(flag.variants[name])))))),
+    (flag.defaultVariant === null || flag.defaultVariant === undefined)
+      && h("p", { class: "small muted" }, "No default variant: when no rule matches, each app gets its code default."));
 }
 
 /** A short human summary of an audit entry, with the raw documents behind a disclosure. */
@@ -772,7 +820,7 @@ function describeChange(entry) {
     if ((bm.description ?? "") !== (am.description ?? "")) changes.push("description");
     if ((bm.tags ?? "") !== (am.tags ?? "")) changes.push(`tags → ${am.tags || "none"}`);
   } else if (after) {
-    changes.push(`default ${after.defaultVariant}`);
+    changes.push(`default ${after.defaultVariant ?? "none"}`);
   }
   // A purge has no "after"; that is not a targeting removal.
   const targetingChange = after && describeTargetingChange(before, after);
@@ -885,6 +933,89 @@ async function renderCreate() {
   const tags = h("input", { placeholder: "comma, separated, tags", spellcheck: "false" });
   const submit = h("button", { type: "submit", class: "primary" }, "Create flag");
 
+  // Type: boolean flags are on/off (the Enabled box); other types get named variants and a default-variant picker.
+  const type = h("select", { onchange: () => { variantRows.forEach((r) => r.retype()); drawType(); } },
+    [["boolean", "Boolean (on/off)"], ["string", "String"], ["number", "Number"], ["object", "Object (JSON)"]]
+      .map(([value, label]) => h("option", { value }, label)));
+  const enabledLabel = h("label", { class: "inline" }, enabled, "Enabled");
+  const variantList = h("div", { class: "stack variant-rows" });
+  const defaultVariant = h("select", {});
+  const variantRows = [];
+
+  /** A typed value input for the selected type: text for strings, a number box for numbers, a JSON textarea for objects. */
+  function valueInput(value = "") {
+    const common = { "aria-label": "Variant value", spellcheck: "false", autocomplete: "off" };
+    if (type.value === "number") return h("input", { ...common, type: "number", step: "any", required: true, value });
+    if (type.value === "object") return h("textarea", { ...common, class: "code", rows: 3, placeholder: '{ "rows": 3 }' }, value || "{}");
+    return h("input", { ...common, value, placeholder: "value" });
+  }
+
+  function addVariant(name = "") {
+    const row = { name: h("input", { value: name, placeholder: "name", "aria-label": "Variant name", maxlength: 128, required: true,
+      spellcheck: "false", autocomplete: "off", oninput: drawDefaults }) };
+    row.value = valueInput();
+    row.el = h("div", { class: "variant-row" }, row.name, row.value,
+      h("button", { type: "button", title: "Remove variant", "aria-label": "Remove variant", onclick: () => {
+        variantRows.splice(variantRows.indexOf(row), 1);
+        row.el.remove();
+        drawDefaults();
+      } }, "×"));
+    row.retype = () => { const next = valueInput(); row.value.replaceWith(next); row.value = next; };
+    variantRows.push(row);
+    variantList.append(row.el);
+    drawDefaults();
+    return row;
+  }
+
+  /**
+   * The default-variant options: every named variant, or none (callers get their code default). Keeps the admin's
+   * pick while it still exists; until they pick (or once it is gone) the first variant is the default.
+   */
+  let defaultChoice; // undefined until picked; "" is "none"
+  defaultVariant.addEventListener("change", () => { defaultChoice = defaultVariant.value; });
+  function drawDefaults() {
+    const names = [...new Set(variantRows.map((r) => r.name.value).filter(Boolean))];
+    const selected = defaultChoice === "" || names.includes(defaultChoice) ? defaultChoice : (names[0] ?? "");
+    defaultVariant.replaceChildren(
+      ...names.map((n) => h("option", { value: n, selected: n === selected }, n)),
+      h("option", { value: "", selected: selected === "" }, "(none: each app gets its code default)"));
+  }
+
+  /** The variants to send, `{ name: value }`; throws Error naming the variant whose value can't be read. */
+  function variantsValue() {
+    const variants = {};
+    for (const r of variantRows) {
+      const name = r.name.value;
+      if (Object.hasOwn(variants, name)) throw new Error(`Variant '${name}' is defined more than once.`);
+      if (type.value === "number") {
+        const n = Number(r.value.value);
+        if (r.value.value.trim() === "" || !Number.isFinite(n)) throw new Error(`Variant '${name}' needs a number.`);
+        variants[name] = n;
+      } else if (type.value === "object") {
+        try { variants[name] = JSON.parse(r.value.value); } catch (e) { throw new Error(`Variant '${name}' is not valid JSON: ${e.message}`); }
+      } else {
+        variants[name] = r.value.value;
+      }
+    }
+    return variants;
+  }
+
+  const variantsSection = h("fieldset", { class: "stack variants-editor" },
+    h("legend", {}, "Variants"),
+    h("p", { class: "small muted" }, "Named values the flag can serve. All share the flag's type, which can't change after creation."),
+    variantList,
+    h("div", {}, h("button", { type: "button", onclick: () => addVariant().name.focus() }, "Add variant")),
+    h("label", {}, "Default variant", defaultVariant),
+    h("p", { class: "small muted" }, "Served when no targeting rule matches."));
+
+  function drawType() {
+    const typed = type.value !== "boolean";
+    enabledLabel.hidden = typed;
+    variantsSection.hidden = !typed;
+    variantsSection.disabled = !typed; // hidden rows must not block submitting a boolean flag
+    if (typed && variantRows.length === 0) addVariant("default");
+  }
+
   function check() {
     const problem = key.value ? keyProblem(key.value) : null;
     keyHelp.textContent = problem ?? "Letters, digits, '.', '_' and '-'; case-sensitive.";
@@ -910,13 +1041,19 @@ async function renderCreate() {
       e.preventDefault();
       const problem = keyProblem(key.value);
       if (problem) { showNotice(problem); return; }
+      const typed = type.value !== "boolean";
+      let variants;
+      try { variants = typed ? variantsValue() : undefined; } catch (err) { showNotice(err.message); return; }
       submit.disabled = true;
       try {
         const created = await api.createFlag({
           key: key.value,
-          enabled: enabled.checked,
+          enabled: typed ? undefined : enabled.checked,
           description: description.value.trim() || undefined,
           tags: parseTags(tags.value),
+          // Object values are checked server-side (they must be JSON objects); its problem details show as the notice.
+          variants: typed ? variants : undefined,
+          defaultVariant: typed ? defaultVariant.value || null : undefined,
         });
         showNotice(`${created.key} created.`, "success");
         location.hash = flagHref(created.key);
@@ -927,11 +1064,14 @@ async function renderCreate() {
     },
   },
   h("label", {}, "Key", key), keyHelp, duplicateWarning,
-  h("label", { class: "inline" }, enabled, "Enabled"),
+  h("label", {}, "Type", type),
+  enabledLabel,
+  variantsSection,
   h("label", {}, "Description", description),
   h("label", {}, "Tags", tags),
   h("div", { class: "actions" }, submit, h("a", { href: "#/", class: "button" }, "Cancel")));
 
+  drawType();
   setTimeout(() => key.focus());
   return [h("p", {}, h("a", { href: "#/" }, "← Flags")), h("h1", {}, "New flag"), form];
 }

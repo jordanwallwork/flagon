@@ -3,22 +3,40 @@ using Flagon.Storage;
 
 namespace Flagon;
 
-/// <summary>A request to create a boolean flag.</summary>
+/// <summary>
+/// A request to create a flag: a boolean flag from <paramref name="Enabled"/>, or, when <paramref name="Variants"/> is
+/// given, a flag of the variants' type (string, number or object) serving <paramref name="DefaultVariant"/>.
+/// </summary>
 /// <param name="Key">The flag key; must satisfy <see cref="FlagKey.Pattern"/>.</param>
-/// <param name="Enabled">Initial value served by the flag.</param>
+/// <param name="Enabled">
+/// Initial value served by a boolean flag (<c>{ "on": true, "off": false }</c>). Must be false when
+/// <paramref name="Variants"/> is given.
+/// </param>
 /// <param name="Description">Optional description.</param>
 /// <param name="Tags">Optional tags (no commas).</param>
 /// <param name="Targeting">
 /// Optional flagd targeting rule (JsonLogic plus flagd's operators). A rule that matches serves the variant it names
-/// (<c>"on"</c> or <c>"off"</c>); otherwise the flag serves <paramref name="Enabled"/>. Validated with Flagon's
+/// (<c>"on"</c> or <c>"off"</c> for a boolean flag); otherwise the flag serves <paramref name="Enabled"/> (or
+/// <paramref name="DefaultVariant"/>). Validated with Flagon's
 /// targeting engine before anything is written; <c>$ref</c> is not supported (inline the evaluator instead).
+/// </param>
+/// <param name="Variants">
+/// Optional named variants (name to JSON value): at least one; names non-empty, at most 128 characters and unique
+/// (ordinal); values all of one flag type (boolean, string, number or object; arrays and <c>null</c> are rejected).
+/// The flag's type is derived from them and never changes. Null creates a boolean flag from <paramref name="Enabled"/>.
+/// </param>
+/// <param name="DefaultVariant">
+/// The variant served when no targeting rule applies: one of <paramref name="Variants"/>, or null for no default variant
+/// (callers then get their own default). Only used with <paramref name="Variants"/>.
 /// </param>
 public sealed record CreateFlagRequest(
     string Key,
     bool Enabled = false,
     string? Description = null,
     IReadOnlyList<string>? Tags = null,
-    JsonElement? Targeting = null);
+    JsonElement? Targeting = null,
+    IReadOnlyDictionary<string, JsonElement>? Variants = null,
+    string? DefaultVariant = null);
 
 /// <summary>
 /// A request to change a flag's descriptive metadata. Null fields are left unchanged; an empty description clears it
@@ -41,7 +59,10 @@ public interface IFlagonAdmin
     /// <summary>Gets a flag, or null if none exists with <paramref name="key"/>.</summary>
     Task<FlagRecord?> GetAsync(string key, CancellationToken cancellationToken = default);
 
-    /// <summary>Creates a boolean flag with source <see cref="FlagSource.Manual"/>.</summary>
+    /// <summary>
+    /// Creates a flag with source <see cref="FlagSource.Manual"/>: a boolean flag, or one with the request's variants
+    /// (see <see cref="CreateFlagRequest"/>).
+    /// </summary>
     /// <exception cref="FlagValidationException">The request is invalid.</exception>
     /// <exception cref="FlagTargetingException">The request's targeting rule does not compile.</exception>
     /// <exception cref="FlagAlreadyExistsException">A flag with the key already exists.</exception>

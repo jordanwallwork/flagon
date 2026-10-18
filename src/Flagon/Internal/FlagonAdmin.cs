@@ -30,6 +30,7 @@ internal sealed partial class FlagonAdmin(
     {
         FlagKey.Validate(request.Key);
         FlagTags.Validate(request.Tags);
+        var variants = ValidateVariants(request);
         var targeting = TargetingRules.Validate(compiler, request.Key, request.Targeting);
 
         var change = changes.Begin();
@@ -38,12 +39,33 @@ internal sealed partial class FlagonAdmin(
             Tags: request.Tags,
             Source: FlagSource.Manual).StampCreated(change);
 
-        var document = FlagDocument.Boolean(request.Enabled, metadata) with { Targeting = targeting };
+        var document = variants is null
+            ? FlagDocument.Boolean(request.Enabled, metadata) with { Targeting = targeting }
+            : new FlagDocument(FlagState.Enabled, variants, request.DefaultVariant, metadata, targeting);
         var record = await store.TryCreateAsync(request.Key, document, change, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagAlreadyExistsException(request.Key);
 
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
         return record;
+    }
+
+    /// <summary>The request's validated variants, or null for a boolean flag created from <see cref="CreateFlagRequest.Enabled"/>.</summary>
+    private static IReadOnlyDictionary<string, JsonElement>? ValidateVariants(CreateFlagRequest request)
+    {
+        if (request.Variants is null)
+        {
+            return request.DefaultVariant is null
+                ? null
+                : throw new FlagValidationException($"Flag '{request.Key}' has a default variant but no variants; send variants with it, or use enabled for a boolean flag.");
+        }
+
+        if (request.Enabled)
+        {
+            throw new FlagValidationException(
+                $"Flag '{request.Key}' sets both variants and enabled; a flag with variants serves its default variant, so leave enabled unset.");
+        }
+
+        return FlagVariants.Validate(request.Key, request.Variants, request.DefaultVariant).Variants;
     }
 
     public Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default) =>
