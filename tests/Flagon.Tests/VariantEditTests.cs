@@ -180,6 +180,20 @@ public class VariantEditTests
     }
 
     [Fact]
+    public async Task Archived_non_boolean_flags_reject_toggling_as_archived()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        await CreateThemeAsync(host);
+        var archived = await host.Admin.ArchiveAsync("theme", 1);
+
+        var ex = await Assert.ThrowsAsync<FlagValidationException>(
+            () => host.Admin.SetEnabledAsync("theme", true, archived.Version));
+
+        Assert.Contains("archived", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(archived, await host.Admin.GetAsync("theme"));
+    }
+
+    [Fact]
     public async Task Stale_versions_conflict_and_nothing_is_written()
     {
         await using var host = await FlagonTestHost.StartAsync();

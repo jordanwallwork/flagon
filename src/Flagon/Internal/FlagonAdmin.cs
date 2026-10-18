@@ -74,7 +74,7 @@ internal sealed partial class FlagonAdmin(
     private Task<FlagRecord> SetEnabledCoreAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken) =>
         UpdateDocumentAsync(key, expectedVersion, current =>
         {
-            var document = current.Document;
+            var document = Unarchived(current, expectedVersion);
             if (document.Type != FlagType.Boolean)
             {
                 throw new FlagValidationException(
