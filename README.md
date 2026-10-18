@@ -99,8 +99,18 @@ current request's user; a context you pass always wins. A flag's flagd `targetin
 context (see [Targeting](#targeting)).
 
 The first time code evaluates an unknown key, Flagon creates the flag (in the background, off the evaluation path) with
-the default the code supplied, marked `source: auto`. Archived keys are never re-created. For now only the boolean
-getters auto-create and record usage; the typed getters do neither yet.
+the default the code supplied, marked `source: auto`, so behaviour does not change. The flag takes the getter's type:
+`IsEnabled` creates the usual `on`/`off` boolean flag, and a typed getter creates
+`{ "variants": { "default": <your default> }, "defaultVariant": "default" }` (a `null` or array default creates
+nothing). Archived keys are never re-created, and an evaluation that gets `TypeMismatch` never creates anything. If two
+apps first evaluate the same key with different types at once, the first create wins and the other app gets
+`TypeMismatch` (and its default) until its code or the flag is fixed; the usage report shows the mismatch.
+
+Every getter also records usage: per app, when it last evaluated the key and the default it supplied (written as JSON in
+batches, see `UsageFlushInterval`). Recording is lock-free and, for boolean and number defaults, allocation-free;
+object defaults are serialised when written, not on each evaluation. Apps whose defaults differ, including in type, are
+flagged as a default mismatch; defaults are compared by JSON content, so object key order and `1` versus `1.0` do not
+count.
 
 ### Options
 
@@ -282,7 +292,7 @@ app.MapHealthChecks("/health");
 - **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags (including by type); create
   boolean, string, number and object flags; toggle, enable or disable, edit, archive, restore and purge them; edit a typed
   flag's variants and pick its default variant; view audit history,
-  last-evaluated time per app, and default-mismatch warnings. It is plain
+  last-evaluated time and code default (as typed JSON) per app, and default-mismatch warnings. It is plain
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
 - **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI

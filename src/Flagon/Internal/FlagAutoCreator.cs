@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Threading.Channels;
 using Flagon.Storage;
 using Microsoft.Extensions.Hosting;
@@ -9,7 +10,9 @@ namespace Flagon.Internal;
 /// <summary>
 /// Auto-creates flags for unknown keys. The evaluator calls <see cref="Enqueue"/> (lock-free, no I/O); a background
 /// worker dedupes and calls create-if-absent with <see cref="FlagSource.Auto"/>, then refreshes the snapshot so this app
-/// sees the new flag. Create-if-absent never revives an archived key and returns null when another app won the race,
+/// sees the new flag. The flag takes the type of the caller's default: a boolean default creates the on/off flag, any
+/// other <c>{ variants: { "default": &lt;default&gt; }, defaultVariant: "default" }</c>; a default with no flag type
+/// (null, an array) creates nothing. Create-if-absent never revives an archived key and returns null when another app won the race,
 /// so many apps hitting the same unknown key create exactly one flag. Pending work is drained on graceful shutdown.
 /// </summary>
 internal sealed partial class FlagAutoCreator(
@@ -20,8 +23,11 @@ internal sealed partial class FlagAutoCreator(
     FlagonInstrumentation instrumentation,
     ILogger<FlagAutoCreator> logger) : IHostedService, IDisposable
 {
-    private readonly Channel<(string Key, bool DefaultValue)> _queue =
-        Channel.CreateUnbounded<(string, bool)>(new UnboundedChannelOptions { SingleReader = true });
+    /// <summary>The variant a non-boolean auto-created flag holds the caller's default in.</summary>
+    internal const string DefaultVariant = "default";
+
+    private readonly Channel<(string Key, CallerDefault DefaultValue)> _queue =
+        Channel.CreateUnbounded<(string, CallerDefault)>(new UnboundedChannelOptions { SingleReader = true });
 
     private const long InFlight = long.MaxValue;
 
@@ -33,7 +39,7 @@ internal sealed partial class FlagAutoCreator(
     private int _disposed;
 
     /// <summary>Hot path: called by the evaluator when <paramref name="key"/> is not in the snapshot.</summary>
-    public void Enqueue(string key, bool defaultValue)
+    public void Enqueue(string key, in CallerDefault defaultValue)
     {
         // Skip silently when switched off, against read-only stores, and until the first snapshot has loaded (before
         // then every key looks missing and the store may be down).
@@ -93,7 +99,7 @@ internal sealed partial class FlagAutoCreator(
         }
     }
 
-    private async Task CreateAsync(string key, bool defaultValue, CancellationToken cancellationToken)
+    private async Task CreateAsync(string key, CallerDefault defaultValue, CancellationToken cancellationToken)
     {
         try
         {
@@ -106,9 +112,16 @@ internal sealed partial class FlagAutoCreator(
 
             var change = changes.Begin();
             var metadata = new FlagMetadata(Source: FlagSource.Auto).StampCreated(change);
+            if (Document(defaultValue, metadata) is not { } document)
+            {
+                // No flag type to create; park the key like one that exists, so later evaluations don't keep queueing it.
+                _pending[key] = snapshots.Current.Version;
+                return;
+            }
+
             var created = await instrumentation.TraceStoreOperationAsync("auto_create", key, async activity =>
             {
-                var record = await store.TryCreateAsync(key, FlagDocument.Boolean(defaultValue, metadata), change, cancellationToken)
+                var record = await store.TryCreateAsync(key, document, change, cancellationToken)
                     .ConfigureAwait(false);
                 activity?.SetTag("flagon.auto_create.created", record is not null);
                 return record;
@@ -122,7 +135,7 @@ internal sealed partial class FlagAutoCreator(
                 return;
             }
 
-            LogAutoCreated(logger, key, defaultValue, change.ApplicationName);
+            LogAutoCreated(logger, key, document.Variants[document.DefaultVariant!].GetRawText(), change.ApplicationName);
             await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
             _pending.TryRemove(key, out _);
         }
@@ -138,6 +151,28 @@ internal sealed partial class FlagAutoCreator(
         }
     }
 
+    /// <summary>The flag a caller's default auto-creates, or null when the default has no flag type.</summary>
+    private static FlagDocument? Document(CallerDefault defaultValue, FlagMetadata metadata)
+    {
+        if (defaultValue.ToJson() is not { } json)
+        {
+            return null;
+        }
+
+        if (defaultValue.IsBoolean)
+        {
+            return FlagDocument.Boolean(json.GetBoolean(), metadata);
+        }
+
+        if (json.ValueKind is not (JsonValueKind.String or JsonValueKind.Number or JsonValueKind.Object))
+        {
+            return null;
+        }
+
+        var variants = new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [DefaultVariant] = json };
+        return new FlagDocument(FlagState.Enabled, variants, DefaultVariant, metadata);
+    }
+
     public void Dispose()
     {
         // Disposed twice by DI (the singleton and its hosted-service registration share one instance).
@@ -150,7 +185,7 @@ internal sealed partial class FlagAutoCreator(
 
     [LoggerMessage(EventId = 1401, Level = LogLevel.Information,
         Message = "Auto-created flag '{FlagKey}' with default {DefaultValue} on first evaluation by '{ApplicationName}'.")]
-    private static partial void LogAutoCreated(ILogger logger, string flagKey, bool defaultValue, string? applicationName);
+    private static partial void LogAutoCreated(ILogger logger, string flagKey, string defaultValue, string? applicationName);
 
     [LoggerMessage(EventId = 1402, Level = LogLevel.Warning,
         Message = "Could not auto-create flag '{FlagKey}'; it will be retried the next time it is evaluated.")]
