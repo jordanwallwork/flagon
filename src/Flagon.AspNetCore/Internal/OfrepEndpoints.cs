@@ -96,49 +96,11 @@ internal static class OfrepEndpoints
                 return (EvaluationContext.Empty, "The request body must be a JSON object with a 'context' property.");
             }
 
-            if (!root.TryGetProperty("context", out var contextElement) || contextElement.ValueKind == JsonValueKind.Null)
-            {
-                return (EvaluationContext.Empty, null);
-            }
-
-            if (contextElement.ValueKind != JsonValueKind.Object)
-            {
-                return (EvaluationContext.Empty, "'context' must be a JSON object.");
-            }
-
-            string? targetingKey = null;
-            var attributes = new Dictionary<string, object?>(StringComparer.Ordinal);
-            foreach (var property in contextElement.EnumerateObject())
-            {
-                if (property.NameEquals("targetingKey"))
-                {
-                    if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
-                    {
-                        return (EvaluationContext.Empty, "'context.targetingKey' must be a string.");
-                    }
-
-                    targetingKey = property.Value.GetString();
-                    continue;
-                }
-
-                attributes[property.Name] = ToAttributeValue(property.Value);
-            }
-
-            return (new EvaluationContext(targetingKey, attributes), null);
+            return root.TryGetProperty("context", out var contextElement)
+                ? EvaluationContextJson.Parse(contextElement)
+                : (EvaluationContext.Empty, null);
         }
     }
-
-    private static object? ToAttributeValue(JsonElement value) => value.ValueKind switch
-    {
-        JsonValueKind.String => value.GetString(),
-        JsonValueKind.True => true,
-        JsonValueKind.False => false,
-        JsonValueKind.Number when value.TryGetInt64(out var integer) => integer,
-        JsonValueKind.Number => value.GetDouble(),
-        JsonValueKind.Null or JsonValueKind.Undefined => null,
-        // Objects and arrays are passed through as JSON (detached from the request's document).
-        _ => value.Clone(),
-    };
 
     private static JsonObject Success(FlagEvaluationDetails<bool> details)
     {

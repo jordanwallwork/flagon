@@ -132,6 +132,8 @@ flags.IsEnabled("new-checkout", context: new EvaluationContext("user-123", new D
 
 The management API takes the rule on `POST /flags` (`targeting`) and `PUT /flags/{key}/targeting` (`{ "targeting": ... }`).
 OFREP and the OpenFeature provider pass the caller's context through, so all three agree with in-process `IFlagon`.
+To try a rule before saving it, `POST /flags/{key}/evaluate` with `{ "context": ..., "document": <flagd flag> }`
+evaluates the draft exactly as `IFlagon` would once saved; a draft rule that does not compile gets the same `400` as a write.
 
 | The rule... | Result |
 |---|---|
@@ -227,7 +229,9 @@ app.MapHealthChecks("/health");
 - **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI
   (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT /flags/{key}/targeting`,
   `POST /flags/{key}/archive|restore`, `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
-  version gets `409 Conflict`.
+  version gets `409 Conflict`. `POST /flags/{key}/evaluate` (`{ "context": {...}, "document"?: {...} }`) previews the
+  stored flag, or an unsaved flagd flag document, against a context without side effects (no usage, auto-create,
+  metric or store write) and returns `{ value, variant, reason, errorCode?, errorMessage? }`.
 - **Safe by default:** the UI and the management API answer `404` outside the `Development` environment unless you add
   authorization to them. Changes made through them are recorded in the audit log under the signed-in user's name.
 - **OFREP** (`MapFlagonOfrep(prefix)`) is public unless you call `.RequireAuthorization(...)` on it. It evaluates with

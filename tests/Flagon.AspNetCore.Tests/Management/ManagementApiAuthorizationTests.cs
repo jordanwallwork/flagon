@@ -59,6 +59,7 @@ public class ManagementApiAuthorizationTests
         var write = await client.PutAsJsonAsync("/flagon/api/flags/new-checkout/enabled", new { enabled = true, version = 1 });
         Assert.Equal(HttpStatusCode.NotFound, write.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync("/flagon/api/flags", new { key = "sneaky" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync("/flagon/api/flags/new-checkout/evaluate", new { context = new { } })).StatusCode);
         Assert.False(host.Flagon.IsEnabled("new-checkout"));
         Assert.Null(await host.Admin.GetAsync("sneaky"));
     }
@@ -97,6 +98,10 @@ public class ManagementApiAuthorizationTests
         var bobToggle = await host.CreateClient("bob").PutAsJsonAsync("/flagon/api/flags/new-checkout/enabled", new { enabled = true, version = 1 });
         Assert.Equal(HttpStatusCode.Forbidden, bobToggle.StatusCode);
         Assert.False(host.Flagon.IsEnabled("new-checkout"));
+
+        const string evaluate = "/flagon/api/flags/new-checkout/evaluate";
+        Assert.Equal(HttpStatusCode.Forbidden, (await host.CreateClient("bob").PostAsJsonAsync(evaluate, new { context = new { } })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await host.CreateClient("alice", "flag-admin").PostAsJsonAsync(evaluate, new { context = new { } })).StatusCode);
 
         var version = (await host.Admin.GetAsync("new-checkout"))!.Version;
         var aliceToggle = await host.CreateClient("alice", "flag-admin").PutAsJsonAsync("/flagon/api/flags/new-checkout/enabled", new { enabled = true, version });

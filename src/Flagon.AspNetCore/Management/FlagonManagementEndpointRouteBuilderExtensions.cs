@@ -22,6 +22,10 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// <item><c>PUT {path}/flags/{key}/enabled</c>: toggles the flag from <c>{ enabled }</c>.</item>
     /// <item><c>PUT {path}/flags/{key}/targeting</c>: replaces the flag's flagd targeting rule from <c>{ targeting }</c>
     /// (<c>null</c> removes it).</item>
+    /// <item><c>POST {path}/flags/{key}/evaluate</c>: previews the flag against <c>{ context?, document? }</c> and returns
+    /// <c>{ value, variant, reason, errorCode?, errorMessage? }</c>. Without <c>document</c> the stored flag is evaluated;
+    /// with one, that unsaved flagd flag document is (as if stored and not archived). Previews have no side effects: no
+    /// usage, auto-create, evaluation metric or store write.</item>
     /// <item><c>POST {path}/flags/{key}/archive</c>, <c>POST {path}/flags/{key}/restore</c>, <c>DELETE {path}/flags/{key}</c> (purge).</item>
     /// <item><c>GET {path}/flags/{key}/audit</c>: audit history, newest first.</item>
     /// </list>
@@ -53,6 +57,7 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
         group.MapPatch("/flags/{key}", ManagementEndpoints.UpdateMetadataAsync);
         group.MapPut("/flags/{key}/enabled", ManagementEndpoints.SetEnabledAsync);
         group.MapPut("/flags/{key}/targeting", ManagementEndpoints.SetTargetingAsync);
+        group.MapPost("/flags/{key}/evaluate", ManagementEndpoints.EvaluateAsync);
         group.MapPost("/flags/{key}/archive", ManagementEndpoints.ArchiveAsync);
         group.MapPost("/flags/{key}/restore", ManagementEndpoints.RestoreAsync);
         group.MapDelete("/flags/{key}", ManagementEndpoints.PurgeAsync);

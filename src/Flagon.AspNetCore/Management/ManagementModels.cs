@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Flagon.Storage;
 
 namespace Flagon.AspNetCore.Management;
@@ -96,3 +97,25 @@ internal sealed record UpdateMetadataBody(string? Description = null, IReadOnlyL
 internal sealed record SetEnabledBody(bool? Enabled = null, long? Version = null);
 
 internal sealed record VersionBody(long? Version = null);
+
+/// <summary>
+/// <c>context</c> is the evaluation context (absent or <c>null</c> is empty); <c>document</c>, when present, is an unsaved
+/// flagd flag document to evaluate instead of the stored flag.
+/// </summary>
+internal sealed record EvaluateBody(JsonElement Context = default, JsonElement Document = default);
+
+/// <summary>A preview evaluation result, using the same wire names as OFREP and the evaluation API.</summary>
+internal sealed record EvaluateResponse(
+    bool Value,
+    string? Variant,
+    string Reason,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ErrorCode,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ErrorMessage)
+{
+    public static EvaluateResponse From(FlagEvaluationDetails<bool> details) => new(
+        details.Value,
+        details.Variant,
+        details.Reason.ToWireName(),
+        details.ErrorCode == Flagon.ErrorCode.None ? null : details.ErrorCode.ToWireName(),
+        details.ErrorMessage);
+}
