@@ -58,6 +58,7 @@ public interface IFlagonAdmin
     /// targeting engine before anything is written; <c>$ref</c> is not supported (inline the evaluator instead).
     /// </summary>
     /// <exception cref="FlagTargetingException">The rule does not compile; the flag is unchanged.</exception>
+    /// <exception cref="FlagValidationException">The flag is archived (restore it first); the flag is unchanged.</exception>
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     Task<FlagRecord> SetTargetingAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken = default);

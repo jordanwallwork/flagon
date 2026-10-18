@@ -13,6 +13,7 @@ internal sealed partial class FlagonEvaluator(
     ILogger<FlagonEvaluator> logger,
     FlagAutoCreator autoCreator,
     IEvaluationContextAccessor ambientContext,
+    ITargetingCompiler compiler,
     TimeProvider time) : IFlagon
 {
     private readonly ConcurrentDictionary<string, byte> _warnedMissingKeys = new(StringComparer.Ordinal);
@@ -57,6 +58,32 @@ internal sealed partial class FlagonEvaluator(
 
     /// <summary>Bulk counterpart of <see cref="GetRemoteBooleanDetails"/>: uses only <paramref name="context"/>.</summary>
     internal FlagEvaluationSet<bool> GetAllRemoteBooleanDetails(EvaluationContext context) => EvaluateAll(context);
+
+    /// <summary>
+    /// Previews <paramref name="key"/> for the management API: the stored flag as of the current snapshot, evaluated
+    /// exactly as <see cref="GetBooleanDetails"/> would with a <c>false</c> default, but with no side effects at all (no
+    /// usage, auto-create, missing-key warning, ambient context or evaluation metric): previewing is not using the flag.
+    /// </summary>
+    internal FlagEvaluationDetails<bool> PreviewBooleanDetails(string key, EvaluationContext context) =>
+        Evaluate(key, defaultValue: false, context);
+
+    /// <summary>
+    /// Previews an unsaved <paramref name="draft"/> of <paramref name="key"/> as if it were stored (and not archived),
+    /// with the same side-effect-free evaluation as <see cref="PreviewBooleanDetails"/>.
+    /// </summary>
+    /// <exception cref="FlagTargetingException">The draft's targeting rule does not compile.</exception>
+    internal FlagEvaluationDetails<bool> PreviewDraftBooleanDetails(string key, FlagDocument draft, EvaluationContext context)
+    {
+        // Compiled once, as a snapshot would; a rule that fails to compile is rejected as on write.
+        var flag = SnapshotFlag.Create(new FlagRecord(key, draft, Version: 0), compiler);
+        if (flag.Targeting?.Error is { } error)
+        {
+            throw new FlagTargetingException(key, error);
+        }
+
+        // A version no snapshot has suppresses the once-per-snapshot rule-failure warning: a draft is not live.
+        return Evaluate(key, flag, snapshotVersion: -1, defaultValue: false, context);
+    }
 
     /// <summary>
     /// Evaluation against the current snapshot: no usage, auto-create or metrics. The only logging is a warning, once per

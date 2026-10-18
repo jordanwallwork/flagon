@@ -13,6 +13,8 @@ public class ManagementApiTargetingTests
 {
     private static readonly EvaluationContext Gb = new("alice", new Dictionary<string, object?> { ["country"] = "GB" });
 
+    private static readonly EvaluationContext Fr = new("bob", new Dictionary<string, object?> { ["country"] = "FR" });
+
     private static readonly JsonElement GbRule = Json("""{ "if": [ { "==": [ { "var": "country" }, "GB" ] }, "on", null ] }""");
 
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
@@ -136,5 +138,115 @@ public class ManagementApiTargetingTests
 
         await ProblemAsync(response, HttpStatusCode.BadRequest);
         Assert.Equal(created, await host.Admin.GetAsync("rollout"));
+    }
+
+    private static HttpRequestMessage DeleteTargeting(string key, long version)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Delete, $"/flagon/api/flags/{key}/targeting");
+        request.Headers.IfMatch.Add(new EntityTagHeaderValue($"\"{version}\""));
+        return request;
+    }
+
+    [Fact]
+    public async Task Targeting_can_be_replaced_and_then_deleted()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("rollout", Targeting: GbRule));
+        var client = host.CreateClient();
+
+        var replaced = await client.SendAsync(PutTargeting("rollout", created.Version, new { targeting = Json("""{ "if": [ true, "on", null ] }""") }));
+        Assert.Equal(HttpStatusCode.OK, replaced.StatusCode);
+        Assert.Equal(EvaluationReason.TargetingMatch, host.Flagon.GetBooleanDetails("rollout", false, Fr).Reason);
+
+        var deleted = await client.SendAsync(DeleteTargeting("rollout", created.Version + 1));
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        Assert.Equal($"\"{created.Version + 2}\"", deleted.Headers.ETag!.Tag);
+        Assert.Equal(JsonValueKind.Null, (await deleted.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("targeting").ValueKind);
+        Assert.Equal(EvaluationReason.Static, host.Flagon.GetBooleanDetails("rollout", false, Gb).Reason);
+        Assert.Null((await host.Admin.GetAuditHistoryAsync("rollout"))[0].After!.Targeting);
+    }
+
+    [Fact]
+    public async Task Deleting_targeting_accepts_the_version_in_the_body()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("rollout", Targeting: GbRule));
+
+        var response = await host.CreateClient().SendAsync(new HttpRequestMessage(HttpMethod.Delete, "/flagon/api/flags/rollout/targeting")
+        {
+            Content = JsonContent.Create(new { version = created.Version }),
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null((await host.Admin.GetAsync("rollout"))!.Document.Targeting);
+    }
+
+    [Fact]
+    public async Task Setting_or_deleting_targeting_on_a_stale_version_is_a_conflict_with_the_current_version()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("rollout", Targeting: GbRule));
+        var current = await host.Admin.SetEnabledAsync("rollout", true, created.Version);
+        var client = host.CreateClient();
+
+        var put = await ProblemAsync(await client.SendAsync(PutTargeting("rollout", created.Version, new { targeting = (object?)null })), HttpStatusCode.Conflict);
+        var delete = await ProblemAsync(await client.SendAsync(DeleteTargeting("rollout", created.Version)), HttpStatusCode.Conflict);
+
+        Assert.Equal(current.Version, put.GetProperty("currentVersion").GetInt64());
+        Assert.Equal(current.Version, delete.GetProperty("currentVersion").GetInt64());
+        Assert.Equal(current, await host.Admin.GetAsync("rollout"));
+    }
+
+    [Fact]
+    public async Task Setting_or_deleting_targeting_on_an_archived_flag_is_a_bad_request()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("retired", Targeting: GbRule));
+        var archived = await host.Admin.ArchiveAsync("retired", created.Version);
+        var client = host.CreateClient();
+
+        var put = await ProblemAsync(await client.SendAsync(PutTargeting("retired", archived.Version, new { targeting = (object?)null })), HttpStatusCode.BadRequest);
+        var delete = await ProblemAsync(await client.SendAsync(DeleteTargeting("retired", archived.Version)), HttpStatusCode.BadRequest);
+
+        Assert.Contains("archived", put.GetProperty("detail").GetString());
+        Assert.Contains("archived", delete.GetProperty("detail").GetString());
+        Assert.Equal(archived, await host.Admin.GetAsync("retired"));
+    }
+
+    [Theory]
+    [MemberData(nameof(RolloutShapes.Rollouts), MemberType = typeof(RolloutShapes))]
+    public async Task A_simple_percentage_rollout_is_summarised_as_its_percentage(string targeting, int percentage)
+    {
+        await using var host = await StartAsync();
+        await host.Admin.CreateAsync(new CreateFlagRequest("rollout", Targeting: Json(targeting)));
+
+        var flag = await host.CreateClient().GetFromJsonAsync<JsonElement>("/flagon/api/flags/rollout");
+        var listed = Assert.Single(await host.CreateClient().GetFromJsonAsync<JsonElement[]>("/flagon/api/flags") ?? []);
+
+        Assert.Equal(percentage, flag.GetProperty("rollout").GetProperty("percentage").GetInt32());
+        Assert.Equal(percentage, listed.GetProperty("rollout").GetProperty("percentage").GetInt32());
+    }
+
+    [Theory]
+    [MemberData(nameof(RolloutShapes.NotRollouts), MemberType = typeof(RolloutShapes))]
+    public async Task Targeting_that_is_not_exactly_a_simple_rollout_has_no_rollout_summary(string targeting)
+    {
+        await using var host = await StartAsync();
+        await host.Admin.CreateAsync(new CreateFlagRequest("targeted", Targeting: Json(targeting)));
+
+        var flag = await host.CreateClient().GetFromJsonAsync<JsonElement>("/flagon/api/flags/targeted");
+
+        Assert.Equal(JsonValueKind.Null, flag.GetProperty("rollout").ValueKind);
+    }
+
+    [Fact]
+    public async Task A_flag_without_targeting_has_no_rollout_summary()
+    {
+        await using var host = await StartAsync();
+        await host.Admin.CreateAsync(new CreateFlagRequest("plain"));
+
+        var flag = await host.CreateClient().GetFromJsonAsync<JsonElement>("/flagon/api/flags/plain");
+
+        Assert.Equal(JsonValueKind.Null, flag.GetProperty("rollout").ValueKind);
     }
 }

@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
+using Flagon.AspNetCore.Internal;
+using Flagon.Internal;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -90,6 +92,48 @@ internal static class ManagementEndpoints
         var version = ExpectedVersion(http, body.Version);
         var record = await admin.SetTargetingAsync(key, body.Targeting, version, http.RequestAborted).ConfigureAwait(false);
         return await FlagAsync(http, admin, record).ConfigureAwait(false);
+    }
+
+    public static async Task<IResult> ClearTargetingAsync(string key, HttpContext http, IFlagonAdmin admin)
+    {
+        var version = await VersionFromRequestAsync(http).ConfigureAwait(false);
+        var record = await admin.SetTargetingAsync(key, null, version, http.RequestAborted).ConfigureAwait(false);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Previews the flag against a context without using it: the stored flag from the current snapshot, or an unsaved
+    /// <c>document</c>. Evaluation is side-effect free (no usage, auto-create, metric or store write).
+    /// </summary>
+    public static async Task<IResult> EvaluateAsync(string key, HttpContext http, FlagonEvaluator evaluator)
+    {
+        var body = await ReadBodyAsync<EvaluateBody>(http, required: false).ConfigureAwait(false) ?? new EvaluateBody();
+        var (context, contextError) = EvaluationContextJson.Parse(body.Context);
+        if (contextError is not null)
+        {
+            throw new FlagValidationException(contextError);
+        }
+
+        FlagEvaluationDetails<bool> details;
+        if (body.Document.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            details = evaluator.PreviewBooleanDetails(key, context);
+            if (details.ErrorCode == ErrorCode.FlagNotFound)
+            {
+                throw new FlagNotFoundException(key);
+            }
+        }
+        else
+        {
+            if (body.Document.ValueKind != JsonValueKind.Object)
+            {
+                throw new FlagValidationException("'document' must be a flagd flag definition (a JSON object).");
+            }
+
+            details = evaluator.PreviewDraftBooleanDetails(key, FlagdJson.Deserialize(body.Document.GetRawText()), context);
+        }
+
+        return Results.Ok(EvaluateResponse.From(details));
     }
 
     public static async Task<IResult> ArchiveAsync(string key, HttpContext http, IFlagonAdmin admin)

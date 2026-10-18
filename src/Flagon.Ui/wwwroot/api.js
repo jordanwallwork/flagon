@@ -57,6 +57,11 @@ export const api = {
   createFlag: ({ key, enabled, description, tags }) => request("POST", "flags", { body: { key, enabled, description, tags } }),
   updateMetadata: (key, version, { description, tags }) => request("PATCH", flag(key), { body: { description, tags }, version }),
   setEnabled: (key, version, enabled) => request("PUT", `${flag(key)}/enabled`, { body: { enabled }, version }),
+  setTargeting: (key, version, targeting) => request("PUT", `${flag(key)}/targeting`, { body: { targeting }, version }),
+  clearTargeting: (key, version) => request("DELETE", `${flag(key)}/targeting`, { version }),
+  /** Previews the stored flag, or the unsaved flagd `document` when given, for `context`. No side effects. */
+  evaluate: (key, context = {}, document) =>
+    request("POST", `${flag(key)}/evaluate`, { body: document === undefined ? { context } : { context, document } }),
   archive: (key, version) => request("POST", `${flag(key)}/archive`, { version }),
   restore: (key, version) => request("POST", `${flag(key)}/restore`, { version }),
   purge: (key, version) => request("DELETE", flag(key), { version }),

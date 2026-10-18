@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 
 namespace Flagon.AspNetCore.Management;
@@ -19,6 +21,7 @@ internal sealed record FlagResponse(
     DateTimeOffset? UpdatedAt,
     string? UpdatedBy,
     JsonElement? Targeting,
+    RolloutResponse? Rollout,
     FlagUsageResponse Usage)
 {
     public static FlagResponse From(FlagRecord record, FlagUsageReport? usage)
@@ -42,9 +45,16 @@ internal sealed record FlagResponse(
             metadata.UpdatedAt,
             metadata.UpdatedBy,
             document.Targeting,
+            RolloutShape.Percentage(document.Targeting) is { } percentage ? new RolloutResponse(percentage) : null,
             FlagUsageResponse.From(usage));
     }
 }
+
+/// <summary>
+/// Present when the flag's targeting is exactly a simple percentage rollout (see <see cref="RolloutShape"/>), so tooling
+/// can show and edit it as a percentage instead of a rule.
+/// </summary>
+internal sealed record RolloutResponse(int Percentage);
 
 /// <summary>Where a flag is being evaluated: per application, the last evaluation and the code default supplied.</summary>
 internal sealed record FlagUsageResponse(DateTimeOffset? LastEvaluatedAt, bool HasDefaultMismatch, IReadOnlyList<FlagApplicationUsageResponse> Applications)
@@ -96,3 +106,25 @@ internal sealed record UpdateMetadataBody(string? Description = null, IReadOnlyL
 internal sealed record SetEnabledBody(bool? Enabled = null, long? Version = null);
 
 internal sealed record VersionBody(long? Version = null);
+
+/// <summary>
+/// <c>context</c> is the evaluation context (absent or <c>null</c> is empty); <c>document</c>, when present, is an unsaved
+/// flagd flag document to evaluate instead of the stored flag.
+/// </summary>
+internal sealed record EvaluateBody(JsonElement Context = default, JsonElement Document = default);
+
+/// <summary>A preview evaluation result, using the same wire names as OFREP and the evaluation API.</summary>
+internal sealed record EvaluateResponse(
+    bool Value,
+    string? Variant,
+    string Reason,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ErrorCode,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ErrorMessage)
+{
+    public static EvaluateResponse From(FlagEvaluationDetails<bool> details) => new(
+        details.Value,
+        details.Variant,
+        details.Reason.ToWireName(),
+        details.ErrorCode == Flagon.ErrorCode.None ? null : details.ErrorCode.ToWireName(),
+        details.ErrorMessage);
+}

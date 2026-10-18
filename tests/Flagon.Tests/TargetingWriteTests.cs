@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Flagon.Storage;
 using Flagon.Tests.Support;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Flagon.Tests;
 
@@ -123,6 +124,73 @@ public class TargetingWriteTests
         var latest = (await host.Admin.GetAuditHistoryAsync("rollout"))[0];
         Assert.Null(latest.Before!.Targeting);
         Assert.NotNull(latest.After!.Targeting);
+    }
+
+    [Fact]
+    public async Task Setting_targeting_on_an_archived_flag_is_rejected_and_leaves_it_unchanged()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("retired"));
+        flag = await host.Admin.ArchiveAsync("retired", flag.Version);
+
+        var ex = await Assert.ThrowsAsync<FlagValidationException>(() => host.Admin.SetTargetingAsync("retired", Rule(GbRule), flag.Version));
+
+        Assert.IsNotType<FlagTargetingException>(ex);
+        Assert.Contains("archived", ex.Message);
+        Assert.Equal(flag, await host.Admin.GetAsync("retired"));
+    }
+
+    [Fact]
+    public async Task Setting_targeting_is_audited_with_the_documents_before_and_after_each_change()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("rollout"));
+
+        flag = await host.Admin.SetTargetingAsync("rollout", Rule(GbRule), flag.Version);
+        flag = await host.Admin.SetTargetingAsync("rollout", Rule("""{ "fractional": [ [ "on", 5 ], [ "off", 95 ] ] }"""), flag.Version);
+        await host.Admin.SetTargetingAsync("rollout", null, flag.Version);
+
+        var history = await host.Admin.GetAuditHistoryAsync("rollout");
+        Assert.Null(history[0].After!.Targeting);
+        Assert.Contains("fractional", history[0].Before!.Targeting!.Value.GetRawText());
+        Assert.Contains("fractional", history[1].After!.Targeting!.Value.GetRawText());
+        Assert.Contains("country", history[1].Before!.Targeting!.Value.GetRawText());
+        Assert.Contains("country", history[2].After!.Targeting!.Value.GetRawText());
+        Assert.Null(history[2].Before!.Targeting);
+    }
+
+    [Fact]
+    public async Task Targeting_set_by_another_app_is_evaluated_after_the_next_refresh()
+    {
+        var store = new InMemoryFlagStore();
+        var time = new FakeTimeProvider(FlagonTestHost.Epoch);
+        await using var appA = await FlagonTestHost.StartAsync(o => { o.Store = store; o.Time = time; });
+        await using var appB = await FlagonTestHost.StartAsync(o => { o.Store = store; o.Time = time; });
+        var flag = await appA.Admin.CreateAsync(new CreateFlagRequest("shared"));
+        await FlagonTestHost.AdvanceToNextRefreshAsync(appA, appB);
+
+        flag = await appA.Admin.SetTargetingAsync("shared", Rule(GbRule), flag.Version);
+        Assert.Equal(EvaluationReason.Static, appB.Flagon.GetBooleanDetails("shared", false, Gb).Reason);
+        await FlagonTestHost.AdvanceToNextRefreshAsync(appA, appB);
+        Assert.Equal(new FlagEvaluationDetails<bool>("shared", true, "on", EvaluationReason.TargetingMatch), appB.Flagon.GetBooleanDetails("shared", false, Gb));
+
+        await appA.Admin.SetTargetingAsync("shared", null, flag.Version);
+        await FlagonTestHost.AdvanceToNextRefreshAsync(appA, appB);
+        Assert.Equal(EvaluationReason.Static, appB.Flagon.GetBooleanDetails("shared", false, Gb).Reason);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(100, 200)]
+    public async Task A_rollout_of_none_or_everyone_serves_off_or_on_to_every_user(int percentage, int expectedOn)
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("rollout"));
+
+        await host.Admin.SetTargetingAsync("rollout", Rule($$"""{ "fractional": [ [ "on", {{percentage}} ], [ "off", {{100 - percentage}} ] ] }"""), flag.Version);
+
+        var on = Enumerable.Range(0, 200).Count(i => host.Flagon.IsEnabled("rollout", context: new EvaluationContext($"user-{i}")));
+        Assert.Equal(expectedOn, on);
     }
 
     [Fact]
