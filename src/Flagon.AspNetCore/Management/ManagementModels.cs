@@ -58,16 +58,25 @@ internal sealed record FlagResponse(
             metadata.UpdatedAt,
             metadata.UpdatedBy,
             document.Targeting,
-            RolloutShape.Percentage(document.Targeting) is { } percentage ? new RolloutResponse(percentage) : null,
+            RolloutResponse.From(RolloutShape.Split(document.Targeting, document.Variants)),
             FlagUsageResponse.From(usage));
     }
 }
 
 /// <summary>
-/// Present when the flag's targeting is exactly a simple percentage rollout (see <see cref="RolloutShape"/>), so tooling
-/// can show and edit it as a percentage instead of a rule.
+/// Present when the flag's targeting is exactly a canonical percentage split (see <see cref="RolloutShape"/>), so tooling
+/// can show and edit it as weights instead of a rule. <c>percentage</c> is present only for the boolean on/off shape.
 /// </summary>
-internal sealed record RolloutResponse(int Percentage);
+internal sealed record RolloutResponse(
+    IReadOnlyList<RolloutBucketResponse> Buckets,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Percentage)
+{
+    public static RolloutResponse? From(RolloutSplit? split) => split is null
+        ? null
+        : new RolloutResponse(split.Buckets.Select(b => new RolloutBucketResponse(b.Variant, b.Percentage)).ToArray(), split.Percentage);
+}
+
+internal sealed record RolloutBucketResponse(string Variant, int Percentage);
 
 /// <summary>Where a flag is being evaluated: per application, the last evaluation and the code default supplied.</summary>
 internal sealed record FlagUsageResponse(DateTimeOffset? LastEvaluatedAt, bool HasDefaultMismatch, IReadOnlyList<FlagApplicationUsageResponse> Applications)
