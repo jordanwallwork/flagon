@@ -78,4 +78,282 @@ public class TypedEvaluationTests
         Assert.Equal(new FlagEvaluationDetails<Layout>("layout", new Layout(3, "Pics"), "grid", EvaluationReason.Static),
             host.Flagon.GetObjectDetails("layout", fallback, options: options));
     }
+
+    /// <summary>The getter a case requests a flag through.</summary>
+    public enum Getter { Boolean, String, Int, Double, Object }
+
+    /// <summary>A result with its value as JSON text, so results of every getter compare alike.</summary>
+    private sealed record Result(string Value, string? Variant, EvaluationReason Reason, ErrorCode ErrorCode = ErrorCode.None);
+
+    private static readonly JsonSerializerOptions Compact = new();
+
+    // Each getter's caller default, as JSON text, and the flag type it reads.
+    private static string CallerDefault(Getter getter) => getter switch
+    {
+        Getter.Boolean => "true",
+        Getter.String => "\"caller\"",
+        Getter.Int => "42",
+        Getter.Double => "4.25",
+        _ => """{"caller":true}""",
+    };
+
+    private static FlagType FlagTypeOf(Getter getter) => getter switch
+    {
+        Getter.Boolean => FlagType.Boolean,
+        Getter.String => FlagType.String,
+        Getter.Int or Getter.Double => FlagType.Number,
+        _ => FlagType.Object,
+    };
+
+    // Two variants of each flag type, "a" and "b", as JSON text.
+    private static (string A, string B) Variants(FlagType type) => type switch
+    {
+        FlagType.Boolean => ("false", "true"),
+        FlagType.String => ("\"x\"", "\"y\""),
+        FlagType.Number => ("1", "2"),
+        _ => ("""{"n":1}""", """{"n":2}"""),
+    };
+
+    private static string Flag(FlagType type, string state = "ENABLED", string defaultVariant = "\"a\"", string? targeting = null)
+    {
+        var (a, b) = Variants(type);
+        var rule = targeting is null ? string.Empty : $$""", "targeting": {{targeting}}""";
+        return $$"""{ "state": "{{state}}", "variants": { "a": {{a}}, "b": {{b}} }, "defaultVariant": {{defaultVariant}}{{rule}} }""";
+    }
+
+    // Served variants' values as each getter returns them (an int for 2, a double 2.0 for 2), as JSON text.
+    private static string Served(Getter getter, string variantJson) => getter switch
+    {
+        Getter.Double => JsonSerializer.Serialize(double.Parse(variantJson, System.Globalization.CultureInfo.InvariantCulture)),
+        _ => variantJson,
+    };
+
+    private static Result Evaluate(FlagonTestHost host, Getter getter, string key, EvaluationContext? context = null)
+    {
+        var fallback = JsonDocument.Parse(CallerDefault(getter)).RootElement;
+        var flagon = host.Flagon;
+        return getter switch
+        {
+            Getter.Boolean => From(flagon.GetBooleanDetails(key, fallback.GetBoolean(), context)),
+            Getter.String => From(flagon.GetStringDetails(key, fallback.GetString()!, context)),
+            Getter.Int => From(flagon.GetIntDetails(key, fallback.GetInt32(), context)),
+            Getter.Double => From(flagon.GetDoubleDetails(key, fallback.GetDouble(), context)),
+            _ => From(flagon.GetObjectDetails(key, fallback, context)),
+        };
+    }
+
+    private static async Task<Result> EvaluateAsync(FlagonTestHost host, Getter getter, string key)
+    {
+        var fallback = JsonDocument.Parse(CallerDefault(getter)).RootElement;
+        var flagon = host.Flagon;
+        var (value, details) = getter switch
+        {
+            Getter.Boolean => (Json(await flagon.IsEnabledAsync(key, fallback.GetBoolean())), From(await flagon.GetBooleanDetailsAsync(key, fallback.GetBoolean()))),
+            Getter.String => (Json(await flagon.GetStringAsync(key, fallback.GetString()!)), From(await flagon.GetStringDetailsAsync(key, fallback.GetString()!))),
+            Getter.Int => (Json(await flagon.GetIntAsync(key, fallback.GetInt32())), From(await flagon.GetIntDetailsAsync(key, fallback.GetInt32()))),
+            Getter.Double => (Json(await flagon.GetDoubleAsync(key, fallback.GetDouble())), From(await flagon.GetDoubleDetailsAsync(key, fallback.GetDouble()))),
+            _ => (Json(await flagon.GetObjectAsync(key, fallback)), From(await flagon.GetObjectDetailsAsync(key, fallback))),
+        };
+        Assert.Equal(details.Value, value);
+        return details;
+    }
+
+    private static string Json<T>(T value) => JsonSerializer.Serialize(value, Compact);
+
+    private static Result From<T>(FlagEvaluationDetails<T> d) => new(Json(d.Value), d.Variant, d.Reason, d.ErrorCode);
+
+    public static TheoryData<Getter> Getters => new(Enum.GetValues<Getter>());
+
+    [Theory]
+    [MemberData(nameof(Getters))]
+    public async Task Each_getter_serves_the_default_variant_of_a_static_flag(Getter getter)
+    {
+        var type = FlagTypeOf(getter);
+        await using var host = await HostAsync(("f", Flag(type)));
+
+        Assert.Equal(new Result(Served(getter, Variants(type).A), "a", EvaluationReason.Static), Evaluate(host, getter, "f"));
+        Assert.Equal(new Result(Served(getter, Variants(type).A), "a", EvaluationReason.Static), await EvaluateAsync(host, getter, "f"));
+    }
+
+    private const string AliceGetsB = """{ "if": [{ "==": [{ "var": "targetingKey" }, "alice"] }, "b", null] }""";
+
+    [Theory]
+    [MemberData(nameof(Getters))]
+    public async Task Each_getter_serves_the_variant_a_targeting_rule_matches(Getter getter)
+    {
+        var type = FlagTypeOf(getter);
+        await using var host = await HostAsync(("f", Flag(type, targeting: AliceGetsB)));
+
+        Assert.Equal(new Result(Served(getter, Variants(type).B), "b", EvaluationReason.TargetingMatch),
+            Evaluate(host, getter, "f", new EvaluationContext("alice")));
+    }
+
+    [Theory]
+    [MemberData(nameof(Getters))]
+    public async Task Each_getter_serves_the_default_variant_when_the_rule_matches_nothing(Getter getter)
+    {
+        var type = FlagTypeOf(getter);
+        await using var host = await HostAsync(("f", Flag(type, targeting: AliceGetsB)));
+
+        Assert.Equal(new Result(Served(getter, Variants(type).A), "a", EvaluationReason.Default),
+            Evaluate(host, getter, "f", new EvaluationContext("bob")));
+    }
+
+    [Theory]
+    [MemberData(nameof(Getters))]
+    public async Task Each_getter_returns_the_callers_default_for_a_disabled_flag(Getter getter)
+    {
+        await using var host = await HostAsync(("f", Flag(FlagTypeOf(getter), state: "DISABLED")));
+
+        Assert.Equal(new Result(CallerDefault(getter), null, EvaluationReason.Disabled), Evaluate(host, getter, "f"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Getters))]
+    public async Task Each_getter_returns_the_callers_default_for_an_archived_flag(Getter getter)
+    {
+        await using var host = await HostAsync(("f", Flag(FlagTypeOf(getter))));
+        var record = await host.Admin.GetAsync("f");
+        await host.Admin.ArchiveAsync("f", record!.Version);
+
+        Assert.Equal(new Result(CallerDefault(getter), null, EvaluationReason.Archived), Evaluate(host, getter, "f"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Getters))]
+    public async Task Each_getter_returns_the_callers_default_for_a_missing_flag(Getter getter)
+    {
+        await using var host = await HostAsync();
+
+        Assert.Equal(new Result(CallerDefault(getter), null, EvaluationReason.Error, ErrorCode.FlagNotFound),
+            Evaluate(host, getter, "missing"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Getters))]
+    public async Task Each_getter_returns_the_callers_default_for_a_flag_with_no_default_variant(Getter getter)
+    {
+        await using var host = await HostAsync(("f", Flag(FlagTypeOf(getter), defaultVariant: "null")));
+
+        Assert.Equal(new Result(CallerDefault(getter), null, EvaluationReason.Default), Evaluate(host, getter, "f"));
+    }
+
+    /// <summary>Every getter against every flag type it does not read.</summary>
+    public static TheoryData<Getter, FlagType> Mismatches
+    {
+        get
+        {
+            var data = new TheoryData<Getter, FlagType>();
+            foreach (var getter in Enum.GetValues<Getter>())
+            {
+                foreach (var type in Enum.GetValues<FlagType>().Where(t => t != FlagTypeOf(getter)))
+                {
+                    data.Add(getter, type);
+                }
+            }
+
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Mismatches))]
+    public async Task A_served_variant_of_another_type_returns_the_callers_default_with_type_mismatch(Getter getter, FlagType type)
+    {
+        await using var host = await HostAsync(("f", Flag(type)));
+
+        var result = Evaluate(host, getter, "f");
+
+        Assert.Equal(new Result(CallerDefault(getter), null, EvaluationReason.Error, ErrorCode.TypeMismatch), result);
+    }
+
+    [Theory]
+    [MemberData(nameof(Mismatches))]
+    public async Task The_type_check_applies_only_to_a_served_variant(Getter getter, FlagType type)
+    {
+        await using var host = await HostAsync(
+            ("disabled", Flag(type, state: "DISABLED")),
+            ("no-default", Flag(type, defaultVariant: "null")));
+
+        Assert.Equal(new Result(CallerDefault(getter), null, EvaluationReason.Disabled), Evaluate(host, getter, "disabled"));
+        Assert.Equal(new Result(CallerDefault(getter), null, EvaluationReason.Default), Evaluate(host, getter, "no-default"));
+    }
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("-7", -7)]
+    [InlineData("2147483647", int.MaxValue)]
+    [InlineData("-2147483648", int.MinValue)]
+    [InlineData("10.0", 10)]
+    [InlineData("1e2", 100)]
+    public async Task GetInt_serves_an_integral_number_within_int32_range(string number, int expected)
+    {
+        await using var host = await HostAsync(("n", Static($$"""{ "v": {{number}} }""", "v")));
+
+        Assert.Equal(new FlagEvaluationDetails<int>("n", expected, "v", EvaluationReason.Static), host.Flagon.GetIntDetails("n", 42));
+    }
+
+    [Theory]
+    [InlineData("1.5")]
+    [InlineData("-0.1")]
+    [InlineData("2147483648")]
+    [InlineData("-2147483649")]
+    [InlineData("1e20")]
+    public async Task GetInt_never_truncates_a_fractional_or_out_of_range_number(string number)
+    {
+        await using var host = await HostAsync(("n", Static($$"""{ "v": {{number}} }""", "v")));
+
+        var details = host.Flagon.GetIntDetails("n", 42);
+
+        Assert.Equal((42, (string?)null, EvaluationReason.Error, ErrorCode.TypeMismatch), (details.Value, details.Variant, details.Reason, details.ErrorCode));
+        Assert.Equal(double.Parse(number, System.Globalization.CultureInfo.InvariantCulture), host.Flagon.GetDouble("n", 0));
+    }
+
+    [Fact]
+    public async Task GetObject_of_a_type_the_variant_does_not_deserialise_into_is_a_type_mismatch()
+    {
+        await using var host = await HostAsync(("layout", Static("""{ "grid": { "columns": "three", "title": "Pics" } }""", "grid")));
+        var fallback = new Layout(1, "fallback");
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var details = host.Flagon.GetObjectDetails("layout", fallback, options: options);
+
+        Assert.Equal(fallback, details.Value);
+        Assert.Null(details.Variant);
+        Assert.Equal(EvaluationReason.Error, details.Reason);
+        Assert.Equal(ErrorCode.TypeMismatch, details.ErrorCode);
+        Assert.Equal(fallback, await host.Flagon.GetObjectAsync("layout", fallback, options: options));
+        Assert.Equal(ErrorCode.TypeMismatch, (await host.Flagon.GetObjectDetailsAsync("layout", fallback, options: options)).ErrorCode);
+    }
+
+    [Fact]
+    public async Task Zero_values_are_served_not_mistaken_for_a_missing_value()
+    {
+        await using var host = await HostAsync(
+            ("string", Static("""{ "zero": "" }""", "zero")),
+            ("integer", Static("""{ "zero": 0 }""", "zero")),
+            ("float", Static("""{ "zero": 0.0 }""", "zero")),
+            ("object", Static("""{ "zero": {} }""", "zero")),
+            ("boolean", Static("""{ "zero": false }""", "zero")));
+
+        Assert.Equal(new FlagEvaluationDetails<string>("string", "", "zero", EvaluationReason.Static), host.Flagon.GetStringDetails("string", "hi"));
+        Assert.Equal(new FlagEvaluationDetails<int>("integer", 0, "zero", EvaluationReason.Static), host.Flagon.GetIntDetails("integer", 1));
+        Assert.Equal(new FlagEvaluationDetails<double>("float", 0.0, "zero", EvaluationReason.Static), host.Flagon.GetDoubleDetails("float", 0.1));
+        Assert.Equal(new FlagEvaluationDetails<bool>("boolean", false, "zero", EvaluationReason.Static), host.Flagon.GetBooleanDetails("boolean", true));
+        var json = host.Flagon.GetObjectDetails("object", JsonDocument.Parse("""{"a":1}""").RootElement);
+        Assert.Equal(("{}", "zero", EvaluationReason.Static), (json.Value.GetRawText(), json.Variant, json.Reason));
+    }
+
+    [Fact]
+    public async Task A_typed_getter_warns_about_a_missing_key_once()
+    {
+        await using var host = await HostAsync();
+
+        host.Flagon.GetString("missing", "x");
+        host.Flagon.GetInt("missing", 1);
+        host.Flagon.GetDouble("missing", 1);
+        host.Flagon.GetObject("missing", default(JsonElement));
+
+        Assert.Single(host.Logs.Flagon(Microsoft.Extensions.Logging.LogLevel.Warning), w => w.Message.Contains("'missing'", StringComparison.Ordinal));
+    }
 }
