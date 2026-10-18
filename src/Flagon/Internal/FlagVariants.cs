@@ -43,7 +43,7 @@ internal static class FlagVariants
 
             if (!copy.TryAdd(name, value.Clone()))
             {
-                throw new FlagValidationException($"Flag '{key}' defines variant '{name}' more than once; variant names must be unique.");
+                throw Repeated(key, name);
             }
 
             var valueType = TypeOf(key, name, value);
@@ -71,14 +71,28 @@ internal static class FlagVariants
     }
 
     /// <summary>
-    /// Reads a JSON object of variants (name to value), as sent over HTTP, keeping repeated names so that
-    /// <see cref="Validate"/> rejects them instead of the last one silently winning.
+    /// Reads a JSON object of variants (name to value), as sent over HTTP, rejecting a repeated name rather than letting
+    /// the last one silently win. The values are not otherwise checked: pass the result to <see cref="Validate"/>.
     /// </summary>
-    /// <exception cref="FlagValidationException"><paramref name="variants"/> is not a JSON object.</exception>
-    public static IEnumerable<KeyValuePair<string, JsonElement>> FromJson(string key, JsonElement variants) =>
-        variants.ValueKind == JsonValueKind.Object
-            ? variants.EnumerateObject().Select(p => KeyValuePair.Create(p.Name, p.Value)).ToArray()
-            : throw new FlagValidationException($"Flag '{key}' has invalid 'variants': expected a JSON object of variant names to values.");
+    /// <exception cref="FlagValidationException"><paramref name="variants"/> is not a JSON object, or repeats a name.</exception>
+    public static IReadOnlyDictionary<string, JsonElement> FromJson(string key, JsonElement variants)
+    {
+        if (variants.ValueKind != JsonValueKind.Object)
+        {
+            throw new FlagValidationException($"Flag '{key}' has invalid 'variants': expected a JSON object of variant names to values.");
+        }
+
+        var result = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var property in variants.EnumerateObject())
+        {
+            if (!result.TryAdd(property.Name, property.Value.Clone()))
+            {
+                throw Repeated(key, property.Name);
+            }
+        }
+
+        return result;
+    }
 
     /// <summary>The wire name of <paramref name="type"/>: <c>boolean</c>, <c>string</c>, <c>number</c> or <c>object</c>.</summary>
     public static string Name(FlagType type) => type switch
@@ -89,6 +103,9 @@ internal static class FlagVariants
         FlagType.Object => "object",
         _ => throw new ArgumentOutOfRangeException(nameof(type)),
     };
+
+    private static FlagValidationException Repeated(string key, string name) =>
+        new($"Flag '{key}' defines variant '{name}' more than once; variant names must be unique.");
 
     private static FlagType TypeOf(string key, string name, JsonElement value) => value.ValueKind switch
     {
