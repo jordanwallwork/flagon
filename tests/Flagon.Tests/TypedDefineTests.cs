@@ -15,7 +15,7 @@ public class TypedDefineTests
             f.Define("theme", "light", "Site theme", ["ui"]));
 
         Assert.Equal(new FlagEvaluationDetails<string>("theme", "light", "default", EvaluationReason.Static),
-            host.Flagon.GetStringDetails("theme", "fallback"));
+            host.Flagon.GetStringDetails("theme", "caller-default"));
 
         var flag = await host.Admin.GetAsync("theme");
         Assert.Equal(FlagType.String, flag!.Document.Type);
@@ -91,7 +91,7 @@ public class TypedDefineTests
             }, "two"));
 
         Assert.Equal(new FlagEvaluationDetails<string>("size", "M", "medium", EvaluationReason.Static),
-            host.Flagon.GetStringDetails("size", "fallback"));
+            host.Flagon.GetStringDetails("size", "caller-default"));
         var size = (await host.Admin.GetAsync("size"))!.Document;
         Assert.Equal(FlagType.String, size.Type);
         Assert.Equal(["large", "medium", "small"], size.Variants.Keys.Order(StringComparer.Ordinal));
@@ -164,7 +164,7 @@ public class TypedDefineTests
         Assert.Equal(["sizing"], after.Metadata.Tags);
         Assert.Equal("medium", after.DefaultVariant);
         Assert.Equal(FlagdJson.Serialize(before with { Metadata = after.Metadata }), FlagdJson.Serialize(after));
-        Assert.Equal("S", host.Flagon.GetString("size", "fallback", new EvaluationContext(null, new Dictionary<string, object?> { ["plan"] = "pro" })));
+        Assert.Equal("S", host.Flagon.GetString("size", "caller-default", new EvaluationContext(null, new Dictionary<string, object?> { ["plan"] = "pro" })));
     }
 
     [Fact]

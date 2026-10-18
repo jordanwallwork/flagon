@@ -58,7 +58,7 @@ public class ManagementApiVariantEditTests
         Assert.Equal("solarized", flag.GetProperty("value").GetString());
         Assert.Equal(["light", "solar"], flag.GetProperty("variants").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
         Assert.Equal($"\"{created.Version + 1}\"", response.Headers.ETag?.Tag);
-        Assert.Equal("solarized", host.Flagon.GetString("theme", "fallback"));
+        Assert.Equal("solarized", host.Flagon.GetString("theme", "caller-default"));
     }
 
     [Fact]

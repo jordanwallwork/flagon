@@ -26,9 +26,9 @@ public class TypedEvaluationTests
     {
         await using var host = await HostAsync(("theme", Static("""{ "light": "light", "dark": "dark" }""", "dark")));
 
-        Assert.Equal("dark", host.Flagon.GetString("theme", "fallback"));
+        Assert.Equal("dark", host.Flagon.GetString("theme", "caller-default"));
         Assert.Equal(new FlagEvaluationDetails<string>("theme", "dark", "dark", EvaluationReason.Static),
-            host.Flagon.GetStringDetails("theme", "fallback"));
+            host.Flagon.GetStringDetails("theme", "caller-default"));
     }
 
     [Fact]
@@ -71,12 +71,12 @@ public class TypedEvaluationTests
     {
         await using var host = await HostAsync(("layout", Static("""{ "grid": { "columns": 3, "title": "Pics" } }""", "grid")));
 
-        var fallback = new Layout(1, "fallback");
+        var callerDefault = new Layout(1, "caller-default");
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
-        Assert.Equal(new Layout(3, "Pics"), host.Flagon.GetObject("layout", fallback, options: options));
+        Assert.Equal(new Layout(3, "Pics"), host.Flagon.GetObject("layout", callerDefault, options: options));
         Assert.Equal(new FlagEvaluationDetails<Layout>("layout", new Layout(3, "Pics"), "grid", EvaluationReason.Static),
-            host.Flagon.GetObjectDetails("layout", fallback, options: options));
+            host.Flagon.GetObjectDetails("layout", callerDefault, options: options));
     }
 
     /// <summary>The getter a case requests a flag through.</summary>
@@ -130,29 +130,29 @@ public class TypedEvaluationTests
 
     private static Result Evaluate(FlagonTestHost host, Getter getter, string key, EvaluationContext? context = null)
     {
-        var fallback = JsonDocument.Parse(CallerDefault(getter)).RootElement;
+        var callerDefault = JsonDocument.Parse(CallerDefault(getter)).RootElement;
         var flagon = host.Flagon;
         return getter switch
         {
-            Getter.Boolean => From(flagon.GetBooleanDetails(key, fallback.GetBoolean(), context)),
-            Getter.String => From(flagon.GetStringDetails(key, fallback.GetString()!, context)),
-            Getter.Int => From(flagon.GetIntDetails(key, fallback.GetInt32(), context)),
-            Getter.Double => From(flagon.GetDoubleDetails(key, fallback.GetDouble(), context)),
-            _ => From(flagon.GetObjectDetails(key, fallback, context)),
+            Getter.Boolean => From(flagon.GetBooleanDetails(key, callerDefault.GetBoolean(), context)),
+            Getter.String => From(flagon.GetStringDetails(key, callerDefault.GetString()!, context)),
+            Getter.Int => From(flagon.GetIntDetails(key, callerDefault.GetInt32(), context)),
+            Getter.Double => From(flagon.GetDoubleDetails(key, callerDefault.GetDouble(), context)),
+            _ => From(flagon.GetObjectDetails(key, callerDefault, context)),
         };
     }
 
     private static async Task<Result> EvaluateAsync(FlagonTestHost host, Getter getter, string key)
     {
-        var fallback = JsonDocument.Parse(CallerDefault(getter)).RootElement;
+        var callerDefault = JsonDocument.Parse(CallerDefault(getter)).RootElement;
         var flagon = host.Flagon;
         var (value, details) = getter switch
         {
-            Getter.Boolean => (Json(await flagon.IsEnabledAsync(key, fallback.GetBoolean())), From(await flagon.GetBooleanDetailsAsync(key, fallback.GetBoolean()))),
-            Getter.String => (Json(await flagon.GetStringAsync(key, fallback.GetString()!)), From(await flagon.GetStringDetailsAsync(key, fallback.GetString()!))),
-            Getter.Int => (Json(await flagon.GetIntAsync(key, fallback.GetInt32())), From(await flagon.GetIntDetailsAsync(key, fallback.GetInt32()))),
-            Getter.Double => (Json(await flagon.GetDoubleAsync(key, fallback.GetDouble())), From(await flagon.GetDoubleDetailsAsync(key, fallback.GetDouble()))),
-            _ => (Json(await flagon.GetObjectAsync(key, fallback)), From(await flagon.GetObjectDetailsAsync(key, fallback))),
+            Getter.Boolean => (Json(await flagon.IsEnabledAsync(key, callerDefault.GetBoolean())), From(await flagon.GetBooleanDetailsAsync(key, callerDefault.GetBoolean()))),
+            Getter.String => (Json(await flagon.GetStringAsync(key, callerDefault.GetString()!)), From(await flagon.GetStringDetailsAsync(key, callerDefault.GetString()!))),
+            Getter.Int => (Json(await flagon.GetIntAsync(key, callerDefault.GetInt32())), From(await flagon.GetIntDetailsAsync(key, callerDefault.GetInt32()))),
+            Getter.Double => (Json(await flagon.GetDoubleAsync(key, callerDefault.GetDouble())), From(await flagon.GetDoubleDetailsAsync(key, callerDefault.GetDouble()))),
+            _ => (Json(await flagon.GetObjectAsync(key, callerDefault)), From(await flagon.GetObjectDetailsAsync(key, callerDefault))),
         };
         Assert.Equal(details.Value, value);
         return details;
@@ -313,17 +313,17 @@ public class TypedEvaluationTests
     public async Task GetObject_of_a_type_the_variant_does_not_deserialise_into_is_a_type_mismatch()
     {
         await using var host = await HostAsync(("layout", Static("""{ "grid": { "columns": "three", "title": "Pics" } }""", "grid")));
-        var fallback = new Layout(1, "fallback");
+        var callerDefault = new Layout(1, "caller-default");
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
-        var details = host.Flagon.GetObjectDetails("layout", fallback, options: options);
+        var details = host.Flagon.GetObjectDetails("layout", callerDefault, options: options);
 
-        Assert.Equal(fallback, details.Value);
+        Assert.Equal(callerDefault, details.Value);
         Assert.Null(details.Variant);
         Assert.Equal(EvaluationReason.Error, details.Reason);
         Assert.Equal(ErrorCode.TypeMismatch, details.ErrorCode);
-        Assert.Equal(fallback, await host.Flagon.GetObjectAsync("layout", fallback, options: options));
-        Assert.Equal(ErrorCode.TypeMismatch, (await host.Flagon.GetObjectDetailsAsync("layout", fallback, options: options)).ErrorCode);
+        Assert.Equal(callerDefault, await host.Flagon.GetObjectAsync("layout", callerDefault, options: options));
+        Assert.Equal(ErrorCode.TypeMismatch, (await host.Flagon.GetObjectDetailsAsync("layout", callerDefault, options: options)).ErrorCode);
     }
 
     [Fact]

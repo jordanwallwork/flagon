@@ -36,7 +36,7 @@ public class OpenFeatureTypedResolutionTests
     {
         await using var host = await StartWithStoredFlagsAsync(("theme", Static("""{ "light": "light", "dark": "dark" }""", "dark")));
 
-        var details = await Client(host).GetStringDetailsAsync("theme", "fallback");
+        var details = await Client(host).GetStringDetailsAsync("theme", "caller-default");
 
         Assert.Equal("dark", details.Value);
         Assert.Equal("dark", details.Variant);
@@ -113,18 +113,18 @@ public class OpenFeatureTypedResolutionTests
         await using var host = await StartWithStoredFlagsAsync(("layout", """
             { "state": "DISABLED", "variants": { "roomy": { "rows": 1 } }, "defaultVariant": "roomy" }
             """));
-        var fallback = new Value(Structure.Builder()
+        var callerDefault = new Value(Structure.Builder()
             .Set("rows", 2)
-            .Set("label", "fallback")
+            .Set("label", "caller-default")
             .Set("inner", new Value(Structure.Builder().Set("on", true).Build()))
             .Build());
 
-        var details = await Client(host).GetObjectDetailsAsync("layout", fallback);
+        var details = await Client(host).GetObjectDetailsAsync("layout", callerDefault);
 
         Assert.Equal(Reason.Disabled, details.Reason);
         var layout = details.Value.AsStructure!;
         Assert.Equal(2, layout.GetValue("rows").AsInteger);
-        Assert.Equal("fallback", layout.GetValue("label").AsString);
+        Assert.Equal("caller-default", layout.GetValue("label").AsString);
         Assert.True(layout.GetValue("inner").AsStructure!.GetValue("on").AsBoolean);
     }
 
@@ -133,9 +133,9 @@ public class OpenFeatureTypedResolutionTests
     {
         await using var host = await StartWithStoredFlagsAsync();
 
-        var details = await Client(host).GetStringDetailsAsync("no-such-flag", "fallback");
+        var details = await Client(host).GetStringDetailsAsync("no-such-flag", "caller-default");
 
-        Assert.Equal("fallback", details.Value);
+        Assert.Equal("caller-default", details.Value);
         Assert.Equal(ErrorType.FlagNotFound, details.ErrorType);
     }
 
@@ -150,14 +150,14 @@ public class OpenFeatureTypedResolutionTests
         var asBoolean = await client.GetBooleanDetailsAsync("theme", true);
         var asInteger = await client.GetIntegerDetailsAsync("theme", 7);
         var asDouble = await client.GetDoubleDetailsAsync("theme", 1.5);
-        var asObject = await client.GetObjectDetailsAsync("theme", new Value("fallback"));
-        var asString = await client.GetStringDetailsAsync("layout", "fallback");
+        var asObject = await client.GetObjectDetailsAsync("theme", new Value("caller-default"));
+        var asString = await client.GetStringDetailsAsync("layout", "caller-default");
 
         Assert.True(asBoolean.Value);
         Assert.Equal(7, asInteger.Value);
         Assert.Equal(1.5, asDouble.Value);
-        Assert.Equal("fallback", asObject.Value.AsString);
-        Assert.Equal("fallback", asString.Value);
+        Assert.Equal("caller-default", asObject.Value.AsString);
+        Assert.Equal("caller-default", asString.Value);
         Assert.All(
             [asBoolean.ErrorType, asInteger.ErrorType, asDouble.ErrorType, asObject.ErrorType, asString.ErrorType],
             e => Assert.Equal(ErrorType.TypeMismatch, e));

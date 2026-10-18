@@ -362,7 +362,7 @@ public class AutoCreateTests
         var created = await store.Inner.TryCreateAsync("retired", FlagDocument.Boolean(true, new FlagMetadata()));
         await store.Inner.ArchiveAsync("retired", created!.Version);
 
-        Assert.Equal("fallback", host.Flagon.GetString("retired", "fallback"));
+        Assert.Equal("caller-default", host.Flagon.GetString("retired", "caller-default"));
         await host.StopAsync();
 
         var flag = await store.Inner.GetAsync("retired");

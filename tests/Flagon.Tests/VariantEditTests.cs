@@ -31,7 +31,7 @@ public class VariantEditTests
         Assert.Equal("solar", updated.Document.DefaultVariant);
         Assert.Equal(["light=\"light\"", "solar=\"solarized\""], Raw(updated.Document.Variants));
         Assert.Equal(updated, await host.Admin.GetAsync("theme"));
-        Assert.Equal("solarized", host.Flagon.GetString("theme", "fallback"));
+        Assert.Equal("solarized", host.Flagon.GetString("theme", "caller-default"));
     }
 
     [Theory]
@@ -259,7 +259,7 @@ public class VariantEditTests
 
         Assert.Equal("dark", updated.Document.DefaultVariant);
         Assert.Equal(Raw(created.Document.Variants), Raw(updated.Document.Variants));
-        Assert.Equal("dark", host.Flagon.GetString("theme", "fallback"));
+        Assert.Equal("dark", host.Flagon.GetString("theme", "caller-default"));
     }
 
     [Fact]
@@ -271,7 +271,7 @@ public class VariantEditTests
         var updated = await host.Admin.SetDefaultVariantAsync("theme", null, created.Version);
 
         Assert.Null(updated.Document.DefaultVariant);
-        Assert.Equal("fallback", host.Flagon.GetString("theme", "fallback"));
+        Assert.Equal("caller-default", host.Flagon.GetString("theme", "caller-default"));
     }
 
     [Fact]
