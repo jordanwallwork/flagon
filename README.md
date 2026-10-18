@@ -157,7 +157,8 @@ opts.Define("size", new Dictionary<string, string>
 The single-value overloads create one variant named `default`. Every overload takes the same `description`, `tags`
 and `targeting` parameters. Definitions are checked when `Define` is called, with the same rules as an admin create (at
 least one variant; names non-empty, at most 128 characters and unique; values of one type, no arrays or nulls; a
-default variant that exists), and an invalid one throws `FlagValidationException`.
+default variant that exists; boolean variants exactly `{ on: true, off: false }` serving `on` or `off`), and an invalid
+one throws `FlagValidationException`.
 
 If an existing flag's type differs from its definition (say `theme` was created as a boolean and is now defined as a
 string), Flagon leaves the flag untouched, metadata included, and logs a warning (event 1106) once at startup. The host
@@ -363,7 +364,8 @@ POST /flagon/api/flags
 Variants are validated on write (`FlagValidationException` in-process, `400` problem details over HTTP): at least one;
 names non-empty, at most 128 characters and unique; values all of one type (booleans, strings, numbers or JSON
 objects, never arrays or `null`); `defaultVariant` one of them or `null` (no default variant: callers get their own
-default when no rule matches). Variants can't be combined with `enabled: true`.
+default when no rule matches). Boolean variants are fixed: they must be exactly `{ "on": true, "off": false }`, with
+`defaultVariant` `"on"` or `"off"`. Variants can't be combined with `enabled: true`.
 
 Any flag can be disabled, and enabled again. A disabled flag serves each app its own code default with reason
 `DISABLED` (OFREP answers with no `value`, so remote clients use theirs too); its variants, default variant and
@@ -387,7 +389,8 @@ can't be removed until the split changes (`400`). Renaming a variant is a remove
 not checked for removed names; a rule that returns one fails at evaluation (each app gets its code default), and the UI
 warns when the rule mentions it. A boolean flag's `on`/`off` variants are fixed. `SetDefaultVariantAsync`
 (`PUT /flags/{key}/default-variant` with `{ "variant": "dark" }`, or `null` for none) switches the served variant for a
-flag of any type; for a boolean flag, `on`/`off` is the same as toggling it. Archived flags reject both. Both writes are
+flag of any type; for a boolean flag only `on` or `off` is accepted (not `null`), so it is the same as toggling it.
+Archived flags reject both. Both writes are
 version-checked (`409` on a stale version) and audited as `Updated` with the documents before and after.
 
 ```csharp

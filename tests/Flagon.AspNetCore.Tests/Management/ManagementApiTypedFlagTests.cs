@@ -88,6 +88,7 @@ public class ManagementApiTypedFlagTests
     [InlineData("""{ "key": "k", "variants": { "a": "x" }, "defaultVariant": "a", "enabled": true }""", "enabled")]
     [InlineData("""{ "key": "k", "variants": ["a"] }""", "variants")]
     [InlineData("""{ "key": "k", "defaultVariant": "a" }""", "no variants")]
+    [InlineData("""{ "key": "k", "variants": { "yes": true, "no": false }, "defaultVariant": "yes" }""", "\"on\": true")]
     public async Task Invalid_variants_are_a_bad_request_with_problem_details(string body, string detail)
     {
         await using var host = await StartAsync();

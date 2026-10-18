@@ -36,7 +36,6 @@ public class TypedFlagAdminTests
     [InlineData("""{ "small": 10, "large": 2.5 }""", FlagType.Number)]
     [InlineData("""{ "compact": { "rows": 3 }, "empty": {} }""", FlagType.Object)]
     [InlineData("""{ "blank": "" }""", FlagType.String)]
-    [InlineData("""{ "yes": true, "no": false }""", FlagType.Boolean)]
     public async Task A_flag_takes_the_type_of_its_variants(string variants, FlagType type)
     {
         await using var host = await FlagonTestHost.StartAsync();
@@ -47,6 +46,21 @@ public class TypedFlagAdminTests
         Assert.Null(created.Document.DefaultVariant);
         var stored = (await host.Admin.GetAsync("typed"))!.Document.Variants;
         Assert.Equal(Raw(Variants(variants)), Raw(stored));
+    }
+
+    [Theory]
+    [InlineData("on", true)]
+    [InlineData("off", false)]
+    public async Task A_flag_created_with_the_on_off_variants_is_a_boolean_flag(string defaultVariant, bool value)
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest(
+            "beta", Variants: Variants("""{ "on": true, "off": false }"""), DefaultVariant: defaultVariant));
+
+        Assert.Equal(FlagType.Boolean, created.Document.Type);
+        Assert.Equal(defaultVariant, created.Document.DefaultVariant);
+        Assert.Equal(value, host.Flagon.IsEnabled("beta", !value));
     }
 
     [Fact]
@@ -72,6 +86,11 @@ public class TypedFlagAdminTests
     [InlineData("""{ "list": [1, 2] }""", null, "array")]
     [InlineData("""{ "nothing": null }""", null, "null")]
     [InlineData("""{ "a": "x" }""", "b", "'b'")]
+    [InlineData("""{ "yes": true, "no": false }""", "yes", "\"on\": true")]
+    [InlineData("""{ "on": false, "off": true }""", "on", "\"on\": true")]
+    [InlineData("""{ "on": true }""", "on", "\"on\": true")]
+    [InlineData("""{ "on": true, "off": false, "maybe": true }""", "on", "\"on\": true")]
+    [InlineData("""{ "on": true, "off": false }""", null, "default variant")]
     public async Task Invalid_variants_are_rejected_and_nothing_is_written(string variants, string? defaultVariant, string message)
     {
         await using var host = await FlagonTestHost.StartAsync();

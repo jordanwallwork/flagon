@@ -20,7 +20,8 @@ internal static class FlagVariants
     /// <exception cref="FlagValidationException">
     /// There are no variants; a name is empty, longer than <see cref="MaxNameLength"/> or repeated (ordinal); a value is
     /// an array or <c>null</c>; the values are of more than one flag type; or <paramref name="defaultVariant"/> is not
-    /// one of the variants.
+    /// one of the variants; or the values are booleans other than exactly <c>{ "on": true, "off": false }</c> with
+    /// <c>on</c> or <c>off</c> as the default variant.
     /// </exception>
     public static (IReadOnlyDictionary<string, JsonElement> Variants, FlagType Type) Validate(
         string key, IEnumerable<KeyValuePair<string, JsonElement>> variants, string? defaultVariant)
@@ -67,7 +68,33 @@ internal static class FlagVariants
                 $"Flag '{key}' has default variant '{defaultVariant}', which is not one of its variants ({string.Join(", ", copy.Keys.Select(k => $"'{k}'"))}).");
         }
 
+        if (type == FlagType.Boolean)
+        {
+            ValidateBoolean(key, copy, defaultVariant);
+        }
+
         return (copy.ToFrozenDictionary(StringComparer.Ordinal), type.Value);
+    }
+
+    /// <summary>
+    /// Boolean flags have fixed variants: exactly <c>{ "on": true, "off": false }</c>, with <c>on</c> or <c>off</c> as the
+    /// default variant (so the on/off toggle always describes them).
+    /// </summary>
+    private static void ValidateBoolean(string key, Dictionary<string, JsonElement> variants, string? defaultVariant)
+    {
+        if (variants.Count != 2
+            || !variants.TryGetValue(FlagDocument.OnVariant, out var on) || on.ValueKind != JsonValueKind.True
+            || !variants.TryGetValue(FlagDocument.OffVariant, out var off) || off.ValueKind != JsonValueKind.False)
+        {
+            throw new FlagValidationException(
+                $"Flag '{key}' is a boolean flag; its variants must be exactly {{ \"on\": true, \"off\": false }}.");
+        }
+
+        if (defaultVariant is null)
+        {
+            throw new FlagValidationException(
+                $"Flag '{key}' is a boolean flag; its default variant must be 'on' or 'off'.");
+        }
     }
 
     /// <summary>

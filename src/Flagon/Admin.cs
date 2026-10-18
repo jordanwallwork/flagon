@@ -23,7 +23,9 @@ namespace Flagon;
 /// <param name="Variants">
 /// Optional named variants (name to JSON value): at least one; names non-empty, at most 128 characters and unique
 /// (ordinal); values all of one flag type (boolean, string, number or object; arrays and <c>null</c> are rejected).
-/// The flag's type is derived from them and never changes. Null creates a boolean flag from <paramref name="Enabled"/>.
+/// The flag's type is derived from them and never changes. Boolean variants must be exactly
+/// <c>{ "on": true, "off": false }</c>, with <paramref name="DefaultVariant"/> <c>on</c> or <c>off</c>. Null creates a
+/// boolean flag from <paramref name="Enabled"/>.
 /// </param>
 /// <param name="DefaultVariant">
 /// The variant served when no targeting rule applies: one of <paramref name="Variants"/>, or null for no default variant

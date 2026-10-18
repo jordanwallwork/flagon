@@ -130,7 +130,8 @@ public sealed partial class FlagonOptions
     /// <exception cref="FlagValidationException">
     /// The key, a tag or the targeting JSON is invalid; there are no variants; a variant name is empty, longer than 128
     /// characters or repeated; a value is null, a non-finite number, an array, or of a different type from the others;
-    /// or <paramref name="defaultVariant"/> is not one of the variants.
+    /// or <paramref name="defaultVariant"/> is not one of the variants. Boolean variants must be exactly
+    /// <c>{ "on": true, "off": false }</c>, with <c>on</c> or <c>off</c> as <paramref name="defaultVariant"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// <typeparamref name="T"/> is not a supported variant type, or the key has already been defined.
