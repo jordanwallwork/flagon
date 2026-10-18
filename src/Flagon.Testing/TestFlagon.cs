@@ -36,6 +36,9 @@ public sealed class TestFlagon : IFlagon, IDisposable, IAsyncDisposable
     /// <summary>Sets up flags for the test. Every write is visible to the next evaluation.</summary>
     public TestFlags Flags { get; }
 
+    /// <summary>Every evaluation served, for assertions: a shortcut for <see cref="TestFlags.Evaluations"/>.</summary>
+    public EvaluationLog Evaluations => Flags.Evaluations;
+
     /// <summary>The management API over the same store, for code under test that manages flags.</summary>
     public IFlagonAdmin Admin { get; }
 

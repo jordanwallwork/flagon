@@ -14,11 +14,19 @@ public sealed class TestFlags
     private readonly IFlagStore _store;
     private readonly FlagSnapshotManager _snapshots;
 
-    internal TestFlags(IFlagStore store, FlagSnapshotManager snapshots)
+    internal TestFlags(IFlagStore store, FlagSnapshotManager snapshots, EvaluationLog evaluations)
     {
         _store = store;
         _snapshots = snapshots;
+        Evaluations = evaluations;
     }
+
+    /// <summary>
+    /// Every evaluation served since startup (or the last <see cref="EvaluationLog.Clear"/>): in-process through
+    /// <see cref="IFlagon"/> and remote through OFREP, but not management previews. Empty when
+    /// <see cref="FlagonTestingSwitches.RecordEvaluations"/> is off.
+    /// </summary>
+    public EvaluationLog Evaluations { get; }
 
     /// <summary>Sets <paramref name="key"/> to an enabled boolean flag (<c>on</c>/<c>off</c> variants) serving <paramref name="value"/>.</summary>
     /// <param name="key">The flag key.</param>

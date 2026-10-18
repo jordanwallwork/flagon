@@ -504,6 +504,22 @@ public void Checkout_uses_the_new_flow_when_the_flag_is_on()
   argument, e.g. `TestFlagon.Create(testing: t => t.SeedDefinitions = false)` to start empty.
 - `flags.Admin` is the `IFlagonAdmin` over the same store, for code under test that manages flags.
 
+`flags.Evaluations` records every evaluation, so a test can assert which flags the code evaluated, for whom, and what
+it got. Each entry has the key, requested type, value, variant, reason, error, effective context (explicit or ambient),
+source (`InProcess` or `Remote` for OFREP) and time. They are plain .NET types, so any assertion library works:
+
+```csharp
+new CheckoutService(flags).Flow(userId: "42");
+
+var checkout = Assert.Single(flags.Evaluations.For("new-checkout"));
+Assert.Equal("42", checkout.Context.TargetingKey);
+Assert.Equal("on", checkout.Variant);
+Assert.False(flags.Evaluations.WasEvaluated("legacy-checkout"));
+```
+
+The log is thread-safe and in evaluation order. `flags.Evaluations.Clear()` empties it. Management previews (draft
+evaluate) are not recorded. Turn recording off with `testing: t => t.RecordEvaluations = false`.
+
 ### Integration tests
 
 For a running app (e.g. with `WebApplicationFactory`), call `AddFlagonTesting()` after the app's own `AddFlagon`. It
@@ -522,6 +538,7 @@ flags.SetFlag("new-checkout", true);
 ```
 
 - The app's in-process evaluation, OFREP endpoints and management API see each `TestFlags` write on the next request.
+- `flags.Evaluations` records the app's in-process evaluations and its OFREP requests (source `Remote`).
 - The app's `Define`s, `ApplicationName`, ambient context (`AddFlagonAmbientContext()`), actor accessor and refresh
   interval are kept, so per-user targeting works through real requests.
 - The same test-safe defaults apply; change them with `AddFlagonTesting(t => t.UsageTracking = true)`. Recorded usage

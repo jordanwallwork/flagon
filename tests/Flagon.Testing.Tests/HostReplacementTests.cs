@@ -208,4 +208,81 @@ public class HostReplacementTests
 
         Assert.True(services.BuildServiceProvider().GetRequiredService<FlagonTestingSwitches>().AutoCreate);
     }
+
+    [Fact]
+    public async Task An_OFREP_single_evaluation_is_recorded_as_remote_and_untyped_with_the_context_sent()
+    {
+        await using var host = await StartAsync();
+        var flags = host.Services.GetRequiredService<TestFlags>();
+        flags.SetFlag("new-checkout", true);
+
+        await host.CreateClient().PostAsJsonAsync("/ofrep/v1/evaluate/flags/new-checkout",
+            new { context = new { targetingKey = "user-42" } });
+
+        var evaluation = Assert.Single(flags.Evaluations);
+        Assert.Equal("new-checkout", evaluation.FlagKey);
+        Assert.Null(evaluation.RequestedType);
+        Assert.Equal(JsonValueKind.True, evaluation.Value.ValueKind);
+        Assert.Equal("on", evaluation.Variant);
+        Assert.Equal(EvaluationReason.Static, evaluation.Reason);
+        Assert.Equal("user-42", evaluation.Context.TargetingKey);
+        Assert.Equal(EvaluationSource.Remote, evaluation.Source);
+        Assert.Equal(FlagonTestHost.Epoch, evaluation.At);
+    }
+
+    [Fact]
+    public async Task An_OFREP_bulk_evaluation_records_each_flag_as_remote()
+    {
+        await using var host = await StartAsync();
+        var flags = host.Services.GetRequiredService<TestFlags>();
+        flags.SetFlag("dark-mode", false).SetFlag("new-checkout", true);
+
+        await host.CreateClient().PostAsJsonAsync("/ofrep/v1/evaluate/flags", new { context = new { targetingKey = "user-42" } });
+
+        Assert.Equal(["dark-mode", "new-checkout"], flags.Evaluations.Select(e => e.FlagKey));
+        Assert.All(flags.Evaluations, e =>
+        {
+            Assert.Null(e.RequestedType);
+            Assert.Equal(EvaluationSource.Remote, e.Source);
+            Assert.Equal("user-42", e.Context.TargetingKey);
+            Assert.Equal(EvaluationReason.Static, e.Reason);
+        });
+    }
+
+    [Fact]
+    public async Task An_in_process_evaluation_records_the_apps_ambient_context_and_targeting_reason()
+    {
+        await using var host = await StartAsync(
+            flagon: f => f.Define("new-checkout", false, targeting: """{"if":[{"in":[{"var":"targetingKey"},["alice"]]},"on","off"]}"""),
+            services: s => s.AddFlagonAmbientContext());
+        var flags = host.Services.GetRequiredService<TestFlags>();
+
+        await host.CreateClient("alice").GetStringAsync("/checkout");
+
+        var evaluation = Assert.Single(flags.Evaluations.For("new-checkout"));
+        Assert.Equal(FlagType.Boolean, evaluation.RequestedType);
+        Assert.Equal(EvaluationSource.InProcess, evaluation.Source);
+        Assert.Equal("alice", evaluation.Context.TargetingKey);
+        Assert.Equal(EvaluationReason.TargetingMatch, evaluation.Reason);
+        Assert.Equal("on", evaluation.Variant);
+    }
+
+    [Fact]
+    public async Task A_management_draft_evaluation_records_nothing()
+    {
+        await using var host = await StartAsync();
+        var flags = host.Services.GetRequiredService<TestFlags>();
+        flags.SetFlag("new-checkout", true);
+
+        var stored = await host.CreateClient().PostAsJsonAsync("/flagon/api/flags/new-checkout/evaluate", EmptyContext);
+        var draft = await host.CreateClient().PostAsJsonAsync("/flagon/api/flags/new-checkout/evaluate", new
+        {
+            context = new { },
+            document = new { state = "ENABLED", variants = new { on = true, off = false }, defaultVariant = "off" },
+        });
+
+        stored.EnsureSuccessStatusCode();
+        draft.EnsureSuccessStatusCode();
+        Assert.Empty(flags.Evaluations);
+    }
 }

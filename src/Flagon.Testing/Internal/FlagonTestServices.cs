@@ -27,8 +27,14 @@ internal static class FlagonTestServices
         services.RemoveAll<IFlagStore>();
         services.AddSingleton<IFlagStore>(new InMemoryFlagStore());
         services.AddSingleton(switches);
+        services.AddSingleton(new EvaluationLog());
+        services.AddSingleton<IFlagonEvaluationObserver>(sp => new EvaluationRecorder(
+            sp.GetRequiredService<EvaluationLog>(),
+            switches,
+            sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new TestFlags(
             sp.GetRequiredService<IFlagStore>(),
-            sp.GetRequiredService<FlagSnapshotManager>()));
+            sp.GetRequiredService<FlagSnapshotManager>(),
+            sp.GetRequiredService<EvaluationLog>()));
     }
 }

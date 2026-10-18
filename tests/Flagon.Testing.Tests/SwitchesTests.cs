@@ -3,13 +3,14 @@ namespace Flagon.Testing.Tests;
 public class SwitchesTests
 {
     [Fact]
-    public void Background_writes_are_off_and_seeding_is_on_by_default()
+    public void Background_writes_are_off_and_seeding_and_recording_are_on_by_default()
     {
         var switches = new FlagonTestingSwitches();
 
         Assert.False(switches.AutoCreate);
         Assert.False(switches.UsageTracking);
         Assert.True(switches.SeedDefinitions);
+        Assert.True(switches.RecordEvaluations);
     }
 
     [Fact]

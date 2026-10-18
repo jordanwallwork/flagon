@@ -14,7 +14,8 @@ internal sealed partial class FlagonEvaluator(
     FlagAutoCreator autoCreator,
     IEvaluationContextAccessor ambientContext,
     ITargetingCompiler compiler,
-    TimeProvider time) : IFlagon
+    TimeProvider time,
+    IFlagonEvaluationObserver? observer = null) : IFlagon
 {
     private readonly ConcurrentDictionary<string, byte> _warnedMissingKeys = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _warnedRuleFailures = new(StringComparer.Ordinal);
@@ -27,7 +28,9 @@ internal sealed partial class FlagonEvaluator(
 
     public FlagEvaluationDetails<bool> GetBooleanDetails(string key, bool defaultValue = false, EvaluationContext? context = null)
     {
-        return Tracked(key, CallerDefault.Of(defaultValue), Evaluate(key, context ?? ambientContext.Current).AsBoolean(defaultValue));
+        context ??= ambientContext.Current;
+        var resolution = Evaluate(key, context);
+        return Tracked(key, CallerDefault.Of(defaultValue), FlagType.Boolean, context, resolution, resolution.AsBoolean(defaultValue));
     }
 
     public string GetString(string key, string defaultValue, EvaluationContext? context = null) =>
@@ -36,8 +39,12 @@ internal sealed partial class FlagonEvaluator(
     public ValueTask<string> GetStringAsync(string key, string defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetString(key, defaultValue, context));
 
-    public FlagEvaluationDetails<string> GetStringDetails(string key, string defaultValue, EvaluationContext? context = null) =>
-        Tracked(key, CallerDefault.Of(defaultValue), Evaluate(key, context ?? ambientContext.Current).AsString(defaultValue));
+    public FlagEvaluationDetails<string> GetStringDetails(string key, string defaultValue, EvaluationContext? context = null)
+    {
+        context ??= ambientContext.Current;
+        var resolution = Evaluate(key, context);
+        return Tracked(key, CallerDefault.Of(defaultValue), FlagType.String, context, resolution, resolution.AsString(defaultValue));
+    }
 
     public ValueTask<FlagEvaluationDetails<string>> GetStringDetailsAsync(string key, string defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetStringDetails(key, defaultValue, context));
@@ -48,8 +55,12 @@ internal sealed partial class FlagonEvaluator(
     public ValueTask<int> GetIntAsync(string key, int defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetInt(key, defaultValue, context));
 
-    public FlagEvaluationDetails<int> GetIntDetails(string key, int defaultValue, EvaluationContext? context = null) =>
-        Tracked(key, CallerDefault.Of(defaultValue), Evaluate(key, context ?? ambientContext.Current).AsInt(defaultValue));
+    public FlagEvaluationDetails<int> GetIntDetails(string key, int defaultValue, EvaluationContext? context = null)
+    {
+        context ??= ambientContext.Current;
+        var resolution = Evaluate(key, context);
+        return Tracked(key, CallerDefault.Of(defaultValue), FlagType.Number, context, resolution, resolution.AsInt(defaultValue));
+    }
 
     public ValueTask<FlagEvaluationDetails<int>> GetIntDetailsAsync(string key, int defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetIntDetails(key, defaultValue, context));
@@ -60,8 +71,12 @@ internal sealed partial class FlagonEvaluator(
     public ValueTask<double> GetDoubleAsync(string key, double defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetDouble(key, defaultValue, context));
 
-    public FlagEvaluationDetails<double> GetDoubleDetails(string key, double defaultValue, EvaluationContext? context = null) =>
-        Tracked(key, CallerDefault.Of(defaultValue), Evaluate(key, context ?? ambientContext.Current).AsDouble(defaultValue));
+    public FlagEvaluationDetails<double> GetDoubleDetails(string key, double defaultValue, EvaluationContext? context = null)
+    {
+        context ??= ambientContext.Current;
+        var resolution = Evaluate(key, context);
+        return Tracked(key, CallerDefault.Of(defaultValue), FlagType.Number, context, resolution, resolution.AsDouble(defaultValue));
+    }
 
     public ValueTask<FlagEvaluationDetails<double>> GetDoubleDetailsAsync(string key, double defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetDoubleDetails(key, defaultValue, context));
@@ -72,8 +87,12 @@ internal sealed partial class FlagonEvaluator(
     public ValueTask<T> GetObjectAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetObject(key, defaultValue, context, options));
 
-    public FlagEvaluationDetails<T> GetObjectDetails<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null) =>
-        Tracked(key, CallerDefault.Of(defaultValue, options), Evaluate(key, context ?? ambientContext.Current).AsObject(defaultValue, options));
+    public FlagEvaluationDetails<T> GetObjectDetails<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null)
+    {
+        context ??= ambientContext.Current;
+        var resolution = Evaluate(key, context);
+        return Tracked(key, CallerDefault.Of(defaultValue, options), FlagType.Object, context, resolution, resolution.AsObject(defaultValue, options));
+    }
 
     public ValueTask<FlagEvaluationDetails<T>> GetObjectDetailsAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetObjectDetails(key, defaultValue, context, options));
@@ -81,9 +100,11 @@ internal sealed partial class FlagonEvaluator(
     /// <summary>
     /// The side effects of evaluating <paramref name="key"/> in this app's code, shared by every getter: usage is recorded
     /// with the caller's default (also on <see cref="ErrorCode.TypeMismatch"/>), and a missing key is warned about once
-    /// and queued for auto-create as a flag of the default's type. Then the evaluation metric.
+    /// and queued for auto-create as a flag of the default's type. Then the evaluation metric and the observer, if any.
     /// </summary>
-    private FlagEvaluationDetails<T> Tracked<T>(string key, in CallerDefault callerDefault, FlagEvaluationDetails<T> details)
+    private FlagEvaluationDetails<T> Tracked<T>(
+        string key, in CallerDefault callerDefault, FlagType requestedType, EvaluationContext? context, in Resolution resolution,
+        FlagEvaluationDetails<T> details)
     {
         usage.Record(key, callerDefault);
         if (details.ErrorCode == ErrorCode.FlagNotFound)
@@ -93,8 +114,21 @@ internal sealed partial class FlagonEvaluator(
         }
 
         instrumentation.RecordEvaluation(details);
+        if (observer is not null)
+        {
+            // A typed view serves the variant's JSON or, when it served none (including on TYPE_MISMATCH), the caller's default.
+            var value = details.Variant is not null ? resolution.Value : callerDefault.ToJson() ?? default;
+            observer.OnEvaluated(new ObservedEvaluation(details.FlagKey, requestedType, value, details.Variant,
+                details.Reason, details.ErrorCode, details.ErrorMessage, context, Remote: false));
+        }
+
         return details;
     }
+
+    /// <summary>Tells the observer, if any, about an untyped result (bulk or remote).</summary>
+    private void Observe(FlagEvaluationDetails<JsonElement> details, EvaluationContext? context, bool remote) =>
+        observer?.OnEvaluated(new ObservedEvaluation(details.FlagKey, null, details.Value, details.Variant,
+            details.Reason, details.ErrorCode, details.ErrorMessage, context, remote));
 
     /// <summary>
     /// Evaluates <paramref name="key"/> untyped for a remote caller (OFREP): the served variant's JSON of any type, or
@@ -103,7 +137,7 @@ internal sealed partial class FlagonEvaluator(
     /// a flag, so it records no usage, never auto-creates or logs a missing key, and uses only the
     /// <paramref name="context"/> the caller sent (never the ambient one). The evaluation metric is recorded with its
     /// usual tags (key, variant, reason), except for missing keys, so arbitrary keys sent by clients cannot inflate its
-    /// cardinality.
+    /// cardinality. The observer, if any, sees every result, missing keys included.
     /// </summary>
     internal FlagEvaluationDetails<JsonElement> GetRemoteDetails(string key, EvaluationContext context)
     {
@@ -113,14 +147,15 @@ internal sealed partial class FlagonEvaluator(
             instrumentation.RecordEvaluation(details);
         }
 
+        Observe(details, context, remote: true);
         return details;
     }
 
     /// <summary>
     /// Bulk counterpart of <see cref="GetRemoteDetails"/>: uses only <paramref name="context"/>. Like
-    /// <see cref="GetAllDetails"/> it records no evaluation metric.
+    /// <see cref="GetAllDetails"/> it records no evaluation metric. The observer, if any, sees every result.
     /// </summary>
-    internal FlagEvaluationSet<JsonElement> GetAllRemoteDetails(EvaluationContext context) => EvaluateAll(context);
+    internal FlagEvaluationSet<JsonElement> GetAllRemoteDetails(EvaluationContext context) => EvaluateAll(context, remote: true);
 
     /// <summary>
     /// Previews <paramref name="key"/> for the management API: the stored flag as of the current snapshot, evaluated
@@ -163,9 +198,10 @@ internal sealed partial class FlagonEvaluator(
         return Evaluate(key, flag, snapshot.Version, context);
     }
 
-    public FlagEvaluationSet<JsonElement> GetAllDetails(EvaluationContext? context = null) => EvaluateAll(context ?? ambientContext.Current);
+    public FlagEvaluationSet<JsonElement> GetAllDetails(EvaluationContext? context = null) => EvaluateAll(context ?? ambientContext.Current, remote: false);
 
-    private FlagEvaluationSet<JsonElement> EvaluateAll(EvaluationContext? context)
+    /// <summary>Evaluates every flag in the current snapshot, telling the observer (if any) about each result.</summary>
+    private FlagEvaluationSet<JsonElement> EvaluateAll(EvaluationContext? context, bool remote)
     {
         // Read the snapshot once so the version and the flags agree.
         var snapshot = snapshots.Current;
@@ -173,6 +209,14 @@ internal sealed partial class FlagonEvaluator(
             .OrderBy(f => f.Record.Key, StringComparer.Ordinal)
             .Select(f => Evaluate(f.Record.Key, f, snapshot.Version, context).ToDetails())
             .ToList();
+        if (observer is not null)
+        {
+            foreach (var details in results)
+            {
+                Observe(details, context, remote);
+            }
+        }
+
         return new FlagEvaluationSet<JsonElement>(snapshot.Version, results);
     }
 

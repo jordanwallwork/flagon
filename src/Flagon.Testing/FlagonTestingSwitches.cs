@@ -24,4 +24,10 @@ public sealed class FlagonTestingSwitches
     /// app's declared defaults. When false, the test flagon starts empty.
     /// </summary>
     public bool SeedDefinitions { get; set; } = true;
+
+    /// <summary>
+    /// When true (the default), every evaluation is recorded in <see cref="TestFlags.Evaluations"/>. Turn it off for
+    /// performance-sensitive tests; nothing is then recorded.
+    /// </summary>
+    public bool RecordEvaluations { get; set; } = true;
 }
