@@ -350,7 +350,8 @@ function targetingCard(flag, reload) {
     editor = null;
     // Only the server's recogniser (flag.rollout) decides what is a rollout; any other rule is never rewritten by the slider.
     const custom = hasTargeting(flag) && !flag.rollout;
-    card.replaceChildren(
+    // replaceChildren doesn't flatten like h() does, so flatten and drop the conditional falsy children here.
+    card.replaceChildren(...[
       h("h2", {}, "Targeting"),
       custom
         ? [h("p", { class: "small muted" }, "Custom rule: edit as JSON."), h("pre", { class: "rule" }, saved)]
@@ -358,7 +359,7 @@ function targetingCard(flag, reload) {
       h("div", { class: "actions" },
         h("button", { disabled: flag.archived, title: locked, onclick: () => edit(saved) }, hasTargeting(flag) ? "Edit JSON" : "Add rule"),
         custom && h("button", { class: "danger", disabled: flag.archived, title: locked, onclick: clear }, "Clear…")),
-    );
+    ].flat().filter(Boolean));
     changed();
   }
 
@@ -391,14 +392,18 @@ function targetingCard(flag, reload) {
     async function validate(e) {
       const p = parsed();
       if (!p) return;
-      e.target.disabled = true;
+      const button = e.target;
+      const submitted = { editor, text: editor.value };
+      // The editor stays editable meanwhile: only report on text that is still what was validated.
+      const current = () => editor === submitted.editor && editor.value === submitted.text;
+      button.disabled = true;
       try {
         const result = await api.evaluate(flag.key, {}, draftDocument(flag, p.rule));
-        status(["Valid rule. With an empty context it returns ", h("code", {}, result.variant ?? JSON.stringify(result.value)), ` (${result.reason}).`], "ok");
+        if (current()) status(["Valid rule. With an empty context it returns ", h("code", {}, result.variant ?? JSON.stringify(result.value)), ` (${result.reason}).`], "ok");
       } catch (err) {
-        status(ruleError(err));
+        if (current()) status(ruleError(err));
       } finally {
-        e.target.disabled = false;
+        button.disabled = false;
       }
     }
 
@@ -512,6 +517,11 @@ function tryItCard(flag, draft) {
   const remember = () => {
     const value = { targetingKey: targetingKey.value, attributes: rows.map((r) => [r.key.value, r.value.value]) };
     try { localStorage.setItem(storageKey, JSON.stringify(value)); } catch { /* ignore */ }
+    // Results no longer describe the typed context once it changes.
+    if ((outcomes.saved || outcomes.draft) && contextKey() !== outcomesContext) {
+      outcomes.saved = outcomes.draft = null;
+      drawResults();
+    }
   };
 
   const targetingKey = h("input", {
@@ -551,8 +561,11 @@ function tryItCard(flag, draft) {
     return ctx;
   }
 
+  const contextKey = () => JSON.stringify(context());
+
   const results = h("div", { class: "tryit-results" });
   const outcomes = { saved: null, draft: null }; // each a rendered result column, or null when not run (or stale)
+  let outcomesContext = null; // contextKey() the shown outcomes were evaluated for
 
   function drawResults() {
     results.replaceChildren(...[outcomes.saved, outcomes.draft].filter(Boolean));
@@ -573,27 +586,37 @@ function tryItCard(flag, draft) {
 
   async function run(which, e) {
     const button = e.currentTarget;
+    const ctx = context();
+    const key = JSON.stringify(ctx);
+    const show = (column) => {
+      if (outcomesContext !== key) { outcomes.saved = outcomes.draft = null; outcomesContext = key; }
+      outcomes[which] = column;
+      drawResults();
+    };
     let document;
     if (which === "draft") {
       try { document = draft.document(); } catch (err) {
         // Invalid JSON in the editor: shown here, never as a page notice.
-        outcomes.draft = resultColumn("Draft", h("p", { class: "small error-text" }, ruleError(err)));
-        drawResults();
+        show(resultColumn("Draft", h("p", { class: "small error-text" }, ruleError(err))));
         return;
       }
     }
+    const draftText = draft.text;
+    // A response is dropped if the context (or, for the draft, the editor) changed while it was in flight.
+    const current = () => contextKey() === key && (which !== "draft" || (draft.dirty && draft.text === draftText));
     button.disabled = true;
     const title = which === "draft" ? "Draft" : "Saved";
+    let column;
     try {
-      const result = await api.evaluate(flag.key, context(), document);
-      outcomes[which] = resultColumn(title, describeResult(result));
+      const result = await api.evaluate(flag.key, ctx, document);
+      column = resultColumn(title, describeResult(result));
     } catch (err) {
       // Compile errors (with their location) and context errors stay inline in this card.
-      outcomes[which] = resultColumn(title, h("p", { class: "small error-text" }, ruleError(err)));
+      column = resultColumn(title, h("p", { class: "small error-text" }, ruleError(err)));
     } finally {
       button.disabled = false;
     }
-    drawResults();
+    if (current()) show(column);
   }
 
   const draftButton = h("button", { type: "button", onclick: (e) => run("draft", e) }, "Evaluate draft");
