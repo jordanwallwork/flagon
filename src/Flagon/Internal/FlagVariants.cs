@@ -55,6 +55,39 @@ internal static class FlagVariants
         return type;
     }
 
+    /// <summary>
+    /// The JSON values of typed <paramref name="variants"/> (as <c>Define&lt;T&gt;</c> takes them), not yet validated:
+    /// pass the result to <see cref="Validate"/>.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// <typeparamref name="T"/> is not <see cref="bool"/>, <see cref="string"/>, <see cref="int"/>, <see cref="double"/>
+    /// or <see cref="JsonElement"/>.
+    /// </exception>
+    /// <exception cref="FlagValidationException">A <see cref="double"/> value is NaN or infinite.</exception>
+    public static IEnumerable<KeyValuePair<string, JsonElement>> ToJson<T>(string key, IReadOnlyDictionary<string, T> variants)
+    {
+        ArgumentNullException.ThrowIfNull(variants);
+        if (typeof(T) != typeof(bool) && typeof(T) != typeof(string) && typeof(T) != typeof(int)
+            && typeof(T) != typeof(double) && typeof(T) != typeof(JsonElement))
+        {
+            throw new ArgumentException(
+                $"Flag '{key}' variants are of type {typeof(T).Name}; use bool, string, int, double or JsonElement.", nameof(variants));
+        }
+
+        return variants.Select(v => KeyValuePair.Create(v.Key, v.Value switch
+        {
+            double number => Number(key, v.Key, number),
+            JsonElement json => json,
+            var other => JsonSerializer.SerializeToElement(other),
+        })).ToArray();
+    }
+
+    /// <summary>The JSON number <paramref name="value"/> of variant <paramref name="variant"/>.</summary>
+    /// <exception cref="FlagValidationException"><paramref name="value"/> is NaN or infinite (JSON has no such numbers).</exception>
+    public static JsonElement Number(string key, string variant, double value) => double.IsFinite(value)
+        ? JsonSerializer.SerializeToElement(value)
+        : throw new FlagValidationException($"Flag '{key}' variant '{variant}' is {value}; number variants must be finite.");
+
     /// <summary>Variant names for a message: each quoted and comma-separated, e.g. <c>'a', 'b'</c>.</summary>
     public static string QuotedNames(IEnumerable<string> names) => string.Join(", ", names.Select(n => $"'{n}'"));
 

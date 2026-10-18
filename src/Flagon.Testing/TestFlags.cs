@@ -63,9 +63,8 @@ public sealed class TestFlags
     /// <exception cref="FlagValidationException">
     /// <paramref name="key"/> is not a valid flag key, or <paramref name="value"/> is NaN or infinite (JSON has no such numbers).
     /// </exception>
-    public TestFlags SetFlag(string key, double value) => double.IsFinite(value)
-        ? Upsert(key, FlagDocument.SingleValue(JsonSerializer.SerializeToElement(value)))
-        : throw new FlagValidationException($"Flag '{key}' variant 'default' is {value}; number variants must be finite.");
+    public TestFlags SetFlag(string key, double value) =>
+        Upsert(key, FlagDocument.SingleValue(FlagVariants.Number(key, FlagVariants.SingleVariant, value)));
 
     /// <summary>
     /// Sets <paramref name="key"/> to an enabled object flag with a single <c>default</c> variant serving the JSON object
@@ -109,6 +108,36 @@ public sealed class TestFlags
     /// </exception>
     public TestFlags SetFlag<T>(string key, T value, JsonSerializerOptions? options = null) =>
         Upsert(key, SingleObject(key, JsonSerializer.SerializeToElement(value, options), nameof(SetFlag)));
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to an enabled flag with named <paramref name="variants"/>, serving
+    /// <paramref name="defaultVariant"/>, as a flag defined in code with <see cref="FlagonOptions.Define{T}"/>.
+    /// </summary>
+    /// <typeparam name="T">
+    /// The flag type of the variants: <see cref="bool"/>, <see cref="string"/>, <see cref="int"/>, <see cref="double"/> or
+    /// <see cref="JsonElement"/> (for objects).
+    /// </typeparam>
+    /// <param name="key">The flag key.</param>
+    /// <param name="variants">Variant name to value, e.g. <c>small</c>/<c>medium</c>/<c>large</c>.</param>
+    /// <param name="defaultVariant">
+    /// The variant served when no targeting rule applies, or null for none (the caller's default is served).
+    /// </param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagValidationException">
+    /// The key is invalid; there are no variants; a variant name is empty, longer than 128 characters or repeated; a value
+    /// is null, a non-finite number, an array, or of a different type from the others; or
+    /// <paramref name="defaultVariant"/> is not one of the variants. Boolean variants must be exactly
+    /// <c>{ "on": true, "off": false }</c>.
+    /// </exception>
+    /// <exception cref="ArgumentException"><typeparamref name="T"/> is not a supported variant type.</exception>
+    [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
+    public TestFlags SetFlag<T>(string key, IReadOnlyDictionary<string, T> variants, string? defaultVariant)
+    {
+        ArgumentNullException.ThrowIfNull(variants);
+        FlagKey.Validate(key);
+        var (validated, _) = FlagVariants.Validate(key, FlagVariants.ToJson(key, variants), defaultVariant);
+        return Upsert(key, new FlagDocument(FlagState.Enabled, validated, defaultVariant, new FlagMetadata()));
+    }
 
     private static FlagDocument SingleObject(string key, JsonElement value, string method) =>
         value.ValueKind == JsonValueKind.Object
