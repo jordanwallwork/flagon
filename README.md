@@ -24,7 +24,7 @@ other apps (including non-.NET ones, over [OFREP](https://openfeature.dev/specif
 | `Flagon.Ui` | Embeddable management console: `MapFlagonUi(path)` |
 | `Flagon.OpenFeature` | OpenFeature provider for the standard `IFeatureClient` API |
 | `Flagon.Storage.Conformance` | xUnit conformance suite for writing your own `IFlagStore` provider |
-| `Flagon.Testing` | `TestFlagon`: a real `IFlagon` over an in-memory store for unit tests, with one-line flag setup |
+| `Flagon.Testing` | `TestFlagon`: a real `IFlagon` over an in-memory store for unit tests, with one-line setup of any flag type, variants, targeting and state |
 
 ## Install
 
@@ -495,6 +495,28 @@ public void Checkout_uses_the_new_flow_when_the_flag_is_on()
 }
 ```
 
+Put any flag of any type into any state in one line. Each call returns `Flags`, so they chain:
+
+```csharp
+flags.Flags
+    .SetFlag("checkout-theme", "dark")                       // string, int and double too
+    .SetFlag("layout", new Layout(Columns: 3))               // an object (or SetObjectFlag("layout", json))
+    .SetFlag("page-size",                                    // named variants, as Define<T>
+        new Dictionary<string, int> { ["small"] = 10, ["large"] = 50 }, defaultVariant: "small",
+        targeting: """{"if":[{"==":[{"var":"plan"},"pro"]},"large",null]}""")
+    .EnableFor("beta", "user-1", "user-2")                   // on only for these targeting keys
+    .Disable("legacy-export");                               // also Enable, Archive, Remove, SetTargeting
+
+flags.Context = new EvaluationContext("user-1");             // ambient context for calls that pass none
+Assert.True(flags.IsEnabled("beta"));
+
+flags.Flags.Reset();                                         // back to the seeded Define()s and an empty evaluation log
+```
+
+- Writes are upserts (a flag can be replaced by one of another type or state) and use the same write-time rules as
+  `IFlagonAdmin`: an invalid key or variant set throws `FlagValidationException`, and a targeting rule that does not
+  compile throws `FlagTargetingException`, from the call itself. Targeting, `fractional` rollouts and `TYPE_MISMATCH`
+  behave exactly as in production.
 - Every `Flags` write is visible to the very next evaluation (no refresh delay) and leaves no audit entry. Writes are
   synchronous and safe inside test frameworks' synchronization contexts.
 - A key you never set returns the caller's default with reason `ERROR` and `FLAG_NOT_FOUND`, as in production.
@@ -517,8 +539,8 @@ Assert.Equal("on", checkout.Variant);
 Assert.False(flags.Evaluations.WasEvaluated("legacy-checkout"));
 ```
 
-The log is thread-safe and in evaluation order. `flags.Evaluations.Clear()` empties it. Management previews (draft
-evaluate) are not recorded. Turn recording off with `testing: t => t.RecordEvaluations = false`.
+The log is thread-safe and in evaluation order. `flags.Evaluations.Clear()` empties it, as `Reset()` does. Management
+previews (draft evaluate) are not recorded. Turn recording off with `testing: t => t.RecordEvaluations = false`.
 
 ### Integration tests
 

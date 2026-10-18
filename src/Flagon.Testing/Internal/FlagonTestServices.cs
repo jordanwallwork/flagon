@@ -1,4 +1,5 @@
 using Flagon.Internal;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -35,6 +36,8 @@ internal static class FlagonTestServices
         services.AddSingleton(sp => new TestFlags(
             sp.GetRequiredService<IFlagStore>(),
             sp.GetRequiredService<FlagSnapshotManager>(),
+            sp.GetRequiredService<ITargetingCompiler>(),
+            sp.GetRequiredService<FlagSeeder>(),
             sp.GetRequiredService<EvaluationLog>()));
     }
 }

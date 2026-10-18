@@ -26,6 +26,21 @@ public class EvaluationLogTests
     }
 
     [Fact]
+    public void An_evaluation_with_no_context_records_the_ambient_one()
+    {
+        using var flags = TestFlagon.Create();
+        flags.Flags.SetFlag("new-checkout", true);
+        var user42 = new EvaluationContext("user-42");
+        flags.Context = user42;
+
+        flags.IsEnabled("new-checkout");
+        flags.GetAllDetails();
+
+        Assert.Equal(2, flags.Evaluations.Count);
+        Assert.All(flags.Evaluations, e => Assert.Same(user42, e.Context));
+    }
+
+    [Fact]
     public void A_bulk_evaluation_records_each_flag_untyped()
     {
         using var flags = TestFlagon.Create();

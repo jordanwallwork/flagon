@@ -210,6 +210,23 @@ public class HostReplacementTests
     }
 
     [Fact]
+    public async Task Reset_is_seen_on_the_next_request_and_clears_the_evaluation_log()
+    {
+        await using var host = await StartAsync(flagon: f => f.Define("new-checkout", false));
+        var client = host.CreateClient();
+        var flags = host.Services.GetRequiredService<TestFlags>();
+        flags.SetFlag("new-checkout", true).SetFlag("dark-mode", true);
+        Assert.Equal("new", await client.GetStringAsync("/checkout"));
+
+        flags.Reset();
+
+        Assert.Empty(flags.Evaluations);
+        Assert.Equal("old", await client.GetStringAsync("/checkout"));
+        var darkMode = await client.PostAsJsonAsync("/ofrep/v1/evaluate/flags/dark-mode", EmptyContext);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, darkMode.StatusCode);
+    }
+
+    [Fact]
     public async Task An_OFREP_single_evaluation_is_recorded_as_remote_and_untyped_with_the_context_sent()
     {
         await using var host = await StartAsync();
