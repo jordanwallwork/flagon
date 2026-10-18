@@ -49,9 +49,21 @@ internal readonly struct CallerDefault
     public static CallerDefault Of<T>(T value, JsonSerializerOptions? options) => new(Shape.Object, 0, value, typeof(T), options);
 
     /// <summary>
-    /// True when <paramref name="other"/> is the same default: equal booleans and numbers, ordinal-equal strings, and
-    /// objects that are <see cref="object.Equals(object, object)"/> of the same declared type serialised with the same
-    /// options. Allocation-free.
+    /// This default, safe to keep beyond the evaluation that supplied it: a defined <see cref="JsonElement"/> default is
+    /// cloned, as the caller may dispose its <see cref="JsonDocument"/> once the getter returns. Every other default is
+    /// returned as is (booleans and numbers are inline; other objects are the caller's to keep alive), so retaining one
+    /// allocates nothing.
+    /// </summary>
+    public CallerDefault Retained() =>
+        _shape == Shape.Object && _value is JsonElement { ValueKind: not JsonValueKind.Undefined } json
+            ? new(Shape.Object, 0, json.Clone(), _type, _options)
+            : this;
+
+    /// <summary>
+    /// True when <paramref name="other"/> is the same default: equal booleans and numbers, ordinal-equal strings,
+    /// <see cref="JsonElement"/>s of equal content (so a <see cref="Retained"/> clone matches the element it was cloned
+    /// from), and other objects that are <see cref="object.Equals(object, object)"/> of the same declared type serialised
+    /// with the same options. Allocation-free for booleans, numbers and strings.
     /// </summary>
     public bool Matches(in CallerDefault other) =>
         _shape == other._shape
@@ -59,9 +71,29 @@ internal readonly struct CallerDefault
         && _shape switch
         {
             Shape.String => string.Equals((string?)_value, (string?)other._value, StringComparison.Ordinal),
-            Shape.Object => _type == other._type && ReferenceEquals(_options, other._options) && Equals(_value, other._value),
+            Shape.Object => _type == other._type && ReferenceEquals(_options, other._options) && ObjectEquals(_value, other._value),
             _ => true,
         };
+
+    private static bool ObjectEquals(object? value, object? other) =>
+        value is JsonElement json && other is JsonElement otherJson
+            ? JsonEquals(json, otherJson)
+            : Equals(value, other);
+
+    private static bool JsonEquals(JsonElement value, JsonElement other)
+    {
+        if (value.ValueKind == JsonValueKind.Undefined || other.ValueKind == JsonValueKind.Undefined)
+        {
+            return value.ValueKind == other.ValueKind;
+        }
+
+#if NET9_0_OR_GREATER
+        return JsonElement.DeepEquals(value, other);
+#else
+        // A false negative only costs the tracker a slot, never a wrong default, so formatting differences are fine here.
+        return string.Equals(value.GetRawText(), other.GetRawText(), StringComparison.Ordinal);
+#endif
+    }
 
     /// <summary>
     /// The default as canonical JSON (see <see cref="CanonicalJson"/>), or null when it has no JSON form (a non-finite

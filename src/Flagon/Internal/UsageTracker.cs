@@ -141,7 +141,7 @@ internal sealed partial class UsageTracker(
                     }
                 }
 
-                var added = new Slot(defaultValue);
+                var added = new Slot(defaultValue.Retained());
                 added.Observe(utcTicks);
                 if (Interlocked.CompareExchange(ref _slots, With(slots, added), slots) == slots)
                 {

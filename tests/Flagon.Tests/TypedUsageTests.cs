@@ -55,6 +55,19 @@ public class TypedUsageTests
     }
 
     [Fact]
+    public async Task A_json_default_is_recorded_after_the_caller_disposes_its_document()
+    {
+        var store = new InMemoryFlagStore();
+        await EvaluateInAsync(store, "Web", f =>
+        {
+            using var document = JsonDocument.Parse("""{ "columns": 3 }""");
+            f.GetObject("layout", document.RootElement);
+        });
+
+        Assert.Equal("""{"columns":3}""", Observed(await UsageAsync(store, "layout"), "Web"));
+    }
+
+    [Fact]
     public async Task Apps_using_one_key_with_different_types_are_a_default_mismatch()
     {
         var store = new InMemoryFlagStore();
