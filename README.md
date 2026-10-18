@@ -341,6 +341,7 @@ vendor-neutral `IFeatureClient` (and any OpenFeature hooks you already have):
 ```csharp
 using OpenFeature;
 using OpenFeature.Hosting;
+using OpenFeature.Model;
 
 builder.Services.AddFlagon(opts => opts.UsePostgresStorage("Flags"));
 builder.Services.AddOpenFeature(of => of.AddFlagon());
@@ -348,7 +349,19 @@ builder.Services.AddOpenFeature(of => of.AddFlagon());
 // ...
 app.MapGet("/checkout", async (IFeatureClient features) =>
     await features.GetBooleanValueAsync("new-checkout", false) ? "New checkout" : "Old checkout");
+
+app.MapGet("/settings", async (IFeatureClient features) => new
+{
+    Theme = await features.GetStringValueAsync("theme", "light"),
+    PageSize = await features.GetIntegerValueAsync("page-size", 20),
+    Ratio = await features.GetDoubleValueAsync("ratio", 0.5),
+    Layout = (await features.GetObjectValueAsync("layout", new Value(Structure.Empty))).AsStructure, // a JSON object flag
+});
 ```
+
+Every OpenFeature type resolves through Flagon's typed getters, with the same rules: a flag of another type returns
+your default with `ERROR` / `TYPE_MISMATCH`, and integer resolution accepts only a whole number within `int` range (as
+`GetInt`), so `2.5` is a mismatch, never truncated. Structures map to and from JSON objects (numbers become doubles).
 
 ## Other languages and the browser (OFREP)
 
@@ -369,6 +382,11 @@ const enabled = OpenFeature.getClient().getBooleanValue('new-checkout', false);
 curl -X POST https://my-app.example.com/ofrep/v1/evaluate/flags/new-checkout \
      -H 'Content-Type: application/json' -d '{"context":{"targetingKey":"user-123"}}'
 ```
+
+Responses carry the served variant's value of any type (a boolean, string, number or JSON object). OFREP requests
+don't say which type the client wants, so Flagon never reports `TYPE_MISMATCH` over OFREP: the client SDK checks the
+type, as with flagd. Disabled flags, and flags with no default variant when no rule matches, come back without a
+value, which tells the SDK to use the code default.
 
 The bulk endpoint (`POST /ofrep/v1/evaluate/flags`) supports `ETag`/`If-None-Match`, so polling clients only download
 flags when something has changed. The ETag tracks flag changes, not the context: a client that changes its context
