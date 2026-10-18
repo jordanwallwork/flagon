@@ -160,7 +160,7 @@ public class OpenFeatureProviderTests
     }
 
     [Fact]
-    public async Task Non_boolean_resolution_returns_the_callers_default_with_OpenFeatures_type_mismatch()
+    public async Task Non_boolean_resolution_of_a_boolean_flag_returns_the_callers_default_with_OpenFeatures_type_mismatch()
     {
         await using var host = await StartAsync();
         await host.Admin.CreateAsync(new CreateFlagRequest("new-checkout", Enabled: true));
