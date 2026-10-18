@@ -50,6 +50,38 @@ public class UiSplitTests
     }
 
     [Fact]
+    public async Task A_zero_weight_bucket_round_trips_and_guards_its_variant()
+    {
+        await using var host = await StartAsync();
+        var client = host.CreateClient("alice");
+        var created = await CreateThemeAsync(host);
+        // The editor writes every weight entered, 0% included, so the split reads back as the admin left it.
+        var rule = Json("""{"fractional":[["light",100],["dark",0],["solar",0]]}""");
+
+        var set = await client.SendAsync(WithIfMatch(HttpMethod.Put, "/flags/_api/flags/theme/targeting", created.Version, new { targeting = rule }));
+        var flag = await set.Content.ReadFromJsonAsync<JsonElement>();
+        var removal = await client.SendAsync(WithIfMatch(HttpMethod.Put, "/flags/_api/flags/theme/variants", flag.GetProperty("version").GetInt64(),
+            new { variants = new { light = "light", dark = "dark" }, defaultVariant = "light" }));
+
+        Assert.Equal(HttpStatusCode.OK, set.StatusCode);
+        Assert.Equal(["light=100", "dark=0", "solar=0"], flag.GetProperty("rollout").GetProperty("buckets").EnumerateArray()
+            .Select(b => $"{b.GetProperty("variant").GetString()}={b.GetProperty("percentage").GetInt32()}"));
+        Assert.Equal(HttpStatusCode.BadRequest, removal.StatusCode);
+        Assert.Contains("'solar'", (await removal.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_split_editor_writes_every_weight_entered_including_zero()
+    {
+        await using var host = await StartAsync();
+
+        var app = await AppAsync(host);
+
+        Assert.Contains("const buckets = names.map((variant, i) => ({ variant, percentage: w[i] }));", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("b.percentage > 0", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task The_targeting_card_offers_a_split_editor_that_saves_the_canonical_shape()
     {
         await using var host = await StartAsync();

@@ -535,7 +535,7 @@ function targetingCard(flag, reload) {
   /**
    * The percentage split form: one weight per variant (the current split's buckets first, in rule order, so saving
    * keeps users in their buckets), summing to 100. Writes the canonical `fractional` shape the server reports back as
-   * `flag.rollout`; zero-weight variants are left out unless the split would otherwise have fewer than two buckets.
+   * `flag.rollout`, with a bucket for every variant (0% ones included).
    */
   function splitControl() {
     const current = flag.rollout?.buckets ?? [];
@@ -572,10 +572,9 @@ function targetingCard(flag, reload) {
     async function save(e) {
       e.preventDefault();
       const w = weights();
-      const all = names.map((variant, i) => ({ variant, percentage: w[i] }));
-      const weighted = all.filter((b) => b.percentage > 0);
-      // A zero-width bucket serves nobody, wherever it sits, so padding with them leaves every user where they were.
-      const buckets = weighted.length >= 2 ? weighted : [...weighted, ...all.filter((b) => b.percentage === 0).slice(0, 2 - weighted.length)];
+      // Every weight as entered, 0% included: a zero-width bucket serves nobody, but keeping it means the split reads
+      // back as the admin left it and its variant stays guarded against removal.
+      const buckets = names.map((variant, i) => ({ variant, percentage: w[i] }));
       const showError = (content) => { message.replaceChildren(...content); message.hidden = false; };
       const saved = await saveInline(() => api.setTargeting(flag.key, flag.version, { fractional: buckets.map((b) => [b.variant, b.percentage]) }),
         { button: saveButton, showError, reload });
