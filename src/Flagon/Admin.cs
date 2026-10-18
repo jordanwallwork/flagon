@@ -130,10 +130,13 @@ public interface IFlagonAdmin
 
     /// <summary>
     /// Changes which variant a flag of any type serves when no targeting rule applies, or sets none when
-    /// <paramref name="variant"/> is null (callers then get their own default). For a boolean flag, <c>on</c> or
-    /// <c>off</c> is the same as <see cref="SetEnabledAsync"/>.
+    /// <paramref name="variant"/> is null (callers then get their own default). A boolean flag takes only <c>on</c> or
+    /// <c>off</c> (not null), so this is the same as <see cref="SetEnabledAsync"/>.
     /// </summary>
-    /// <exception cref="FlagValidationException">The variant is not one of the flag's, or the flag is archived; the flag is unchanged.</exception>
+    /// <exception cref="FlagValidationException">
+    /// The variant is not one of the flag's, the flag is boolean and the variant is not <c>on</c> or <c>off</c>, or the
+    /// flag is archived; the flag is unchanged.
+    /// </exception>
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     Task<FlagRecord> SetDefaultVariantAsync(string key, string? variant, long expectedVersion, CancellationToken cancellationToken = default);

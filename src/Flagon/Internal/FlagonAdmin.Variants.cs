@@ -34,13 +34,7 @@ internal sealed partial class FlagonAdmin
                     $"Flag '{key}' cannot remove variant '{removed.Variant}' while it is a bucket in the percentage split; change the split first.");
             }
 
-            var validated = FlagVariants.Validate(key, variants, defaultVariant);
-            if (document.Type is { } type && validated.Type != type)
-            {
-                throw new FlagValidationException(
-                    $"Flag '{key}' is a {FlagVariants.Name(type)} flag; its variants must stay {FlagVariants.Name(type)} values (a flag's type never changes; got {FlagVariants.Name(validated.Type)}).");
-            }
-
+            var validated = FlagVariants.Validate(key, variants, defaultVariant, document.Type);
             return document with { Variants = validated.Variants, DefaultVariant = defaultVariant };
         }, cancellationToken));
     }
@@ -51,6 +45,12 @@ internal sealed partial class FlagonAdmin
         return WriteAsync("set_default_variant", key, () => UpdateDocumentAsync(key, expectedVersion, current =>
         {
             var document = Unarchived(current, expectedVersion);
+            if (document.Type == FlagType.Boolean && variant is not (FlagDocument.OnVariant or FlagDocument.OffVariant))
+            {
+                throw new FlagValidationException(
+                    $"Flag '{key}' is a boolean flag; its default variant must be 'on' or 'off' (got {(variant is null ? "none" : $"'{variant}'")}).");
+            }
+
             if (variant is not null && !document.Variants.ContainsKey(variant))
             {
                 throw new FlagValidationException(

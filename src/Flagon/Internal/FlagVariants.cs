@@ -21,10 +21,14 @@ internal static class FlagVariants
     /// There are no variants; a name is empty, longer than <see cref="MaxNameLength"/> or repeated (ordinal); a value is
     /// an array or <c>null</c>; the values are of more than one flag type; or <paramref name="defaultVariant"/> is not
     /// one of the variants; or the values are booleans other than exactly <c>{ "on": true, "off": false }</c> with
-    /// <c>on</c> or <c>off</c> as the default variant.
+    /// <c>on</c> or <c>off</c> as the default variant; or they are not of <paramref name="requiredType"/>.
     /// </exception>
+    /// <param name="key">The flag key, for messages.</param>
+    /// <param name="variants">The variants to validate.</param>
+    /// <param name="defaultVariant">The default variant, or null for none.</param>
+    /// <param name="requiredType">The type the variants must have (an existing flag's type, which never changes), or null for any.</param>
     public static (IReadOnlyDictionary<string, JsonElement> Variants, FlagType Type) Validate(
-        string key, IEnumerable<KeyValuePair<string, JsonElement>> variants, string? defaultVariant)
+        string key, IEnumerable<KeyValuePair<string, JsonElement>> variants, string? defaultVariant, FlagType? requiredType = null)
     {
         ArgumentNullException.ThrowIfNull(variants);
         var copy = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
@@ -60,6 +64,12 @@ internal static class FlagVariants
         if (type is null)
         {
             throw new FlagValidationException($"Flag '{key}' must have at least one variant.");
+        }
+
+        if (requiredType is { } required && type != required)
+        {
+            throw new FlagValidationException(
+                $"Flag '{key}' is a {Name(required)} flag; its variants must stay {Name(required)} values (a flag's type never changes; got {Name(type.Value)}).");
         }
 
         if (defaultVariant is not null && !copy.ContainsKey(defaultVariant))

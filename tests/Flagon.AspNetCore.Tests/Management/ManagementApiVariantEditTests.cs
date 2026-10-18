@@ -182,6 +182,19 @@ public class ManagementApiVariantEditTests
         Assert.True(host.Flagon.IsEnabled("beta"));
     }
 
+    [Fact]
+    public async Task Clearing_a_boolean_flags_default_variant_is_a_bad_request()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("beta", Enabled: true));
+
+        var problem = await ProblemAsync(await host.CreateClient().SendAsync(
+            Put("/flagon/api/flags/beta/default-variant", """{ "variant": null }""", ifMatch: created.Version)), HttpStatusCode.BadRequest);
+
+        Assert.Contains("'on' or 'off'", problem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.True(host.Flagon.IsEnabled("beta"));
+    }
+
     [Theory]
     [InlineData("variants", """{ "variants": { "dark": "dark" }, "defaultVariant": "dark" }""")]
     [InlineData("default-variant", """{ "variant": "dark" }""")]

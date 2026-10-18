@@ -285,4 +285,17 @@ public class VariantEditTests
         Assert.Equal(variant, updated.Document.DefaultVariant);
         Assert.Equal(enabled, host.Flagon.IsEnabled("beta"));
     }
+
+    [Fact]
+    public async Task A_boolean_flags_default_variant_cannot_be_cleared_so_it_stays_on_or_off()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("beta", Enabled: true));
+
+        var ex = await Assert.ThrowsAsync<FlagValidationException>(() => host.Admin.SetDefaultVariantAsync("beta", null, created.Version));
+
+        Assert.Contains("'on' or 'off'", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(created, await host.Admin.GetAsync("beta"));
+        Assert.True(host.Flagon.IsEnabled("beta"));
+    }
 }
