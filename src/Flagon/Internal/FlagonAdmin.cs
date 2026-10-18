@@ -68,7 +68,7 @@ internal sealed partial class FlagonAdmin(
     {
         ArgumentNullException.ThrowIfNull(key);
         var validated = TargetingRules.Validate(compiler, key, targeting);
-        return UpdateDocumentAsync(key, expectedVersion, document => document with { Targeting = validated }, cancellationToken);
+        return UpdateDocumentAsync(key, expectedVersion, document => document with { Targeting = validated }, cancellationToken, rejectArchived: true);
     }
 
     public Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default)
@@ -99,13 +99,19 @@ internal sealed partial class FlagonAdmin(
 
     /// <summary>
     /// Reads <paramref name="key"/>, applies <paramref name="update"/> to its document, stamps and stores the result
-    /// at <paramref name="expectedVersion"/>, then refreshes the snapshot.
+    /// at <paramref name="expectedVersion"/>, then refreshes the snapshot. With <paramref name="rejectArchived"/>, an
+    /// archived flag is refused: like the store, a stale version is reported as a conflict before the archived state,
+    /// and archiving bumps the version, so an archive racing this write still surfaces as a conflict.
     /// </summary>
     private async Task<FlagRecord> UpdateDocumentAsync(
-        string key, long expectedVersion, Func<FlagDocument, FlagDocument> update, CancellationToken cancellationToken)
+        string key, long expectedVersion, Func<FlagDocument, FlagDocument> update, CancellationToken cancellationToken, bool rejectArchived = false)
     {
         var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagNotFoundException(key);
+        if (rejectArchived && current.Archived && current.Version == expectedVersion)
+        {
+            throw new FlagValidationException($"Flag '{key}' is archived; restore it to change it.");
+        }
 
         var change = changes.Begin();
         var document = update(current.Document).StampUpdated(change);

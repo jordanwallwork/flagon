@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 
 namespace Flagon.AspNetCore.Management;
@@ -20,6 +21,7 @@ internal sealed record FlagResponse(
     DateTimeOffset? UpdatedAt,
     string? UpdatedBy,
     JsonElement? Targeting,
+    RolloutResponse? Rollout,
     FlagUsageResponse Usage)
 {
     public static FlagResponse From(FlagRecord record, FlagUsageReport? usage)
@@ -43,9 +45,16 @@ internal sealed record FlagResponse(
             metadata.UpdatedAt,
             metadata.UpdatedBy,
             document.Targeting,
+            RolloutShape.Percentage(document.Targeting) is { } percentage ? new RolloutResponse(percentage) : null,
             FlagUsageResponse.From(usage));
     }
 }
+
+/// <summary>
+/// Present when the flag's targeting is exactly a simple percentage rollout (see <see cref="RolloutShape"/>), so tooling
+/// can show and edit it as a percentage instead of a rule.
+/// </summary>
+internal sealed record RolloutResponse(int Percentage);
 
 /// <summary>Where a flag is being evaluated: per application, the last evaluation and the code default supplied.</summary>
 internal sealed record FlagUsageResponse(DateTimeOffset? LastEvaluatedAt, bool HasDefaultMismatch, IReadOnlyList<FlagApplicationUsageResponse> Applications)
