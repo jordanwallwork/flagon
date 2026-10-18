@@ -8,7 +8,7 @@ namespace Flagon.Internal.Targeting;
 /// the flag, integral weights from 0 to 100 summing to 100, and default bucketing (no explicit bucketing value, so users
 /// are bucketed by flag key and targeting key). Any JSON number with no fractional part counts as a weight (<c>25.0</c>
 /// and <c>2.5e1</c> are 25), as the fractional engine weights them identically. A split of exactly
-/// <c>[["on", N], ["off", 100 - N]]</c> is also the boolean percentage rollout N. Defined once, here, so every consumer
+/// <c>[["on", N], ["off", 100 - N]]</c> of a boolean flag is also the boolean percentage rollout N. Defined once, here, so every consumer
 /// agrees; anything else, however close, is a custom rule and must be edited as one.
 /// </summary>
 internal static class RolloutShape
@@ -46,7 +46,7 @@ internal static class RolloutShape
             total += bucket.Percentage;
         }
 
-        return total == 100 ? new RolloutSplit(buckets) : null;
+        return total == 100 ? new RolloutSplit(buckets, FlagVariants.CommonType(variants) == FlagType.Boolean) : null;
     }
 
     // A literal name and an integral weight from 0 to 100.
@@ -59,11 +59,14 @@ internal static class RolloutShape
             : null;
 }
 
-/// <summary>A canonical percentage split, its buckets in rule order.</summary>
-internal sealed record RolloutSplit(IReadOnlyList<RolloutBucket> Buckets)
+/// <summary>A canonical percentage split, its buckets in rule order, and whether it is over a boolean flag's variants.</summary>
+internal sealed record RolloutSplit(IReadOnlyList<RolloutBucket> Buckets, bool OfBooleanFlag)
 {
-    /// <summary>The boolean rollout percentage N when the split is exactly <c>[["on", N], ["off", 100 - N]]</c>, otherwise null.</summary>
-    public int? Percentage => Buckets is [{ Variant: FlagDocument.OnVariant } on, { Variant: FlagDocument.OffVariant }] ? on.Percentage : null;
+    /// <summary>
+    /// The boolean rollout percentage N when the flag is a boolean flag and the split is exactly
+    /// <c>[["on", N], ["off", 100 - N]]</c>, otherwise null (variants of another type named on/off are just a split).
+    /// </summary>
+    public int? Percentage => OfBooleanFlag && Buckets is [{ Variant: FlagDocument.OnVariant } on, { Variant: FlagDocument.OffVariant }] ? on.Percentage : null;
 
     /// <summary>True when <paramref name="variant"/> is one of the split's buckets.</summary>
     public bool Contains(string variant) => Buckets.Any(b => b.Variant == variant);

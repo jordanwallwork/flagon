@@ -1079,7 +1079,7 @@ function restoreRuleActions(flag, entry, reload) {
 function restoreRuleButton(flag, entry, label, rule, reload) {
   const side = `${label.toLowerCase()} the change to version ${entry.version}`;
   async function restore() {
-    const buckets = splitBuckets(rule, flag.variants), percentage = onPercentage(buckets);
+    const buckets = splitBuckets(rule, flag.variants), percentage = onPercentage(buckets, flag.variants);
     const shape = buckets === null ? "" : percentage === null ? ` (split ${splitWeights(buckets)})` : ` (rollout ${percentage}%)`;
     const ok = await confirmDialog({
       title: `Restore this rule on ${flag.key}?`,
@@ -1140,9 +1140,14 @@ function splitBuckets(rule, variants) {
   return buckets.reduce((sum, b) => sum + b.percentage, 0) === 100 ? buckets : null;
 }
 
-/** The boolean rollout percentage N when `buckets` are exactly [on N, off 100 - N], else null (the server's `rollout.percentage`). */
-function onPercentage(buckets) {
-  return buckets?.length === 2 && buckets[0].variant === "on" && buckets[1].variant === "off" ? buckets[0].percentage : null;
+/**
+ * The boolean rollout percentage N when `variants` are a boolean flag's (every value true or false) and `buckets` are
+ * exactly [on N, off 100 - N], else null (the server's `rollout.percentage`): a string flag's on/off split is a split.
+ */
+function onPercentage(buckets, variants) {
+  const values = Object.values(variants ?? {});
+  const booleanFlag = values.length > 0 && values.every((v) => typeof v === "boolean");
+  return booleanFlag && buckets?.length === 2 && buckets[0].variant === "on" && buckets[1].variant === "off" ? buckets[0].percentage : null;
 }
 
 /** "34/33/33": a split's weights in rule order. */
@@ -1161,7 +1166,7 @@ function describeTargetingChange(before, after) {
   if (now === null) return "targeting removed";
   const from = splitBuckets(was, before.variants), to = splitBuckets(now, after.variants);
   if (from === null || to === null) return "targeting changed";
-  const fromOn = onPercentage(from), toOn = onPercentage(to);
+  const fromOn = onPercentage(from, before.variants), toOn = onPercentage(to, after.variants);
   if (fromOn !== null && toOn !== null) return `rollout ${fromOn}% → ${toOn}%`;
   return `split ${splitWeights(from)} → ${splitWeights(to)}`;
 }

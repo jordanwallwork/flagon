@@ -110,4 +110,17 @@ public class UiSplitTests
         Assert.Contains("`split ${splitWeights(from)} → ${splitWeights(to)}`", app, StringComparison.Ordinal);
         Assert.Contains("function splitBuckets(rule, variants)", app, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Only_a_boolean_flags_on_off_split_is_summarised_as_a_rollout_in_the_audit_history()
+    {
+        await using var host = await StartAsync();
+
+        var app = await AppAsync(host);
+
+        // As the server's rollout.percentage: string variants named on/off are a split, not a rollout.
+        Assert.Contains("function onPercentage(buckets, variants)", app, StringComparison.Ordinal);
+        Assert.Contains("onPercentage(from, before.variants), toOn = onPercentage(to, after.variants)", app, StringComparison.Ordinal);
+        Assert.Contains("onPercentage(buckets, flag.variants)", app, StringComparison.Ordinal);
+    }
 }
