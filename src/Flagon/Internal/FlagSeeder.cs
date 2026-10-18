@@ -51,7 +51,7 @@ internal sealed partial class FlagSeeder(
     /// <summary>Seeds every definition. Throws on store failure; already-seeded definitions are idempotent on retry.</summary>
     public async Task SeedAsync(CancellationToken cancellationToken)
     {
-        if (store.IsReadOnly || options.Definitions.Count == 0)
+        if (store.IsReadOnly || !options.SeedDefinitions || options.Definitions.Count == 0)
         {
             return;
         }

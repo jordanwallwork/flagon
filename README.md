@@ -526,6 +526,30 @@ flags.Flags.Reset();                                         // back to the seed
   argument, e.g. `TestFlagon.Create(testing: t => t.SeedDefinitions = false)` to start empty.
 - `flags.Admin` is the `IFlagonAdmin` over the same store, for code under test that manages flags.
 
+### Integration tests
+
+For a running app (e.g. with `WebApplicationFactory`), call `AddFlagonTesting()` after the app's own `AddFlagon`. It
+replaces the app's store with the in-memory test store, so its SQL Server or Postgres connection is never opened:
+
+```csharp
+public class AppFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder b) =>
+        b.ConfigureTestServices(s => s.AddFlagonTesting());
+}
+
+// in a test
+var flags = factory.Services.GetRequiredService<TestFlags>();
+flags.SetFlag("new-checkout", true);
+```
+
+- The app's in-process evaluation, OFREP endpoints and management API see each `TestFlags` write on the next request.
+- The app's `Define`s, `ApplicationName`, ambient context (`AddFlagonAmbientContext()`), actor accessor and refresh
+  interval are kept, so per-user targeting works through real requests.
+- The same test-safe defaults apply; change them with `AddFlagonTesting(t => t.UsageTracking = true)`. Recorded usage
+  is written when the host stops.
+- It throws if `AddFlagon` hasn't been registered, and calling it twice is harmless.
+
 ## Roadmap
 
 Flagon evaluates boolean, string, number and object flags, with flagd targeting rules, `fractional` rollouts and
