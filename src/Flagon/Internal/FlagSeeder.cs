@@ -1,24 +1,39 @@
 using System.Text.Json;
 using Flagon.Internal.Targeting;
 using Flagon.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace Flagon.Internal;
 
-/// <summary>A flag declared in code with <see cref="FlagonOptions.Define"/>.</summary>
-internal sealed record FlagDefinition(string Key, bool DefaultValue, string? Description, IReadOnlyList<string> Tags, JsonElement? Targeting = null);
+/// <summary>
+/// A flag declared in code with one of the <c>Define</c> overloads: its validated variants, default variant and their
+/// flag type, plus the metadata to sync.
+/// </summary>
+internal sealed record FlagDefinition(
+    string Key,
+    IReadOnlyDictionary<string, JsonElement> Variants,
+    string? DefaultVariant,
+    FlagType Type,
+    string? Description,
+    IReadOnlyList<string> Tags,
+    JsonElement? Targeting = null);
 
 /// <summary>
-/// Applies the flags declared with <see cref="FlagonOptions.Define"/> to the store: creates missing ones (source code)
+/// Applies the flags declared with <c>FlagonOptions.Define</c> to the store: creates missing ones (source code)
 /// and syncs metadata of existing ones without touching their state or targeting. Archived flags are never revived or changed.
 /// </summary>
-internal sealed class FlagSeeder(
+internal sealed partial class FlagSeeder(
     IFlagStore store,
     FlagonOptions options,
     FlagChangeStamper changes,
     FlagonInstrumentation instrumentation,
-    ITargetingCompiler compiler)
+    ITargetingCompiler compiler,
+    ILogger<FlagSeeder> logger)
 {
     private const int MaxConflictRetries = 5;
+
+    // Keys already warned about a type clash, so a seeding retry (after a store failure) does not repeat the warning.
+    private readonly HashSet<string> _typeClashesLogged = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Compiles every definition's targeting with the registered <see cref="ITargetingCompiler"/>, the one that will
@@ -70,7 +85,7 @@ internal sealed class FlagSeeder(
 
                 var created = await store.TryCreateAsync(
                     definition.Key,
-                    FlagDocument.Boolean(definition.DefaultValue, metadata) with { Targeting = definition.Targeting },
+                    new FlagDocument(FlagState.Enabled, definition.Variants, definition.DefaultVariant, metadata, definition.Targeting),
                     change,
                     cancellationToken).ConfigureAwait(false);
                 if (created is not null || attempt >= MaxConflictRetries)
@@ -81,7 +96,23 @@ internal sealed class FlagSeeder(
                 continue; // Created (or archived) concurrently: re-read and sync instead.
             }
 
-            if (current.Archived || IsInSync(current.Document.Metadata, definition))
+            if (current.Archived)
+            {
+                return;
+            }
+
+            // A code change never rewrites an admin's flag: a flag of another type is left as it is, metadata included.
+            if (current.Document.Type != definition.Type)
+            {
+                if (_typeClashesLogged.Add(definition.Key))
+                {
+                    LogTypeClash(logger, definition.Key, Describe(current.Document.Type), FlagVariants.Name(definition.Type));
+                }
+
+                return;
+            }
+
+            if (IsInSync(current.Document.Metadata, definition))
             {
                 return;
             }
@@ -106,6 +137,12 @@ internal sealed class FlagSeeder(
             }
         }
     }
+
+    private static string Describe(FlagType? type) => type is { } known ? FlagVariants.Name(known) : "untyped";
+
+    [LoggerMessage(EventId = 1106, Level = LogLevel.Warning,
+        Message = "Flag '{FlagKey}' is defined in code as a {DefinedType} flag but the existing flag is {ExistingType}; it was left unchanged. Change the definition or the flag so their types match.")]
+    private static partial void LogTypeClash(ILogger logger, string flagKey, string existingType, string definedType);
 
     private static bool IsInSync(FlagMetadata metadata, FlagDefinition definition) =>
         metadata.Source == FlagSource.Code
