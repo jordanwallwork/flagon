@@ -407,6 +407,15 @@ internal sealed class OpNode(Op op, Args args) : Node
     public override Value Eval(in Env env)
     {
         var isArray = args.Resolve(env, out var a);
+        if (args.Items is { } items)
+        {
+            // The Go engine evaluates every argument before the operator runs, so one it then ignores can still fail.
+            for (var i = Consumed(items.Length); i < items.Length; i++)
+            {
+                items[i].Eval(env);
+            }
+        }
+
         switch (op)
         {
             case Op.Eq or Op.Neq:
@@ -458,6 +467,18 @@ internal sealed class OpNode(Op op, Args args) : Node
                 throw new InvalidOperationException(op.ToString());
         }
     }
+
+    // How many leading arguments the operator itself reads.
+    private int Consumed(int count) => op switch
+    {
+        Op.Eq or Op.Neq or Op.StrictEq or Op.StrictNeq or Op.In or Op.Mod or Op.MissingSome => Math.Min(count, 2),
+        Op.Lt or Op.Le or Op.Gt or Op.Ge => count == 3 ? 3 : Math.Min(count, 2),
+        Op.Not or Op.NotNot => Math.Min(count, 1),
+        Op.Substr => count == 3 ? 3 : Math.Min(count, 2),
+        Op.StartsWith or Op.EndsWith => count == 2 ? 2 : 0,
+        Op.SemVer => count == 3 ? 3 : 0,
+        _ => count,
+    };
 
     private static void Require(bool condition)
     {
@@ -565,6 +586,7 @@ internal sealed class OpNode(Op op, Args args) : Node
     {
         var runes = Values.GoToString(a.Get(0, env)).EnumerateRunes().ToArray();
         var from = (int)Values.GoToNumber(a.Get(1, env));
+        var count = a.Count == 3 ? a.Get(2, env) : Value.Null;
         var length = runes.Length;
         if (from < 0)
         {
@@ -578,7 +600,7 @@ internal sealed class OpNode(Op op, Args args) : Node
 
         if (a.Count == 3)
         {
-            length = (int)Values.GoToNumber(a.Get(2, env));
+            length = (int)Values.GoToNumber(count);
         }
 
         var to = length < 0 ? runes.Length + length : from + length;

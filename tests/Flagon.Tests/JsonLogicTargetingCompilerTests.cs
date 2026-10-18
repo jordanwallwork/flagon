@@ -112,4 +112,135 @@ public class JsonLogicTargetingCompilerTests
 
         Assert.Equal(expected, Run(rule, "flag", context));
     }
+
+    // Verified against flagd core v0.19.0 (diegoholiveira/jsonlogic v3.9.1): inside map/filter/... an operator's data is
+    // the element, so fractional buckets on the element's targetingKey and $flagd.flagKey (empty when absent), and
+    // returns null when the element is not an object.
+    [Theory]
+    [InlineData("""{"map": [{"var": "members"}, {"fractional": [["on", 1]]}]}""", false, "[on,on,on,on]")]
+    [InlineData("""{"map": [{"var": "members"}, {"fractional": [["on", 1], ["off", 1]]}]}""", false, "[off,on,on,on]")]
+    [InlineData("""{"map": [{"var": "members"}, {"fractional": [["on", 1], ["off", 1]]}]}""", true, "[off,on,off,on]")]
+    [InlineData("""{"map": [["a"], {"fractional": ["x", ["on", 1]]}]}""", false, "[null]")]
+    public void Fractional_inside_an_iteration_buckets_on_the_element_as_flagd_does(string json, bool memberFlagKeys, string expected)
+    {
+        var rule = Compile("f", json);
+        var members = new List<object?>();
+        foreach (var key in new[] { "m1", "m2", "m3", "m4" })
+        {
+            var member = new Dictionary<string, object?> { ["targetingKey"] = key };
+            if (memberFlagKeys)
+            {
+                member["$flagd"] = new Dictionary<string, object?> { ["flagKey"] = "f" };
+            }
+
+            members.Add(member);
+        }
+
+        var context = new EvaluationContext(null, new Dictionary<string, object?> { ["members"] = members });
+
+        Assert.Equal(expected, Run(rule, "f", context));
+    }
+
+    [Fact]
+    public void Nested_fractionals_evaluate_each_variant_once()
+    {
+        var json = """{"var": "variant"}""";
+        for (var i = 0; i < 10; i++)
+        {
+            json = $$"""{"fractional": [[{{json}}, 1]]}""";
+        }
+
+        var attributes = new CountingAttributes(new Dictionary<string, object?> { ["variant"] = "on" });
+
+        Assert.Equal("on", Run(Compile("flag", json), "flag", new EvaluationContext("k", attributes)));
+        Assert.Equal(1, attributes.Lookups("variant"));
+    }
+
+    // flagd JSON-encodes the rule's result, and Go's encoder rejects NaN and infinities: PARSE_ERROR, not a variant name.
+    [Theory]
+    [InlineData("""{"/": [1, 0]}""")]
+    [InlineData("""{"%": [1, 0]}""")]
+    [InlineData("""{"map": [[1], {"/": [1, 0]}]}""")]
+    public void A_non_finite_result_is_an_evaluation_error(string json)
+    {
+        var rule = Compile("flag", json);
+
+        Assert.Throws<JsonLogicException>(() => Run(rule, "flag", new EvaluationContext("k", new Dictionary<string, object?>())));
+    }
+
+    [Fact]
+    public void A_non_finite_number_turned_into_a_string_is_a_variant_name()
+    {
+        Assert.Equal("+Inf", Run(Compile("flag", """{"cat": [{"/": [1, 0]}]}"""), "flag", new EvaluationContext("k", new Dictionary<string, object?>())));
+    }
+
+    // The Go engine evaluates every argument of an ordinary operator before running it, so an argument it then ignores
+    // still fails the rule; if/and/or are lazy.
+    [Theory]
+    [InlineData("""{"==": [1, 1, {"cat": [true]}]}""")]
+    [InlineData("""{"===": [1, 1, {"cat": [true]}]}""")]
+    [InlineData("""{"!": [true, {"cat": [true]}]}""")]
+    [InlineData("""{"<": [1, 2, 3, {"cat": [true]}]}""")]
+    [InlineData("""{"in": ["a", ["a"], {"cat": [true]}]}""")]
+    [InlineData("""{"substr": ["abc", 9, {"cat": [true]}]}""")]
+    [InlineData("""{"%": [3, 2, {"cat": [true]}]}""")]
+    [InlineData("""{"missing_some": [1, ["a"], {"cat": [true]}]}""")]
+    [InlineData("""{"starts_with": ["a", "a", {"cat": [true]}]}""")]
+    [InlineData("""{"sem_ver": ["1.0.0", "=", "1.0.0", {"cat": [true]}]}""")]
+    [InlineData("""{"fractional": [["on", 1], ["off", 1, {"cat": [true]}]]}""")]
+    [InlineData("""{"fractional": [["on", "bad"], {"cat": [true]}]}""")]
+    public void A_failing_argument_the_operator_ignores_still_fails_the_rule(string json)
+    {
+        var rule = Compile("flag", json);
+
+        Assert.Throws<JsonLogicException>(() => Run(rule, "flag", new EvaluationContext("k", new Dictionary<string, object?>())));
+    }
+
+    [Theory]
+    [InlineData("""{"if": [true, "on", {"cat": [true]}]}""", "on")]
+    [InlineData("""{"and": [false, {"cat": [true]}]}""", "false")]
+    public void A_failing_branch_that_if_and_or_skip_does_not_fail_the_rule(string json, string expected)
+    {
+        Assert.Equal(expected, Run(Compile("flag", json), "flag", new EvaluationContext("k", new Dictionary<string, object?>())));
+    }
+
+    // flagd formats a numeric version with Go's %v, which switches to an exponent from 1e6 ("v1e+06" is not a version).
+    [Theory]
+    [InlineData(999999.0, "999999.0.0", "on")]
+    [InlineData(1000000.0, "1000000.0.0", "off")]
+    [InlineData(1.5, "1.5.0", "on")]
+    public void Sem_ver_reads_a_numeric_version_as_go_formats_it(double version, string target, string expected)
+    {
+        var rule = Compile("flag", $$"""{"if": [{"sem_ver": [{"var": "v"}, "=", "{{target}}"]}, "on", "off"]}""");
+
+        Assert.Equal(expected, Run(rule, "flag", new EvaluationContext("k", new Dictionary<string, object?> { ["v"] = version })));
+    }
+}
+
+/// <summary>Attributes that count how often each one is read, to observe how many times a rule evaluates a <c>var</c>.</summary>
+internal sealed class CountingAttributes(IReadOnlyDictionary<string, object?> inner) : IReadOnlyDictionary<string, object?>
+{
+    private readonly Dictionary<string, int> _lookups = new(StringComparer.Ordinal);
+
+    public int Lookups(string key) => _lookups.GetValueOrDefault(key);
+
+    public bool TryGetValue(string key, out object? value)
+    {
+        _lookups[key] = Lookups(key) + 1;
+        return inner.TryGetValue(key, out value);
+    }
+
+    public object? this[string key] => TryGetValue(key, out var value) ? value : throw new KeyNotFoundException(key);
+
+    public IEnumerable<string> Keys => inner.Keys;
+
+    public IEnumerable<object?> Values => inner.Values;
+
+    public int Count => inner.Count;
+
+    public bool ContainsKey(string key) => TryGetValue(key, out _);
+
+    public IEnumerator<KeyValuePair<string, object?>> GetEnumerator() => inner.GetEnumerator();
+
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 }

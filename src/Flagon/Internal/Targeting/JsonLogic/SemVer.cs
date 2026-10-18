@@ -35,7 +35,7 @@ internal static class SemVer
         var s = v.Kind switch
         {
             Kind.String => v.AsString,
-            Kind.Number => Math.Abs(v.Number) is var abs && abs != 0 && (abs < 1e-4 || abs >= 1e21) ? Values.FormatJson(v.Number) : Values.FormatPlain(v.Number),
+            Kind.Number => Values.FormatGo(v.Number),
             Kind.Bool => v.AsBool ? "true" : "false",
             Kind.Null => "<nil>",
             _ => "<object>",

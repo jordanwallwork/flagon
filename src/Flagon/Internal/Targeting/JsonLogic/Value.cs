@@ -427,6 +427,29 @@ internal static class Values
     }
 
     /// <summary>Go encoding/json's float format: plain, or 'e' notation below 1e-6 / from 1e21 (e.g. <c>1e+21</c>, <c>1e-7</c>).</summary>
+    /// <summary>
+    /// Go's <c>fmt</c> <c>%v</c> for a float64 (<c>%g</c>, shortest digits): an exponent when the decimal exponent is
+    /// below -4 or at least 6 (so 1e6 is <c>1e+06</c>), at least two exponent digits; <c>+Inf</c>, <c>-Inf</c>, <c>NaN</c>.
+    /// </summary>
+    public static string FormatGo(double d)
+    {
+        if (!double.IsFinite(d) || d == 0)
+        {
+            return FormatPlain(d);
+        }
+
+        var (negative, digits, exponent) = Decompose(d);
+        var e = exponent - 1;
+        if (e >= -4 && e < 6)
+        {
+            return FormatPlain(d);
+        }
+
+        var mantissa = digits.Length == 1 ? digits : digits[..1] + "." + digits[1..];
+        var exp = (e < 0 ? "-" : "+") + Math.Abs(e).ToString("00", CultureInfo.InvariantCulture);
+        return (negative ? "-" : string.Empty) + mantissa + "e" + exp;
+    }
+
     public static string FormatJson(double d)
     {
         var abs = Math.Abs(d);
@@ -472,15 +495,21 @@ internal static class Values
         return (double.IsNegative(d), all, pointPos);
     }
 
-    /// <summary>The JSON text Go's encoder writes for a value (sorted keys, HTML-escaped strings).</summary>
-    public static string ToJson(Value v)
+    /// <summary>
+    /// The JSON text Go's encoder writes for a value (sorted keys, HTML-escaped strings). Go's encoder fails on NaN and
+    /// infinities: <paramref name="strict"/> throws for them, otherwise they are written as Go's <c>%v</c> spells them.
+    /// </summary>
+    public static string ToJson(Value v, bool strict = false)
     {
         var sb = new StringBuilder();
-        WriteJson(sb, v);
+        WriteJson(sb, v, strict);
         return sb.ToString();
     }
 
-    private static void WriteJson(StringBuilder sb, Value v)
+    /// <summary>The error Go's JSON encoder reports for a NaN or infinite number.</summary>
+    public static JsonLogicException UnsupportedJson(double d) => new($"json: unsupported value: {FormatPlain(d)}");
+
+    private static void WriteJson(StringBuilder sb, Value v, bool strict)
     {
         switch (v.Kind)
         {
@@ -491,7 +520,7 @@ internal static class Values
                 sb.Append(v.AsBool ? "true" : "false");
                 break;
             case Kind.Number:
-                sb.Append(FormatJson(v.Number));
+                sb.Append(double.IsFinite(v.Number) ? FormatJson(v.Number) : strict ? throw UnsupportedJson(v.Number) : FormatPlain(v.Number));
                 break;
             case Kind.String:
                 WriteJsonString(sb, v.AsString);
@@ -505,7 +534,7 @@ internal static class Values
                         sb.Append(',');
                     }
 
-                    WriteJson(sb, Item(v, i));
+                    WriteJson(sb, Item(v, i), strict);
                 }
 
                 sb.Append(']');
@@ -523,7 +552,7 @@ internal static class Values
                     first = false;
                     WriteJsonString(sb, k);
                     sb.Append(':');
-                    WriteJson(sb, item);
+                    WriteJson(sb, item, strict);
                 }
 
                 sb.Append('}');

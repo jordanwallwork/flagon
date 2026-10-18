@@ -32,15 +32,16 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
 
     /// <summary>
     /// flagd's result-to-variant mapping: JSON-encode the result, then strip every <c>"</c>. Null means no match;
-    /// <c>true</c> names the variant "true"; numbers use Go's JSON format.
+    /// <c>true</c> names the variant "true"; numbers use Go's JSON format. Go's encoder rejects NaN and infinities, which
+    /// flagd reports as PARSE_ERROR, so they throw.
     /// </summary>
     internal static string? ToVariant(Value v) => v.Kind switch
     {
         Kind.Null => null,
         Kind.String => NeedsEscaping(v.AsString) ? Strip(Escape(v.AsString)) : v.AsString,
         Kind.Bool => v.AsBool ? "true" : "false",
-        Kind.Number => Values.FormatJson(v.Number),
-        _ => Values.ToJson(v).Replace("\"", string.Empty, StringComparison.Ordinal),
+        Kind.Number => double.IsFinite(v.Number) ? Values.FormatJson(v.Number) : throw Values.UnsupportedJson(v.Number),
+        _ => Values.ToJson(v, strict: true).Replace("\"", string.Empty, StringComparison.Ordinal),
     };
 
     private static bool NeedsEscaping(string s)

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
@@ -7,11 +8,16 @@ namespace Flagon.Internal.Targeting.JsonLogic;
 /// <summary>
 /// flagd <c>fractional</c>, bucketing generation v3 (flagd 0.18, <c>core/pkg/evaluator/fractional.go</c>): murmur3 x86
 /// 32-bit (seed 0) over the deterministic CBOR encoding of the bucketing value (explicit first argument, else
-/// <c>[flagKey, targetingKey]</c>), bucket <c>(hash * totalWeight) &gt;&gt; 32</c>. Every error yields null (DEFAULT).
+/// <c>[flagKey, targetingKey]</c> read from the current data), bucket <c>(hash * totalWeight) &gt;&gt; 32</c>. Every
+/// error yields null (DEFAULT).
 /// </summary>
 internal sealed class FractionalNode(Args args) : Node
 {
-    private const int StackWeights = 64;
+    private const int StackShapes = 64;
+
+    // How one argument evaluated: not an array (only valid first, as the bucketing value), an empty array (invalid),
+    // or a [variant] / [variant, weight, ...] distribution.
+    private const byte NotArray = 0, Empty = 1, NoWeight = 2, HasWeight = 3;
 
     public override Value Eval(in Env env)
     {
@@ -20,30 +26,42 @@ internal sealed class FractionalNode(Args args) : Node
             return Value.Null;
         }
 
-        // A non-array first element is the explicit bucketing value; an array one is already a distribution.
-        var input = Value.Null;
-        var start = 0;
-        if (args.Items is not { } items || !IsArrayShaped(items[0]))
+        // As the Go engine, every argument is evaluated once, up front: [variant, weight] per argument.
+        var count = list.Count;
+        var slots = ArrayPool<Value>.Shared.Rent(count * 2);
+        try
         {
-            input = list.Get(0, env);
-            start = input.Kind == Kind.Array ? 0 : 1;
-        }
+            Span<byte> shapes = count <= StackShapes ? stackalloc byte[count] : new byte[count];
+            for (var i = 0; i < count; i++)
+            {
+                shapes[i] = Read(list, i, env, out slots[i * 2], out slots[(i * 2) + 1]);
+            }
 
-        var count = list.Count - start;
-        Span<int> weights = count <= StackWeights ? stackalloc int[count] : new int[count];
-        long total = 0;
-        for (var i = 0; i < count; i++)
+            return Select(env, slots, shapes);
+        }
+        finally
         {
-            if (!TryDistribution(list, start + i, env, out _, out var weight))
+            ArrayPool<Value>.Shared.Return(slots, clearArray: true);
+        }
+    }
+
+    private static Value Select(in Env env, Value[] slots, ReadOnlySpan<byte> shapes)
+    {
+        // A non-array first argument is the explicit bucketing value; an array one is already a distribution.
+        var start = shapes[0] == NotArray ? 1 : 0;
+        long total = 0;
+        for (var i = start; i < shapes.Length; i++)
+        {
+            if (!TryWeight(slots, shapes, i, out var weight))
             {
                 return Value.Null;
             }
 
-            weights[i] = weight;
             total += weight;
         }
 
-        if (total > int.MaxValue)
+        // flagd hands the operator the current data (an element inside map/filter/...), which must be an object.
+        if (total > int.MaxValue || env.Data.Kind != Kind.Object)
         {
             return Value.Null;
         }
@@ -51,22 +69,22 @@ internal sealed class FractionalNode(Args args) : Node
         uint hash;
         if (start == 1)
         {
-            if (input.IsNull)
+            if (slots[0].IsNull)
             {
                 return Value.Null;
             }
 
-            hash = Cbor.Hash(input);
+            hash = Cbor.Hash(slots[0]);
         }
         else
         {
-            if (!Values.TryGetMember(env.Context, Value.Root, TargetingContext.TargetingKeyName, out var key)
+            if (!Values.TryGetMember(env.Context, env.Data, TargetingContext.TargetingKeyName, out var key)
                 || key.Kind != Kind.String || key.AsString.Length == 0)
             {
                 return Value.Null;
             }
 
-            hash = Cbor.HashPair(env.Context.FlagKey, key.AsString);
+            hash = Cbor.HashPair(FlagKey(env), key.AsString);
         }
 
         if (total == 0)
@@ -76,61 +94,80 @@ internal sealed class FractionalNode(Args args) : Node
 
         var bucket = ((ulong)hash * (ulong)total) >> 32;
         ulong rangeEnd = 0;
-        for (var i = 0; i < count; i++)
+        for (var i = start; i < shapes.Length; i++)
         {
-            rangeEnd += (ulong)weights[i];
+            TryWeight(slots, shapes, i, out var weight);
+            rangeEnd += (ulong)weight;
             if (bucket < rangeEnd)
             {
-                TryDistribution(list, start + i, env, out var variant, out _);
-                return variant;
+                return slots[i * 2];
             }
         }
 
         return Value.Null;
     }
 
-    private static bool IsArrayShaped(Node node) => node is ArrayNode || node is ConstNode { Value.Kind: Kind.Array };
+    // Evaluates argument i (every element of an array literal, even past the weight) into its variant and weight.
+    private byte Read(ArgList list, int index, in Env env, out Value variant, out Value weight)
+    {
+        variant = Value.Null;
+        weight = Value.Null;
+        if (args.Items?[index] is ArrayNode element)
+        {
+            var items = element.Items;
+            for (var j = 0; j < items.Length; j++)
+            {
+                var v = items[j].Eval(env);
+                if (j == 0)
+                {
+                    variant = v;
+                }
+                else if (j == 1)
+                {
+                    weight = v;
+                }
+            }
+
+            return items.Length switch { 0 => Empty, 1 => NoWeight, _ => HasWeight };
+        }
+
+        var value = list.Get(index, env);
+        if (value.Kind != Kind.Array)
+        {
+            variant = value;
+            return NotArray;
+        }
+
+        var n = Values.Count(value);
+        if (n == 0)
+        {
+            return Empty;
+        }
+
+        variant = Values.Item(value, 0);
+        if (n == 1)
+        {
+            return NoWeight;
+        }
+
+        weight = Values.Item(value, 1);
+        return HasWeight;
+    }
 
     // One [variant, weight?] element: variant a string/bool/number/null; weight absent or null = 1, else a whole number
     // up to int.MaxValue, negatives clamped to 0.
-    private bool TryDistribution(ArgList list, int index, in Env env, out Value variant, out int weight)
+    private static bool TryWeight(Value[] slots, ReadOnlySpan<byte> shapes, int index, out int weight)
     {
-        Value rawWeight;
-        bool hasWeight;
-        variant = Value.Null;
         weight = 0;
-        if (args.Items?[index] is ArrayNode element)
-        {
-            if (element.Items.Length == 0)
-            {
-                return false;
-            }
-
-            variant = element.Items[0].Eval(env);
-            hasWeight = element.Items.Length >= 2;
-            rawWeight = hasWeight ? element.Items[1].Eval(env) : Value.Null;
-        }
-        else
-        {
-            var value = list.Get(index, env);
-            var n = value.Kind == Kind.Array ? Values.Count(value) : 0;
-            if (n == 0)
-            {
-                return false;
-            }
-
-            variant = Values.Item(value, 0);
-            hasWeight = n >= 2;
-            rawWeight = hasWeight ? Values.Item(value, 1) : Value.Null;
-        }
-
-        if (variant.Kind is Kind.Array or Kind.Object)
+        var shape = shapes[index];
+        if (shape is NotArray or Empty || slots[index * 2].Kind is Kind.Array or Kind.Object)
         {
             return false;
         }
 
         long w = 1;
-        if (hasWeight && !rawWeight.IsNull)
+        var rawWeight = slots[(index * 2) + 1];
+        if (shape == HasWeight && !rawWeight.IsNull)
         {
             if (rawWeight.Kind != Kind.Number)
             {
@@ -147,6 +184,30 @@ internal sealed class FractionalNode(Args args) : Node
 
         weight = (int)Math.Max(0, w);
         return true;
+    }
+
+    // The flag key flagd buckets on: from the data's $flagd (absent, as in an iterated element, is ""). flagd reads it
+    // by JSON-decoding $flagd into {flagKey string, timestamp int64}, so a mistyped member empties both.
+    private static string FlagKey(in Env env)
+    {
+        if (env.Data.Ref is Value.RootMarker)
+        {
+            return env.Context.FlagKey;
+        }
+
+        if (!Values.TryGetMember(env.Context, env.Data, "$flagd", out var flagd) || flagd.Kind != Kind.Object)
+        {
+            return string.Empty;
+        }
+
+        if (Values.TryGetMember(env.Context, flagd, "timestamp", out var timestamp) && !timestamp.IsNull
+            && (timestamp.Kind != Kind.Number || timestamp.Number != Math.Truncate(timestamp.Number)
+                || timestamp.Number < long.MinValue || timestamp.Number >= 9223372036854775808.0))
+        {
+            return string.Empty;
+        }
+
+        return Values.TryGetMember(env.Context, flagd, "flagKey", out var key) && key.Kind == Kind.String ? key.AsString : string.Empty;
     }
 }
 
