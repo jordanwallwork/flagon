@@ -28,12 +28,21 @@ public sealed class TestFlags
     private readonly IFlagStore _store;
     private readonly FlagSnapshotManager _snapshots;
     private readonly ITargetingCompiler _compiler;
+    private readonly FlagSeeder _seeder;
+    private readonly FlagonTestingSwitches _switches;
 
-    internal TestFlags(IFlagStore store, FlagSnapshotManager snapshots, ITargetingCompiler compiler)
+    internal TestFlags(
+        IFlagStore store,
+        FlagSnapshotManager snapshots,
+        ITargetingCompiler compiler,
+        FlagSeeder seeder,
+        FlagonTestingSwitches switches)
     {
         _store = store;
         _snapshots = snapshots;
         _compiler = compiler;
+        _seeder = seeder;
+        _switches = switches;
     }
 
     /// <summary>Sets <paramref name="key"/> to an enabled boolean flag (<c>on</c>/<c>off</c> variants) serving <paramref name="value"/>.</summary>
@@ -302,6 +311,26 @@ public sealed class TestFlags
             }
         }
     }
+
+    /// <summary>
+    /// Returns to the starting state: every flag is removed and, when <see cref="FlagonTestingSwitches.SeedDefinitions"/>
+    /// is on, the flags declared with <c>Define</c> are seeded again. The next evaluation sees the reset state. Use it
+    /// between tests that share one flagon or host.
+    /// </summary>
+    /// <returns>This instance, for chaining.</returns>
+    public TestFlags Reset() => Run(async () =>
+    {
+        // Flags are purged in place rather than the store replaced, so its change version keeps rising and the snapshot reloads.
+        foreach (var flag in await _store.LoadAllAsync().ConfigureAwait(false))
+        {
+            await RemoveAsync(flag.Key).ConfigureAwait(false);
+        }
+
+        if (_switches.SeedDefinitions)
+        {
+            await _seeder.SeedAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+    });
 
     /// <summary>Archives <paramref name="current"/>, or returns null when a concurrent write got there first.</summary>
     private async Task<FlagRecord?> TryArchiveAsync(FlagRecord current)

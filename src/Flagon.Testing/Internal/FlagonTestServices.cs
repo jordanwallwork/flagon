@@ -24,6 +24,8 @@ internal static class FlagonTestServices
         services.AddSingleton(sp => new TestFlags(
             sp.GetRequiredService<IFlagStore>(),
             sp.GetRequiredService<FlagSnapshotManager>(),
-            sp.GetRequiredService<ITargetingCompiler>()));
+            sp.GetRequiredService<ITargetingCompiler>(),
+            sp.GetRequiredService<FlagSeeder>(),
+            switches));
     }
 }
