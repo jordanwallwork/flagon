@@ -150,3 +150,4 @@ fieldset.variants-editor legend { font-weight: 600; padding: 0 .3rem; }
 fieldset.variants-editor p { margin: 0; }
 .variant-row { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 2fr) auto; gap: .4rem; align-items: start; }
 .variant-rows:empty { display: none; }
+.inline-form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
