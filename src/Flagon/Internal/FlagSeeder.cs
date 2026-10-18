@@ -4,11 +4,21 @@ using Flagon.Storage;
 
 namespace Flagon.Internal;
 
-/// <summary>A flag declared in code with <see cref="FlagonOptions.Define"/>.</summary>
-internal sealed record FlagDefinition(string Key, bool DefaultValue, string? Description, IReadOnlyList<string> Tags, JsonElement? Targeting = null);
+/// <summary>
+/// A flag declared in code with one of the <c>Define</c> overloads: its validated variants, default variant and their
+/// flag type, plus the metadata to sync.
+/// </summary>
+internal sealed record FlagDefinition(
+    string Key,
+    IReadOnlyDictionary<string, JsonElement> Variants,
+    string? DefaultVariant,
+    FlagType Type,
+    string? Description,
+    IReadOnlyList<string> Tags,
+    JsonElement? Targeting = null);
 
 /// <summary>
-/// Applies the flags declared with <see cref="FlagonOptions.Define"/> to the store: creates missing ones (source code)
+/// Applies the flags declared with <c>FlagonOptions.Define</c> to the store: creates missing ones (source code)
 /// and syncs metadata of existing ones without touching their state or targeting. Archived flags are never revived or changed.
 /// </summary>
 internal sealed class FlagSeeder(
@@ -70,7 +80,7 @@ internal sealed class FlagSeeder(
 
                 var created = await store.TryCreateAsync(
                     definition.Key,
-                    FlagDocument.Boolean(definition.DefaultValue, metadata) with { Targeting = definition.Targeting },
+                    new FlagDocument(FlagState.Enabled, definition.Variants, definition.DefaultVariant, metadata, definition.Targeting),
                     change,
                     cancellationToken).ConfigureAwait(false);
                 if (created is not null || attempt >= MaxConflictRetries)
