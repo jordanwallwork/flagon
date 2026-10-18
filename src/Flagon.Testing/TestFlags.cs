@@ -209,6 +209,116 @@ public sealed class TestFlags
         return Update(key, document => document with { Targeting = rule });
     }
 
+    /// <summary>
+    /// Sets <paramref name="key"/> to an enabled boolean flag that is on only for the listed targeting keys
+    /// (<see cref="EvaluationContext.TargetingKey"/>) and off for everyone else, including evaluations with no context.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <param name="targetingKeys">The targeting keys the flag is on for; none means off for everyone.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key.</exception>
+    public TestFlags EnableFor(string key, params string[] targetingKeys)
+    {
+        ArgumentNullException.ThrowIfNull(targetingKeys);
+        foreach (var targetingKey in targetingKeys)
+        {
+            ArgumentNullException.ThrowIfNull(targetingKey, nameof(targetingKeys));
+        }
+
+        var rule = $$"""{"if":[{"in":[{"var":"targetingKey"},{{JsonSerializer.Serialize(targetingKeys)}}]},"{{FlagDocument.OnVariant}}",null]}""";
+        return SetFlag(key, false, rule);
+    }
+
+    /// <summary>
+    /// Sets the existing flag <paramref name="key"/>, of any type, to <see cref="FlagState.Disabled"/>: evaluation serves
+    /// the caller's default with reason <see cref="EvaluationReason.Disabled"/>. An archived flag is restored.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagNotFoundException">There is no flag <paramref name="key"/>.</exception>
+    public TestFlags Disable(string key) => Update(key, document => document with { State = FlagState.Disabled });
+
+    /// <summary>
+    /// Sets the existing flag <paramref name="key"/>, of any type, to <see cref="FlagState.Enabled"/>, keeping its
+    /// variants, default variant and targeting. An archived flag is restored.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagNotFoundException">There is no flag <paramref name="key"/>.</exception>
+    public TestFlags Enable(string key) => Update(key, document => document with { State = FlagState.Enabled });
+
+    /// <summary>
+    /// Archives the existing flag <paramref name="key"/>: evaluation serves the caller's default with reason
+    /// <see cref="EvaluationReason.Archived"/>. Archiving an archived flag does nothing; any <c>SetFlag</c> restores it.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagNotFoundException">There is no flag <paramref name="key"/>.</exception>
+    public TestFlags Archive(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return Run(async () =>
+        {
+            while (true)
+            {
+                var current = await _store.GetAsync(key).ConfigureAwait(false) ?? throw new FlagNotFoundException(key);
+                if (current.Archived || await TryArchiveAsync(current).ConfigureAwait(false) is not null)
+                {
+                    return;
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// Removes the flag <paramref name="key"/> entirely (purges it, in any state): evaluation serves the caller's default
+    /// with error <see cref="ErrorCode.FlagNotFound"/>. Removing a flag that does not exist does nothing.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <returns>This instance, for chaining.</returns>
+    public TestFlags Remove(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return Run(() => RemoveAsync(key));
+    }
+
+    private async Task RemoveAsync(string key)
+    {
+        while (await _store.GetAsync(key).ConfigureAwait(false) is { } current)
+        {
+            try
+            {
+                // The store purges only an archived flag.
+                if (!current.Archived)
+                {
+                    current = await _store.ArchiveAsync(key, current.Version).ConfigureAwait(false);
+                }
+
+                await _store.PurgeAsync(key, current.Version).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (IsLostRace(ex))
+            {
+            }
+        }
+    }
+
+    /// <summary>Archives <paramref name="current"/>, or returns null when a concurrent write got there first.</summary>
+    private async Task<FlagRecord?> TryArchiveAsync(FlagRecord current)
+    {
+        try
+        {
+            return await _store.ArchiveAsync(current.Key, current.Version).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsLostRace(ex))
+        {
+            return null;
+        }
+    }
+
+    // A concurrent write to the same key (another task, or the app's own admin write) moved or removed the flag: re-read and retry.
+    private static bool IsLostRace(Exception ex) => ex is FlagVersionConflictException or FlagNotFoundException;
+
     // Production rejects a single value that is not an object only on the typed getter; an object setter checks it here.
     private static JsonElement RequireObject(string key, JsonElement value, string method) =>
         value.ValueKind == JsonValueKind.Object
@@ -289,7 +399,7 @@ public sealed class TestFlags
             await _store.UpdateAsync(key, document, current.Version).ConfigureAwait(false);
             return true;
         }
-        catch (Exception ex) when (ex is FlagVersionConflictException or FlagNotFoundException)
+        catch (Exception ex) when (IsLostRace(ex))
         {
             return false;
         }
