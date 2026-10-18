@@ -100,19 +100,12 @@ public sealed class TestFlagon : IFlagon, IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// The hosted service's startup without its refresh loop: validate definitions, seed, load. The auto-creator runs
-    /// only when switched on.
+    /// The hosted service's startup (<see cref="FlagonStartup"/>) without its refresh loop: validate definitions, seed,
+    /// load; fail-fast is always on here. The auto-creator runs only when switched on.
     /// </summary>
     private static async Task Start(IServiceProvider services, FlagonTestingSwitches switches)
     {
-        var seeder = services.GetRequiredService<FlagSeeder>();
-        seeder.ValidateDefinitions();
-        if (switches.SeedDefinitions)
-        {
-            await seeder.SeedAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-
-        await services.GetRequiredService<FlagSnapshotManager>().RefreshAsync().ConfigureAwait(false);
+        await services.GetRequiredService<FlagonStartup>().RunAsync(CancellationToken.None).ConfigureAwait(false);
 
         if (switches.AutoCreate)
         {
