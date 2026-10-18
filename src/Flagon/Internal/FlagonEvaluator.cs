@@ -27,16 +27,7 @@ internal sealed partial class FlagonEvaluator(
 
     public FlagEvaluationDetails<bool> GetBooleanDetails(string key, bool defaultValue = false, EvaluationContext? context = null)
     {
-        usage.Record(key, defaultValue);
-        var details = Evaluate(key, context ?? ambientContext.Current).AsBoolean(defaultValue);
-        if (details.ErrorCode == ErrorCode.FlagNotFound)
-        {
-            WarnMissingOnce(details.FlagKey);
-            autoCreator.Enqueue(details.FlagKey, defaultValue);
-        }
-
-        instrumentation.RecordEvaluation(details);
-        return details;
+        return Tracked(key, CallerDefault.Of(defaultValue), Evaluate(key, context ?? ambientContext.Current).AsBoolean(defaultValue));
     }
 
     public string GetString(string key, string defaultValue, EvaluationContext? context = null) =>
@@ -46,7 +37,7 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(GetString(key, defaultValue, context));
 
     public FlagEvaluationDetails<string> GetStringDetails(string key, string defaultValue, EvaluationContext? context = null) =>
-        Typed(Evaluate(key, context ?? ambientContext.Current).AsString(defaultValue));
+        Tracked(key, CallerDefault.Of(defaultValue), Evaluate(key, context ?? ambientContext.Current).AsString(defaultValue));
 
     public ValueTask<FlagEvaluationDetails<string>> GetStringDetailsAsync(string key, string defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetStringDetails(key, defaultValue, context));
@@ -58,7 +49,7 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(GetInt(key, defaultValue, context));
 
     public FlagEvaluationDetails<int> GetIntDetails(string key, int defaultValue, EvaluationContext? context = null) =>
-        Typed(Evaluate(key, context ?? ambientContext.Current).AsInt(defaultValue));
+        Tracked(key, CallerDefault.Of(defaultValue), Evaluate(key, context ?? ambientContext.Current).AsInt(defaultValue));
 
     public ValueTask<FlagEvaluationDetails<int>> GetIntDetailsAsync(string key, int defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetIntDetails(key, defaultValue, context));
@@ -70,7 +61,7 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(GetDouble(key, defaultValue, context));
 
     public FlagEvaluationDetails<double> GetDoubleDetails(string key, double defaultValue, EvaluationContext? context = null) =>
-        Typed(Evaluate(key, context ?? ambientContext.Current).AsDouble(defaultValue));
+        Tracked(key, CallerDefault.Of(defaultValue), Evaluate(key, context ?? ambientContext.Current).AsDouble(defaultValue));
 
     public ValueTask<FlagEvaluationDetails<double>> GetDoubleDetailsAsync(string key, double defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetDoubleDetails(key, defaultValue, context));
@@ -82,20 +73,23 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(GetObject(key, defaultValue, context, options));
 
     public FlagEvaluationDetails<T> GetObjectDetails<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null) =>
-        Typed(Evaluate(key, context ?? ambientContext.Current).AsObject(defaultValue, options));
+        Tracked(key, CallerDefault.Of(defaultValue, options), Evaluate(key, context ?? ambientContext.Current).AsObject(defaultValue, options));
 
     public ValueTask<FlagEvaluationDetails<T>> GetObjectDetailsAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetObjectDetails(key, defaultValue, context, options));
 
     /// <summary>
-    /// The side effects of a typed (non-boolean) getter: the missing-key warning and the evaluation metric. Usage tracking
-    /// and auto-create stay boolean-only for now.
+    /// The side effects of evaluating <paramref name="key"/> in this app's code, shared by every getter: usage is recorded
+    /// with the caller's default (also on <see cref="ErrorCode.TypeMismatch"/>), and a missing key is warned about once
+    /// and queued for auto-create as a flag of the default's type. Then the evaluation metric.
     /// </summary>
-    private FlagEvaluationDetails<T> Typed<T>(FlagEvaluationDetails<T> details)
+    private FlagEvaluationDetails<T> Tracked<T>(string key, in CallerDefault callerDefault, FlagEvaluationDetails<T> details)
     {
+        usage.Record(key, callerDefault);
         if (details.ErrorCode == ErrorCode.FlagNotFound)
         {
             WarnMissingOnce(details.FlagKey);
+            autoCreator.Enqueue(details.FlagKey, callerDefault);
         }
 
         instrumentation.RecordEvaluation(details);

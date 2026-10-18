@@ -223,4 +223,164 @@ public class AutoCreateTests
             return await store.Inner.GetAsync("flaky") is not null;
         }, "a later evaluation retries the create");
     }
+
+    [Fact]
+    public async Task A_boolean_default_auto_creates_an_on_off_flag()
+    {
+        await using var host = await StartAsync();
+
+        host.Flagon.IsEnabled("new-thing", true);
+        await host.StopAsync();
+
+        var flag = (await host.Store.GetAsync("new-thing"))!;
+        Assert.Equal(["off", "on"], flag.Document.Variants.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal("on", flag.Document.DefaultVariant);
+    }
+
+    private sealed record Layout(int Columns, string Title);
+
+    public static TheoryData<string, FlagType, string> TypedDefaults => new()
+    {
+        { "string", FlagType.String, "\"dark\"" },
+        { "int", FlagType.Number, "25" },
+        { "double", FlagType.Number, "0.5" },
+        { "object", FlagType.Object, """{"columns":3,"title":"Pics"}""" },
+    };
+
+    private static void EvaluateTyped(IFlagon flagon, string getter, string key)
+    {
+        _ = getter switch
+        {
+            "string" => (object)flagon.GetString(key, "dark"),
+            "int" => flagon.GetInt(key, 25),
+            "double" => flagon.GetDouble(key, 0.5),
+            _ => flagon.GetObject(key, new Layout(3, "Pics"), options: new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)),
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(TypedDefaults))]
+    public async Task A_typed_default_auto_creates_a_flag_of_its_type_serving_it(string getter, FlagType type, string json)
+    {
+        await using var host = await StartAsync();
+
+        EvaluateTyped(host.Flagon, getter, "new-thing");
+        await host.StopAsync();
+
+        var flag = (await host.Store.GetAsync("new-thing"))!;
+        Assert.Equal(type, flag.Document.Type);
+        Assert.Equal(FlagState.Enabled, flag.Document.State);
+        Assert.Equal("default", flag.Document.DefaultVariant);
+        Assert.Equal(json, Assert.Single(flag.Document.Variants, v => v.Key == "default").Value.GetRawText());
+        Assert.Single(flag.Document.Variants);
+        Assert.Null(flag.Document.Targeting);
+        Assert.Equal(FlagSource.Auto, flag.Document.Metadata.Source);
+    }
+
+    [Fact]
+    public async Task An_auto_created_typed_flag_is_then_served_to_this_app()
+    {
+        await using var host = await StartAsync();
+
+        Assert.Equal("dark", host.Flagon.GetString("theme", "dark"));
+
+        await FlagonTestHost.EventuallyAsync(
+            () => Task.FromResult(host.Flagon.GetStringDetails("theme", "light") is { Value: "dark", Variant: "default", Reason: EvaluationReason.Static }),
+            "the auto-created flag serves the first caller's default");
+    }
+
+    [Theory]
+    [InlineData("null string")]
+    [InlineData("array")]
+    public async Task A_default_with_no_flag_type_auto_creates_nothing(string kind)
+    {
+        var store = OutageFlagStore.Wrap();
+        await using var host = await StartAsync(o => o.Store = store.Store);
+
+        if (kind == "array")
+        {
+            host.Flagon.GetObject("listy", new[] { 1, 2 });
+        }
+        else
+        {
+            host.Flagon.GetString("nully", null!);
+        }
+
+        await host.StopAsync();
+
+        Assert.Equal(0, store.CallCount(nameof(IFlagStore.TryCreateAsync)));
+        Assert.DoesNotContain(host.Logs.Entries, l => l.Level >= LogLevel.Warning && l.EventId.Id != 1001);
+    }
+
+    [Fact]
+    public async Task A_type_mismatch_never_auto_creates()
+    {
+        var store = OutageFlagStore.Wrap();
+        await store.Inner.TryCreateAsync("checkout", FlagDocument.Boolean(true, new FlagMetadata()));
+        await using var host = await StartAsync(o => o.Store = store.Store);
+
+        Assert.Equal(ErrorCode.TypeMismatch, host.Flagon.GetIntDetails("checkout", 3).ErrorCode);
+        await host.StopAsync();
+
+        Assert.Equal(0, store.CallCount(nameof(IFlagStore.TryCreateAsync)));
+    }
+
+    [Fact]
+    public async Task An_archived_key_is_not_auto_created_again_by_a_typed_getter()
+    {
+        var store = OutageFlagStore.Wrap();
+        await using var host = await StartAsync(o => o.Store = store.Store);
+        // Another app creates and archives the key; this app has not refreshed yet, so it looks missing here.
+        var created = await store.Inner.TryCreateAsync("retired", FlagDocument.Boolean(true, new FlagMetadata()));
+        await store.Inner.ArchiveAsync("retired", created!.Version);
+
+        Assert.Equal("fallback", host.Flagon.GetString("retired", "fallback"));
+        await host.StopAsync();
+
+        var flag = await store.Inner.GetAsync("retired");
+        Assert.True(flag!.Archived);
+        Assert.Equal(FlagType.Boolean, flag.Document.Type);
+        Assert.Empty(await store.Inner.GetAuditAsync("retired"));
+    }
+
+    [Fact]
+    public async Task Two_apps_racing_with_different_types_create_one_flag_and_the_loser_gets_a_type_mismatch()
+    {
+        var store = new InMemoryFlagStore();
+        var time = new FakeTimeProvider(FlagonTestHost.Epoch);
+        await using var web = await StartAsync(o => { o.Store = store; o.Time = time; o.ApplicationName = "Web"; });
+        await using var worker = await StartAsync(o => { o.Store = store; o.Time = time; o.ApplicationName = "Worker"; });
+
+        using (var go = new Barrier(2))
+        {
+            await Task.WhenAll(
+                Task.Run(() => { go.SignalAndWait(); web.Flagon.GetString("page-size", "25"); }),
+                Task.Run(() => { go.SignalAndWait(); worker.Flagon.GetInt("page-size", 25); }));
+        }
+
+        await FlagonTestHost.EventuallyAsync(async () => await store.GetAsync("page-size") is not null, "one app creates the flag");
+        await FlagonTestHost.AdvanceToNextRefreshAsync(web, worker);
+        var flag = Assert.Single(await store.LoadAllAsync());
+        Assert.Single(await store.GetAuditAsync("page-size"));
+
+        var asString = web.Flagon.GetStringDetails("page-size", "25");
+        var asInt = worker.Flagon.GetIntDetails("page-size", 25);
+        if (flag.Document.Type == FlagType.String)
+        {
+            Assert.Equal(ErrorCode.None, asString.ErrorCode);
+            Assert.Equal(ErrorCode.TypeMismatch, asInt.ErrorCode);
+        }
+        else
+        {
+            Assert.Equal(FlagType.Number, flag.Document.Type);
+            Assert.Equal(ErrorCode.None, asInt.ErrorCode);
+            Assert.Equal(ErrorCode.TypeMismatch, asString.ErrorCode);
+        }
+
+        await web.StopAsync();
+        await worker.StopAsync();
+        var usage = await web.Admin.GetUsageAsync("page-size");
+        Assert.Equal(["Web", "Worker"], usage.Applications.Select(a => a.ApplicationName));
+        Assert.True(usage.HasDefaultMismatch);
+    }
 }

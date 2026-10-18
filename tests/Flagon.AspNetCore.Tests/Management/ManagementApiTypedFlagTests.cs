@@ -180,4 +180,27 @@ public class ManagementApiTypedFlagTests
         Assert.Equal(JsonValueKind.Null, result.GetProperty("variant").ValueKind);
         Assert.Equal("DEFAULT", result.GetProperty("reason").GetString());
     }
+
+    [Fact]
+    public async Task A_flags_usage_shows_each_apps_typed_code_default_as_json()
+    {
+        var store = new Flagon.Storage.InMemoryFlagStore();
+        await using (var web = await FlagonTestHost.StartAsync(o => { o.Store = store; o.ApplicationName = "Web"; }))
+        await using (var worker = await FlagonTestHost.StartAsync(o => { o.Store = store; o.ApplicationName = "Worker"; }))
+        {
+            web.Flagon.GetObject("layout", Json("""{ "title": "Pics", "columns": 3 }"""));
+            worker.Flagon.GetString("layout", "grid");
+        } // disposing flushes usage
+
+        await using var host = await FlagonTestHost.StartAsync(o => { o.Store = store; o.Endpoints = app => app.MapFlagonApi(); });
+        await host.Admin.CreateAsync(new CreateFlagRequest("layout", Variants: Variants("""{ "grid": { "columns": 3 } }"""), DefaultVariant: "grid"));
+
+        var usage = (await host.CreateClient().GetFromJsonAsync<JsonElement>("/flagon/api/flags/layout")).GetProperty("usage");
+
+        Assert.True(usage.GetProperty("hasDefaultMismatch").GetBoolean());
+        var defaults = usage.GetProperty("applications").EnumerateArray().Select(a => a.GetProperty("observedDefault")).ToArray();
+        Assert.Equal(JsonValueKind.Object, defaults[0].ValueKind);
+        Assert.Equal("""{"columns":3,"title":"Pics"}""", defaults[0].GetRawText());
+        Assert.Equal("grid", defaults[1].GetString());
+    }
 }
