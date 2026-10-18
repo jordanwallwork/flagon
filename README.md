@@ -17,27 +17,27 @@ other apps (including non-.NET ones, over [OFREP](https://openfeature.dev/specif
 
 | Package | What it adds |
 | --- | --- |
-| `Flagon` | Core engine: `AddFlagon`, `IFlagon` (evaluation), `IFlagonAdmin` (management), in-memory store |
-| `Flagon.Storage.Postgres` | `UsePostgresStorage(...)` |
-| `Flagon.Storage.SqlServer` | `UseSqlServerStorage(...)` |
-| `Flagon.AspNetCore` | OFREP endpoints, management HTTP API, ambient evaluation context, health check |
-| `Flagon.Ui` | Embeddable management console: `MapFlagonUi(path)` |
-| `Flagon.OpenFeature` | OpenFeature provider for the standard `IFeatureClient` API |
-| `Flagon.Storage.Conformance` | xUnit conformance suite for writing your own `IFlagStore` provider |
+| `Jorrk.Flagon` | Core engine: `AddFlagon`, `IFlagon` (evaluation), `IFlagonAdmin` (management), in-memory store |
+| `Jorrk.Flagon.Storage.Postgres` | `UsePostgresStorage(...)` |
+| `Jorrk.Flagon.Storage.SqlServer` | `UseSqlServerStorage(...)` |
+| `Jorrk.Flagon.AspNetCore` | OFREP endpoints, management HTTP API, ambient evaluation context, health check |
+| `Jorrk.Flagon.Ui` | Embeddable management console: `MapFlagonUi(path)` |
+| `Jorrk.Flagon.OpenFeature` | OpenFeature provider for the standard `IFeatureClient` API |
+| `Jorrk.Flagon.Storage.Conformance` | xUnit conformance suite for writing your own `IFlagStore` provider |
 
 ## Install
 
 ```sh
-dotnet add package Flagon
+dotnet add package Jorrk.Flagon
 ```
 
 Add a storage provider and the ASP.NET Core packages as you need them:
 
 ```sh
-dotnet add package Flagon.Storage.Postgres     # or Flagon.Storage.SqlServer
-dotnet add package Flagon.AspNetCore
-dotnet add package Flagon.Ui
-dotnet add package Flagon.OpenFeature
+dotnet add package Jorrk.Flagon.Storage.Postgres     # or Jorrk.Flagon.Storage.SqlServer
+dotnet add package Jorrk.Flagon.AspNetCore
+dotnet add package Jorrk.Flagon.Ui
+dotnet add package Jorrk.Flagon.OpenFeature
 ```
 
 ## Quickstart
@@ -477,7 +477,7 @@ N-variant percentage splits. The flagd document format already accommodates what
 
 1. Redis store, cache decorator and push-based invalidation
 2. MongoDB, MySQL and SQLite stores
-3. `Flagon.Testing` package
+3. `Jorrk.Flagon.Testing` package
 4. Segments; scheduled changes and flag expiry
 5. Kill-switch / prerequisite flags, approval workflows and webhooks
 6. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)

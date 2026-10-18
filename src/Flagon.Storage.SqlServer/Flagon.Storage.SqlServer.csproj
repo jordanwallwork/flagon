@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>Flagon.Storage.SqlServer</PackageId>
+    <PackageId>Jorrk.Flagon.Storage.SqlServer</PackageId>
     <Description>SQL Server storage for Flagon feature flags: raw ADO.NET (Microsoft.Data.SqlClient), embedded versioned migrations, no EF Core.</Description>
     <RootNamespace>Flagon.Storage.SqlServer</RootNamespace>
     <PackageTags>$(PackageTags);sqlserver;mssql</PackageTags>

@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>Flagon.Ui</PackageId>
+    <PackageId>Jorrk.Flagon.Ui</PackageId>
     <Description>An embeddable management console for Flagon feature flags: plain HTML and JavaScript served from the app, mounted with app.MapFlagonUi(path). No Node build step.</Description>
     <RootNamespace>Flagon.Ui</RootNamespace>
   </PropertyGroup>

@@ -49,8 +49,8 @@ jobs:
           ls artifacts
           for pkg in artifacts/*.nupkg; do
             case "$pkg" in
-              *".$version.nupkg") ;;
-              *) echo "::error::$pkg does not carry version $version"; exit 1 ;;
+              artifacts/Jorrk.*".$version.nupkg") ;;
+              *) echo "::error::$pkg must be a Jorrk.* package carrying version $version"; exit 1 ;;
             esac
           done
 
