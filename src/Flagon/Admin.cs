@@ -91,6 +91,37 @@ public interface IFlagonAdmin
     Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Replaces the variants and default variant of a string, number or object flag in one write. Boolean flags keep
+    /// their fixed <c>on</c>/<c>off</c> variants (use <see cref="SetEnabledAsync"/>). The variants follow the create-time
+    /// rules (see <see cref="CreateFlagRequest.Variants"/>) and must keep the flag's type; the current default variant
+    /// can only be removed by choosing another (or none) in the same edit. Targeting and metadata are untouched, and
+    /// targeting rules are not checked for the names removed.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <param name="variants">The complete new set of variants (name to JSON value).</param>
+    /// <param name="defaultVariant">The variant served when no targeting rule applies, or null for none.</param>
+    /// <param name="expectedVersion">The version the caller last saw.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <exception cref="FlagValidationException">
+    /// The variants are invalid, change the flag's type or remove its default variant; the flag is boolean; or it is
+    /// archived. The flag is unchanged.
+    /// </exception>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    Task<FlagRecord> SetVariantsAsync(
+        string key, IReadOnlyDictionary<string, JsonElement> variants, string? defaultVariant, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes which variant a flag of any type serves when no targeting rule applies, or sets none when
+    /// <paramref name="variant"/> is null (callers then get their own default). For a boolean flag, <c>on</c> or
+    /// <c>off</c> is the same as <see cref="SetEnabledAsync"/>.
+    /// </summary>
+    /// <exception cref="FlagValidationException">The variant is not one of the flag's, or the flag is archived; the flag is unchanged.</exception>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    Task<FlagRecord> SetDefaultVariantAsync(string key, string? variant, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The audit history of <paramref name="key"/>, newest first (empty if none). Entries survive purges.
     /// Every write made through this service records its actor (from <see cref="IFlagonActorAccessor"/>),
     /// application (<see cref="FlagonOptions.ApplicationName"/>), timestamp, and before/after documents.
