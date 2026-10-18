@@ -59,6 +59,8 @@ export const api = {
     request("POST", "flags", { body: { key, enabled, description, tags, variants, defaultVariant } }),
   updateMetadata: (key, version, { description, tags }) => request("PATCH", flag(key), { body: { description, tags }, version }),
   setEnabled: (key, version, enabled) => request("PUT", `${flag(key)}/enabled`, { body: { enabled }, version }),
+  /** Switches any flag between "enabled" and "disabled" (a disabled flag serves each app its code default). */
+  setState: (key, version, state) => request("PUT", `${flag(key)}/state`, { body: { state }, version }),
   setTargeting: (key, version, targeting) => request("PUT", `${flag(key)}/targeting`, { body: { targeting }, version }),
   clearTargeting: (key, version) => request("DELETE", `${flag(key)}/targeting`, { version }),
   /** Previews the stored flag, or the unsaved flagd `document` when given, for `context`. No side effects. */
