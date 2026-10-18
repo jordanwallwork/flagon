@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Flagon.Internal;
 using Flagon.Storage;
 
@@ -26,6 +27,94 @@ public sealed class TestFlags
     /// <returns>This instance, for chaining.</returns>
     /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key.</exception>
     public TestFlags SetFlag(string key, bool value) => Upsert(key, FlagDocument.Boolean(value));
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to an enabled string flag with a single <c>default</c> variant serving
+    /// <paramref name="value"/>, the same shape as a string flag defined in code or auto-created.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key.</exception>
+    public TestFlags SetFlag(string key, string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return Upsert(key, FlagDocument.SingleValue(JsonSerializer.SerializeToElement(value)));
+    }
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to an enabled number flag with a single <c>default</c> variant serving
+    /// <paramref name="value"/>. Otherwise as <see cref="SetFlag(string, string)"/>.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key.</exception>
+    public TestFlags SetFlag(string key, int value) =>
+        Upsert(key, FlagDocument.SingleValue(JsonSerializer.SerializeToElement(value)));
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to an enabled number flag with a single <c>default</c> variant serving
+    /// <paramref name="value"/>. Otherwise as <see cref="SetFlag(string, string)"/>.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagValidationException">
+    /// <paramref name="key"/> is not a valid flag key, or <paramref name="value"/> is NaN or infinite (JSON has no such numbers).
+    /// </exception>
+    public TestFlags SetFlag(string key, double value) => double.IsFinite(value)
+        ? Upsert(key, FlagDocument.SingleValue(JsonSerializer.SerializeToElement(value)))
+        : throw new FlagValidationException($"Flag '{key}' variant 'default' is {value}; number variants must be finite.");
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to an enabled object flag with a single <c>default</c> variant serving the JSON object
+    /// <paramref name="json"/>. Otherwise as <see cref="SetFlag(string, string)"/>.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <param name="json">The value every evaluation of the flag is served: JSON text of an object, e.g. <c>{"columns":3}</c>.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagValidationException">
+    /// <paramref name="key"/> is not a valid flag key, or <paramref name="json"/> is not valid JSON or not an object.
+    /// </exception>
+    public TestFlags SetObjectFlag(string key, string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        JsonElement value;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            value = document.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            throw new FlagValidationException($"Flag '{key}' object value is not valid JSON: {ex.Message}");
+        }
+
+        return Upsert(key, SingleObject(key, value, nameof(SetObjectFlag)));
+    }
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to an enabled object flag with a single <c>default</c> variant serving
+    /// <paramref name="value"/> serialised to JSON, as <see cref="IFlagon.GetObject{T}"/> reads it back. Otherwise as
+    /// <see cref="SetFlag(string, string)"/>.
+    /// </summary>
+    /// <typeparam name="T">The type of the value; it must serialise to a JSON object.</typeparam>
+    /// <param name="key">The flag key.</param>
+    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <param name="options">Serializer options for <paramref name="value"/>; pass the same options to the getter.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagValidationException">
+    /// <paramref name="key"/> is not a valid flag key, or <paramref name="value"/> does not serialise to a JSON object.
+    /// </exception>
+    public TestFlags SetFlag<T>(string key, T value, JsonSerializerOptions? options = null) =>
+        Upsert(key, SingleObject(key, JsonSerializer.SerializeToElement(value, options), nameof(SetFlag)));
+
+    private static FlagDocument SingleObject(string key, JsonElement value, string method) =>
+        value.ValueKind == JsonValueKind.Object
+            ? FlagDocument.SingleValue(value)
+            : throw new FlagValidationException(
+                $"Flag '{key}' object value is a JSON {value.ValueKind.ToString().ToLowerInvariant()}; {method} takes a JSON object.");
 
     private TestFlags Upsert(string key, FlagDocument document)
     {
