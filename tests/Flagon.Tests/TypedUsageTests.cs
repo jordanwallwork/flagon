@@ -111,6 +111,29 @@ public class TypedUsageTests
         Assert.False(report.HasDefaultMismatch);
     }
 
+    [Theory]
+    [InlineData("9007199254740993", "9007199254740993.0", false)]
+    [InlineData("9007199254740993", "90071992547409930e-1", false)]
+    [InlineData("9007199254740993.0", "9007199254740992", true)]
+    [InlineData("123456789012345678901234567890", "123456789012345678901234567891", true)]
+    [InlineData("123456789012345678901234567890", "1.2345678901234567890123456789e29", false)]
+    [InlineData("0.1", "0.10000000000000001", true)]
+    [InlineData("-0.5", "-5e-1", false)]
+    [InlineData("0", "-0.0", false)]
+    [InlineData("1e30", "1000000000000000000000000000000.00", false)]
+    [InlineData("1e-7", "0.00000010", false)]
+    [InlineData("1e-7", "1e-8", true)]
+    public void Stored_number_defaults_are_compared_exactly(string web, string worker, bool mismatch)
+    {
+        var report = new FlagUsageReport("ids",
+        [
+            new FlagUsage("ids", "Web", FlagonTestHost.Epoch, Json($$"""{"id":{{web}}}""")),
+            new FlagUsage("ids", "Worker", FlagonTestHost.Epoch, Json($$"""{"id":{{worker}}}""")),
+        ]);
+
+        Assert.Equal(mismatch, report.HasDefaultMismatch);
+    }
+
     [Fact]
     public async Task Recording_usage_of_a_seen_key_with_a_boolean_or_number_default_allocates_nothing()
     {

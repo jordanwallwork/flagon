@@ -306,6 +306,22 @@ public class AutoCreateTests
     }
 
     [Fact]
+    public async Task An_object_default_keeps_its_numbers_exactly_when_auto_created()
+    {
+        var store = new InMemoryFlagStore();
+        await using (var host = await StartAsync(o => o.Store = store))
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(
+                """{ "id": 9007199254740993.0, "big": 123456789012345678901234567890, "tiny": 1.00000000000000000001 }""");
+            host.Flagon.GetObject("ids", document.RootElement);
+        }
+
+        var flag = (await store.GetAsync("ids"))!;
+        Assert.Equal("""{"big":123456789012345678901234567890,"id":9007199254740993,"tiny":1.00000000000000000001}""",
+            flag.Document.Variants["default"].GetRawText());
+    }
+
+    [Fact]
     public async Task An_auto_created_typed_flag_is_then_served_to_this_app()
     {
         await using var host = await StartAsync();
