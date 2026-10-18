@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -7,9 +8,9 @@ namespace Flagon.Internal;
 /// <summary>An immutable view of every flag at one change version. Swapped atomically; read lock-free by evaluation.</summary>
 internal sealed class FlagSnapshot
 {
-    public static FlagSnapshot Empty { get; } = new(0, FrozenDictionary<string, FlagRecord>.Empty);
+    public static FlagSnapshot Empty { get; } = new(0, FrozenDictionary<string, SnapshotFlag>.Empty);
 
-    public FlagSnapshot(long version, FrozenDictionary<string, FlagRecord> flags)
+    private FlagSnapshot(long version, FrozenDictionary<string, SnapshotFlag> flags)
     {
         Version = version;
         Flags = flags;
@@ -18,8 +19,25 @@ internal sealed class FlagSnapshot
     /// <summary>The store change version this snapshot reflects.</summary>
     public long Version { get; }
 
-    public FrozenDictionary<string, FlagRecord> Flags { get; }
+    public FrozenDictionary<string, SnapshotFlag> Flags { get; }
+
+    /// <summary>
+    /// Builds a snapshot from <paramref name="records"/>, compiling each flag's targeting once with
+    /// <paramref name="compiler"/>. A rule that fails to compile (or whose compiler throws) marks only that flag broken.
+    /// Empty targeting (<c>{}</c>) is no targeting, as in flagd.
+    /// </summary>
+    public static FlagSnapshot Create(long version, IEnumerable<FlagRecord> records, ITargetingCompiler compiler)
+    {
+        var flags = records.ToFrozenDictionary(
+            r => r.Key,
+            r => new SnapshotFlag(r, TargetingRules.IsRule(r.Document.Targeting) ? TargetingRules.Compile(compiler, r.Key, r.Document.Targeting!.Value) : null),
+            StringComparer.Ordinal);
+        return new FlagSnapshot(version, flags);
+    }
 }
+
+/// <summary>A flag in a <see cref="FlagSnapshot"/>: its record plus its compiled targeting (null when it has none).</summary>
+internal sealed record SnapshotFlag(FlagRecord Record, TargetingCompilation? Targeting);
 
 /// <summary>
 /// Owns the current <see cref="FlagSnapshot"/>, reloads it from the store and tracks its freshness.
@@ -27,6 +45,7 @@ internal sealed class FlagSnapshot
 /// </summary>
 internal sealed partial class FlagSnapshotManager(
     IFlagStore store,
+    ITargetingCompiler compiler,
     FlagonOptions options,
     TimeProvider time,
     FlagonInstrumentation instrumentation,
@@ -111,7 +130,17 @@ internal sealed partial class FlagSnapshotManager(
         var flags = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
         // Stamp with the version read *before* loading: a write racing the load then just causes one extra reload,
         // whereas stamping with the highest loaded version could skip a lower-numbered write that commits late.
-        _current = new FlagSnapshot(version, flags.ToFrozenDictionary(f => f.Key, StringComparer.Ordinal));
+        var snapshot = FlagSnapshot.Create(version, flags, compiler);
+        foreach (var flag in snapshot.Flags.Values)
+        {
+            // Once per snapshot version: a snapshot is only rebuilt when the store's change version moves.
+            if (flag.Targeting?.Error is { } error)
+            {
+                LogTargetingCompileFailed(logger, flag.Record.Key, snapshot.Version, error.Message);
+            }
+        }
+
+        _current = snapshot;
         return RefreshOutcome.Reloaded;
     }
 
@@ -122,4 +151,8 @@ internal sealed partial class FlagSnapshotManager(
     [LoggerMessage(EventId = 1102, Level = LogLevel.Information,
         Message = "Flagon reached the flag store again after {ConsecutiveFailures} failed refresh(es); snapshot is at version {SnapshotVersion}.")]
     private static partial void LogRefreshRecovered(ILogger logger, int consecutiveFailures, long snapshotVersion);
+
+    [LoggerMessage(EventId = 1103, Level = LogLevel.Warning,
+        Message = "Flag '{FlagKey}' has a targeting rule that could not be compiled (snapshot version {SnapshotVersion}); it evaluates to the caller's default with PARSE_ERROR. {CompileError}")]
+    private static partial void LogTargetingCompileFailed(ILogger logger, string flagKey, long snapshotVersion, string compileError);
 }

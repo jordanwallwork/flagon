@@ -81,4 +81,22 @@ public class FlagdJsonTests
         Assert.Throws<NotSupportedException>(() => variants.Clear());
         Assert.True(FlagDocument.Boolean(false).Variants[FlagDocument.OnVariant].GetBoolean());
     }
+
+    [Theory]
+    [InlineData("""{ "state": "ENABLED", "variants": { "on": true, "off": false }, "defaultVariant": null }""")]
+    [InlineData("""{ "state": "ENABLED", "variants": { "on": true, "off": false } }""")]
+    public void A_document_without_a_default_variant_can_be_read_and_written(string json)
+    {
+        var document = FlagdJson.Deserialize(json);
+
+        Assert.Null(document.DefaultVariant);
+        Assert.Null(FlagdJson.Deserialize(FlagdJson.Serialize(document)).DefaultVariant);
+    }
+
+    [Fact]
+    public void A_default_variant_that_is_not_a_string_is_rejected()
+    {
+        Assert.Throws<FlagValidationException>(() => FlagdJson.Deserialize(
+            """{ "state": "ENABLED", "variants": { "on": true, "off": false }, "defaultVariant": true }"""));
+    }
 }

@@ -114,7 +114,7 @@ public class OpenFeatureProviderTests
     }
 
     [Fact]
-    public async Task A_flag_with_targeting_is_served_with_OpenFeatures_default_reason()
+    public async Task The_context_sent_through_OpenFeature_drives_targeting()
     {
         await using var host = await StartWithStoredFlagAsync("targeted", """
             {
@@ -124,11 +124,11 @@ public class OpenFeatureProviderTests
             """);
         var context = global::OpenFeature.Model.EvaluationContext.Builder().SetTargetingKey("u1").Set("country", "GB").Build();
 
-        var details = await Client(host).GetBooleanDetailsAsync("targeted", false, context);
+        var details = await Client(host).GetBooleanDetailsAsync("targeted", true, context);
 
-        Assert.True(details.Value);
-        Assert.Equal("on", details.Variant);
-        Assert.Equal(Reason.Default, details.Reason);
+        Assert.False(details.Value);
+        Assert.Equal("off", details.Variant);
+        Assert.Equal(Reason.TargetingMatch, details.Reason);
     }
 
     [Fact]

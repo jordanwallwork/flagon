@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -8,6 +10,7 @@ internal sealed partial class FlagonAdmin(
     IFlagStore store,
     FlagSnapshotManager snapshots,
     FlagChangeStamper changes,
+    ITargetingCompiler compiler,
     FlagonInstrumentation instrumentation,
     ILogger<FlagonAdmin> logger) : IFlagonAdmin
 {
@@ -27,6 +30,7 @@ internal sealed partial class FlagonAdmin(
     {
         FlagKey.Validate(request.Key);
         FlagTags.Validate(request.Tags);
+        var targeting = TargetingRules.Validate(compiler, request.Key, request.Targeting);
 
         var change = changes.Begin();
         var metadata = new FlagMetadata(
@@ -34,7 +38,8 @@ internal sealed partial class FlagonAdmin(
             Tags: request.Tags,
             Source: FlagSource.Manual).StampCreated(change);
 
-        var record = await store.TryCreateAsync(request.Key, FlagDocument.Boolean(request.Enabled, metadata), change, cancellationToken).ConfigureAwait(false)
+        var document = FlagDocument.Boolean(request.Enabled, metadata) with { Targeting = targeting };
+        var record = await store.TryCreateAsync(request.Key, document, change, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagAlreadyExistsException(request.Key);
 
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
@@ -44,24 +49,26 @@ internal sealed partial class FlagonAdmin(
     public Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default) =>
         WriteAsync("set_enabled", key, () => SetEnabledCoreAsync(key, enabled, expectedVersion, cancellationToken));
 
-    private async Task<FlagRecord> SetEnabledCoreAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken)
-    {
-        var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
-            ?? throw new FlagNotFoundException(key);
-
-        var variant = enabled ? FlagDocument.OnVariant : FlagDocument.OffVariant;
-        if (!current.Document.Variants.ContainsKey(variant))
+    private Task<FlagRecord> SetEnabledCoreAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken) =>
+        UpdateDocumentAsync(key, expectedVersion, document =>
         {
-            throw new FlagValidationException($"Flag '{key}' is not a boolean flag (it has no '{variant}' variant).");
-        }
+            var variant = enabled ? FlagDocument.OnVariant : FlagDocument.OffVariant;
+            if (!document.Variants.ContainsKey(variant))
+            {
+                throw new FlagValidationException($"Flag '{key}' is not a boolean flag (it has no '{variant}' variant).");
+            }
 
-        var change = changes.Begin();
-        var document = (current.Document with { DefaultVariant = variant }).StampUpdated(change);
+            return document with { DefaultVariant = variant };
+        }, cancellationToken);
 
-        // The store enforces expectedVersion atomically; the read above only builds the new document.
-        var record = await store.UpdateAsync(key, document, expectedVersion, change, cancellationToken).ConfigureAwait(false);
-        await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
-        return record;
+    public Task<FlagRecord> SetTargetingAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("set_targeting", key, () => SetTargetingCoreAsync(key, targeting, expectedVersion, cancellationToken));
+
+    private Task<FlagRecord> SetTargetingCoreAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var validated = TargetingRules.Validate(compiler, key, targeting);
+        return UpdateDocumentAsync(key, expectedVersion, document => document with { Targeting = validated }, cancellationToken);
     }
 
     public Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default)
@@ -70,26 +77,40 @@ internal sealed partial class FlagonAdmin(
         return WriteAsync("update_metadata", key, () => UpdateMetadataCoreAsync(key, request, expectedVersion, cancellationToken));
     }
 
-    private async Task<FlagRecord> UpdateMetadataCoreAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken)
+    private Task<FlagRecord> UpdateMetadataCoreAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken)
     {
         FlagTags.Validate(request.Tags);
+        return UpdateDocumentAsync(key, expectedVersion, document =>
+        {
+            var metadata = document.Metadata;
+            if (request.Description is not null)
+            {
+                metadata = metadata with { Description = request.Description.Length == 0 ? null : request.Description };
+            }
 
+            if (request.Tags is not null)
+            {
+                metadata = metadata with { Tags = request.Tags };
+            }
+
+            return document with { Metadata = metadata };
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads <paramref name="key"/>, applies <paramref name="update"/> to its document, stamps and stores the result
+    /// at <paramref name="expectedVersion"/>, then refreshes the snapshot.
+    /// </summary>
+    private async Task<FlagRecord> UpdateDocumentAsync(
+        string key, long expectedVersion, Func<FlagDocument, FlagDocument> update, CancellationToken cancellationToken)
+    {
         var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagNotFoundException(key);
 
         var change = changes.Begin();
-        var metadata = current.Document.Metadata;
-        if (request.Description is not null)
-        {
-            metadata = metadata with { Description = request.Description.Length == 0 ? null : request.Description };
-        }
+        var document = update(current.Document).StampUpdated(change);
 
-        if (request.Tags is not null)
-        {
-            metadata = metadata with { Tags = request.Tags };
-        }
-
-        var document = (current.Document with { Metadata = metadata }).StampUpdated(change);
+        // The store enforces expectedVersion atomically; the read above only builds the new document.
         var record = await store.UpdateAsync(key, document, expectedVersion, change, cancellationToken).ConfigureAwait(false);
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
         return record;

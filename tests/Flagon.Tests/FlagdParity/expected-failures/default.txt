@@ -1,0 +1,6 @@
+# Expected failures of the flagd-testbed parity harness for Flagon's default registration
+# (DefaultCompilerParityTests, i.e. JsonLogicTargetingCompiler; docs/adr/0001-targeting-engine.md). One case id per
+# line (<feature path>:<line>); text after '#' is a comment. The list is exact: a listed case that passes fails the run.
+#
+# Empty: every runnable case of the boolean subset passes. Keep it that way; a new testbed release that introduces a
+# failure is a parity bug to fix, not a line to add here.

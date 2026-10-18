@@ -73,8 +73,13 @@ public static class FlagdJson
                 variants[variant.Name] = variant.Value.Clone();
             }
 
-            var defaultVariant = root.GetProperty("defaultVariant").GetString()
-                ?? throw new FlagValidationException("flagd 'defaultVariant' must be a string.");
+            // flagd allows a null or absent defaultVariant: the caller's default is then served when no rule applies.
+            string? defaultVariant = root.TryGetProperty("defaultVariant", out var d) ? d.ValueKind switch
+            {
+                JsonValueKind.String => d.GetString(),
+                JsonValueKind.Null => null,
+                _ => throw new FlagValidationException("flagd 'defaultVariant' must be a string or null."),
+            } : null;
 
             JsonElement? targeting = root.TryGetProperty("targeting", out var t) && t.ValueKind != JsonValueKind.Null
                 ? t.Clone()

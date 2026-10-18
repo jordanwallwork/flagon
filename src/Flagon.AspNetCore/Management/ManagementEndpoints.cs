@@ -55,7 +55,7 @@ internal static class ManagementEndpoints
         }
 
         var record = await admin.CreateAsync(
-            new CreateFlagRequest(body.Key, body.Enabled, body.Description, body.Tags), http.RequestAborted).ConfigureAwait(false);
+            new CreateFlagRequest(body.Key, body.Enabled, body.Description, body.Tags, body.Targeting), http.RequestAborted).ConfigureAwait(false);
 
         var location = $"{http.Request.PathBase}{http.Request.Path.Value?.TrimEnd('/')}/{Uri.EscapeDataString(record.Key)}";
         return Results.Created(location, await ResponseAsync(http, admin, record).ConfigureAwait(false));
@@ -76,6 +76,19 @@ internal static class ManagementEndpoints
         var enabled = body!.Enabled ?? throw new FlagValidationException("'enabled' is required.");
         var version = ExpectedVersion(http, body.Version);
         var record = await admin.SetEnabledAsync(key, enabled, version, http.RequestAborted).ConfigureAwait(false);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
+    }
+
+    public static async Task<IResult> SetTargetingAsync(string key, HttpContext http, IFlagonAdmin admin)
+    {
+        var body = await ReadBodyAsync<SetTargetingBody>(http, required: true).ConfigureAwait(false);
+        if (body!.Targeting.ValueKind == JsonValueKind.Undefined)
+        {
+            throw new FlagValidationException("'targeting' is required: a flagd targeting rule, or null to remove it.");
+        }
+
+        var version = ExpectedVersion(http, body.Version);
+        var record = await admin.SetTargetingAsync(key, body.Targeting, version, http.RequestAborted).ConfigureAwait(false);
         return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
 

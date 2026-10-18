@@ -30,6 +30,18 @@ internal sealed partial class FlagonHostedService(
         // Create the timer before the first await so its schedule starts at host start, not after the initial load.
         _timer = new PeriodicTimer(options.RefreshInterval, time);
 
+        // A definition whose targeting the registered compiler rejects is a bug in the app's code: fail startup whatever
+        // FailFastOnStartup says, before anything is written (Define could only check the JSON).
+        try
+        {
+            seeder.ValidateDefinitions();
+        }
+        catch
+        {
+            _timer.Dispose();
+            throw;
+        }
+
         if (await TryMigrateAsync(cancellationToken).ConfigureAwait(false) is { } migrationError && options.FailFastOnStartup)
         {
             _timer.Dispose();

@@ -56,13 +56,20 @@ public sealed record FlagMetadata(
 /// </summary>
 /// <param name="State">flagd state.</param>
 /// <param name="Variants">Variant name to value. Boolean flags use <c>{ "on": true, "off": false }</c>.</param>
-/// <param name="DefaultVariant">The variant served when no targeting rule applies. Toggling a boolean flag changes this.</param>
+/// <param name="DefaultVariant">
+/// The variant served when no targeting rule applies. Toggling a boolean flag changes this. Null (as flagd allows) means
+/// "no default variant": when no rule applies, evaluation returns the caller's default with reason
+/// <see cref="EvaluationReason.Default"/>.
+/// </param>
 /// <param name="Metadata">Flagon metadata.</param>
-/// <param name="Targeting">Optional JsonLogic targeting rule. Not evaluated in the MVP.</param>
+/// <param name="Targeting">
+/// Optional flagd targeting rule (JsonLogic plus flagd's operators), compiled once per snapshot load. An empty object
+/// (<c>{}</c>) is no targeting, as in flagd.
+/// </param>
 public sealed record FlagDocument(
     FlagState State,
     IReadOnlyDictionary<string, JsonElement> Variants,
-    string DefaultVariant,
+    string? DefaultVariant,
     FlagMetadata Metadata,
     JsonElement? Targeting = null)
 {

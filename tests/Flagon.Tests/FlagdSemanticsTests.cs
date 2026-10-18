@@ -29,7 +29,7 @@ public class FlagdSemanticsTests
     }
 
     [Fact]
-    public async Task A_flag_with_targeting_serves_its_default_variant_with_reason_default_because_targeting_is_not_evaluated_yet()
+    public async Task A_flag_whose_rule_matches_serves_the_rules_variant_and_otherwise_its_default_variant()
     {
         await using var host = await HostWithStoredFlagAsync("targeted", """
             {
@@ -38,9 +38,11 @@ public class FlagdSemanticsTests
             }
             """);
 
-        var details = host.Flagon.GetBooleanDetails("targeted", false, new EvaluationContext("u1", new Dictionary<string, object?> { ["country"] = "GB" }));
+        var gb = host.Flagon.GetBooleanDetails("targeted", true, new EvaluationContext("u1", new Dictionary<string, object?> { ["country"] = "GB" }));
+        var fr = host.Flagon.GetBooleanDetails("targeted", false, new EvaluationContext("u2", new Dictionary<string, object?> { ["country"] = "FR" }));
 
-        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", true, "on", EvaluationReason.Default), details);
+        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", false, "off", EvaluationReason.TargetingMatch), gb);
+        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", true, "on", EvaluationReason.Default), fr);
     }
 
     [Fact]
@@ -69,5 +71,33 @@ public class FlagdSemanticsTests
         Assert.True(details.Value);
         Assert.Equal(EvaluationReason.Error, details.Reason);
         Assert.Equal(ErrorCode.ParseError, details.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("""{ "state": "ENABLED", "variants": { "on": true, "off": false }, "defaultVariant": null }""")]
+    [InlineData("""{ "state": "ENABLED", "variants": { "on": true, "off": false } }""")]
+    public async Task A_flag_without_a_default_variant_returns_the_callers_default_with_reason_default(string flagdJson)
+    {
+        await using var host = await HostWithStoredFlagAsync("no-default", flagdJson);
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("no-default", true, null, EvaluationReason.Default), host.Flagon.GetBooleanDetails("no-default", true));
+        Assert.Equal(new FlagEvaluationDetails<bool>("no-default", false, null, EvaluationReason.Default), host.Flagon.GetBooleanDetails("no-default", false));
+    }
+
+    [Fact]
+    public async Task A_flag_without_a_default_variant_still_serves_the_variant_its_rule_matches()
+    {
+        await using var host = await HostWithStoredFlagAsync("targeted", """
+            {
+              "state": "ENABLED", "variants": { "on": true, "off": false },
+              "targeting": { "if": [ { "==": [ { "var": "country" }, "GB" ] }, "on", null ] }
+            }
+            """);
+
+        var gb = host.Flagon.GetBooleanDetails("targeted", false, new EvaluationContext("u1", new Dictionary<string, object?> { ["country"] = "GB" }));
+        var fr = host.Flagon.GetBooleanDetails("targeted", false, new EvaluationContext("u2", new Dictionary<string, object?> { ["country"] = "FR" }));
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", true, "on", EvaluationReason.TargetingMatch), gb);
+        Assert.Equal(new FlagEvaluationDetails<bool>("targeted", false, null, EvaluationReason.Default), fr);
     }
 }

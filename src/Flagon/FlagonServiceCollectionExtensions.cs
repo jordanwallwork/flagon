@@ -1,5 +1,7 @@
 using Flagon;
 using Flagon.Internal;
+using Flagon.Internal.Targeting;
+using Flagon.Internal.Targeting.JsonLogic;
 using Flagon.Storage;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -37,6 +39,9 @@ public static class FlagonServiceCollectionExtensions
         services.AddSingleton(storeFactory);
 
         services.AddSingleton<FlagonInstrumentation>();
+        // Internal seam for the targeting engine (docs/adr/0001-targeting-engine.md): an ITargetingCompiler registered
+        // before or after AddFlagon replaces this default.
+        services.TryAddSingleton<ITargetingCompiler, JsonLogicTargetingCompiler>();
         services.AddSingleton<FlagSnapshotManager>();
         services.AddSingleton<IFlagonSnapshotStatus>(sp => sp.GetRequiredService<FlagSnapshotManager>());
         services.AddSingleton<FlagonEvaluator>();

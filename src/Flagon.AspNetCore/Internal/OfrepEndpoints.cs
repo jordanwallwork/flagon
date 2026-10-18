@@ -41,7 +41,8 @@ internal static class OfrepEndpoints
         var evaluation = flagon.GetAllRemoteBooleanDetails(context);
 
         // The ETag is the snapshot version: any flag change (in this app or, after a refresh, another app) moves it.
-        // The MVP engine ignores the context, so the version alone identifies the response.
+        // The context is not part of the ETag: an OFREP client caches the response for the context it sends, and a client
+        // that changes its context must not send If-None-Match from the old one (context-aware ETags are out of scope).
         var etag = new EntityTagHeaderValue($"\"{evaluation.Version.ToString(CultureInfo.InvariantCulture)}\"");
         var headers = http.Response.GetTypedHeaders();
         headers.ETag = etag;

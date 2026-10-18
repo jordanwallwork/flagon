@@ -6,13 +6,22 @@ public enum EvaluationReason
     /// <summary>The flag has no targeting; its default variant was served (OpenFeature <c>STATIC</c>).</summary>
     Static,
 
-    /// <summary>The flag's default variant was served without evaluating targeting (OpenFeature <c>DEFAULT</c>).</summary>
+    /// <summary>
+    /// The flag's targeting rule did not match (resolved to null), so its default variant was served (OpenFeature
+    /// <c>DEFAULT</c>). A flag with no default variant returns the caller's default with this reason, as flagd does.
+    /// </summary>
     Default,
 
-    /// <summary>A targeting rule matched (OpenFeature <c>TARGETING_MATCH</c>). Reserved: not produced in the MVP.</summary>
+    /// <summary>
+    /// The flag's targeting rule resolved to one of its variants, which was served (OpenFeature <c>TARGETING_MATCH</c>).
+    /// A <c>fractional</c> rollout reports this reason too, as flagd does.
+    /// </summary>
     TargetingMatch,
 
-    /// <summary>A pseudorandom split assigned the value (OpenFeature <c>SPLIT</c>). Reserved: not produced in the MVP.</summary>
+    /// <summary>
+    /// A pseudorandom split assigned the value (OpenFeature <c>SPLIT</c>). Not produced by Flagon: like flagd, a
+    /// <c>fractional</c> rollout reports <see cref="TargetingMatch"/>.
+    /// </summary>
     Split,
 
     /// <summary>The value came from a cache (OpenFeature <c>CACHED</c>).</summary>
@@ -86,7 +95,7 @@ public sealed record FlagEvaluationDetails<T>(
 
 /// <summary>
 /// The context a flag is evaluated in: a targeting key (usually a user id) plus string-keyed attributes.
-/// Accepted by every evaluation API today; the MVP boolean engine does not use it.
+/// A flag's targeting rule is evaluated against it (with <c>targetingKey</c> injected, as flagd does).
 /// </summary>
 public sealed class EvaluationContext
 {

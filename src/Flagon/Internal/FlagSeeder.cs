@@ -1,21 +1,37 @@
+using System.Text.Json;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 
 namespace Flagon.Internal;
 
 /// <summary>A flag declared in code with <see cref="FlagonOptions.Define"/>.</summary>
-internal sealed record FlagDefinition(string Key, bool DefaultValue, string? Description, IReadOnlyList<string> Tags);
+internal sealed record FlagDefinition(string Key, bool DefaultValue, string? Description, IReadOnlyList<string> Tags, JsonElement? Targeting = null);
 
 /// <summary>
 /// Applies the flags declared with <see cref="FlagonOptions.Define"/> to the store: creates missing ones (source code)
-/// and syncs metadata of existing ones without touching their state. Archived flags are never revived or changed.
+/// and syncs metadata of existing ones without touching their state or targeting. Archived flags are never revived or changed.
 /// </summary>
 internal sealed class FlagSeeder(
     IFlagStore store,
     FlagonOptions options,
     FlagChangeStamper changes,
-    FlagonInstrumentation instrumentation)
+    FlagonInstrumentation instrumentation,
+    ITargetingCompiler compiler)
 {
     private const int MaxConflictRetries = 5;
+
+    /// <summary>
+    /// Compiles every definition's targeting with the registered <see cref="ITargetingCompiler"/>, the one that will
+    /// evaluate it. A definition is code, so a rule the compiler rejects is a configuration error, not an outage.
+    /// </summary>
+    /// <exception cref="FlagTargetingException">A definition's targeting rule does not compile.</exception>
+    public void ValidateDefinitions()
+    {
+        foreach (var definition in options.Definitions)
+        {
+            TargetingRules.Validate(compiler, definition.Key, definition.Targeting);
+        }
+    }
 
     /// <summary>Seeds every definition. Throws on store failure; already-seeded definitions are idempotent on retry.</summary>
     public async Task SeedAsync(CancellationToken cancellationToken)
@@ -54,7 +70,7 @@ internal sealed class FlagSeeder(
 
                 var created = await store.TryCreateAsync(
                     definition.Key,
-                    FlagDocument.Boolean(definition.DefaultValue, metadata),
+                    FlagDocument.Boolean(definition.DefaultValue, metadata) with { Targeting = definition.Targeting },
                     change,
                     cancellationToken).ConfigureAwait(false);
                 if (created is not null || attempt >= MaxConflictRetries)

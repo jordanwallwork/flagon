@@ -9,7 +9,7 @@ internal sealed record FlagResponse(
     long Version,
     bool Enabled,
     string State,
-    string DefaultVariant,
+    string? DefaultVariant,
     bool Archived,
     string? Description,
     IReadOnlyList<string> Tags,
@@ -18,13 +18,15 @@ internal sealed record FlagResponse(
     string? CreatedBy,
     DateTimeOffset? UpdatedAt,
     string? UpdatedBy,
+    JsonElement? Targeting,
     FlagUsageResponse Usage)
 {
     public static FlagResponse From(FlagRecord record, FlagUsageReport? usage)
     {
         var document = record.Document;
         var metadata = document.Metadata;
-        var enabled = document.Variants.TryGetValue(document.DefaultVariant, out var value) && value.ValueKind == JsonValueKind.True;
+        var enabled = document.DefaultVariant is { } defaultVariant
+            && document.Variants.TryGetValue(defaultVariant, out var value) && value.ValueKind == JsonValueKind.True;
         return new FlagResponse(
             record.Key,
             record.Version,
@@ -39,6 +41,7 @@ internal sealed record FlagResponse(
             metadata.CreatedBy,
             metadata.UpdatedAt,
             metadata.UpdatedBy,
+            document.Targeting,
             FlagUsageResponse.From(usage));
     }
 }
@@ -83,7 +86,10 @@ internal sealed record FlagAuditEntryResponse(
         document is null ? null : JsonDocument.Parse(FlagdJson.Serialize(document)).RootElement.Clone();
 }
 
-internal sealed record CreateFlagBody(string? Key, bool Enabled = false, string? Description = null, IReadOnlyList<string>? Tags = null);
+internal sealed record CreateFlagBody(string? Key, bool Enabled = false, string? Description = null, IReadOnlyList<string>? Tags = null, JsonElement? Targeting = null);
+
+/// <summary><c>targeting</c> is required: a rule, or JSON <c>null</c> to remove it (an absent field is Undefined).</summary>
+internal sealed record SetTargetingBody(JsonElement Targeting = default, long? Version = null);
 
 internal sealed record UpdateMetadataBody(string? Description = null, IReadOnlyList<string>? Tags = null, long? Version = null);
 
