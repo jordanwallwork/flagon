@@ -24,6 +24,7 @@ other apps (including non-.NET ones, over [OFREP](https://openfeature.dev/specif
 | `Jorrk.Flagon.Ui` | Embeddable management console: `MapFlagonUi(path)` |
 | `Jorrk.Flagon.OpenFeature` | OpenFeature provider for the standard `IFeatureClient` API |
 | `Jorrk.Flagon.Storage.Conformance` | xUnit conformance suite for writing your own `IFlagStore` provider |
+| `Jorrk.Flagon.Testing` | `TestFlagon`: a real `IFlagon` over an in-memory store for unit tests, with one-line setup of any flag type, variants, targeting and state |
 
 ## Install
 
@@ -470,6 +471,102 @@ should drop its ETag.
   cardinality does not grow with your users).
 - Structured logs for refresh failures, migrations, auto-creation and version conflicts.
 
+## Testing
+
+`Jorrk.Flagon.Testing` gives tests a real `IFlagon`: the same snapshot, targeting and evaluation as production, over an
+in-memory store. It works with any test framework and needs no host or DI.
+
+```sh
+dotnet add package Jorrk.Flagon.Testing
+```
+
+```csharp
+using Flagon.Testing;
+
+[Fact]
+public void Checkout_uses_the_new_flow_when_the_flag_is_on()
+{
+    using var flags = TestFlagon.Create();
+    flags.Flags.SetFlag("new-checkout", true);
+
+    var checkout = new CheckoutService(flags); // TestFlagon is an IFlagon
+
+    Assert.Equal("v2", checkout.Flow());
+}
+```
+
+Put any flag of any type into any state in one line. Each call returns `Flags`, so they chain:
+
+```csharp
+flags.Flags
+    .SetFlag("checkout-theme", "dark")                       // string, int and double too
+    .SetFlag("layout", new Layout(Columns: 3))               // an object (or SetObjectFlag("layout", json))
+    .SetFlag("page-size",                                    // named variants, as Define<T>
+        new Dictionary<string, int> { ["small"] = 10, ["large"] = 50 }, defaultVariant: "small",
+        targeting: """{"if":[{"==":[{"var":"plan"},"pro"]},"large",null]}""")
+    .EnableFor("beta", "user-1", "user-2")                   // on only for these targeting keys
+    .Disable("legacy-export");                               // also Enable, Archive, Remove, SetTargeting
+
+flags.Context = new EvaluationContext("user-1");             // ambient context for calls that pass none
+Assert.True(flags.IsEnabled("beta"));
+
+flags.Flags.Reset();                                         // back to the seeded Define()s and an empty evaluation log
+```
+
+- Writes are upserts (a flag can be replaced by one of another type or state) and use the same write-time rules as
+  `IFlagonAdmin`: an invalid key or variant set throws `FlagValidationException`, and a targeting rule that does not
+  compile throws `FlagTargetingException`, from the call itself. Targeting, `fractional` rollouts and `TYPE_MISMATCH`
+  behave exactly as in production.
+- Every `Flags` write is visible to the very next evaluation (no refresh delay) and leaves no audit entry. Writes are
+  synchronous and safe inside test frameworks' synchronization contexts.
+- A key you never set returns the caller's default with reason `ERROR` and `FLAG_NOT_FOUND`, as in production.
+- Pass your app's own configure delegate (`TestFlagon.Create(MyApp.ConfigureFlagon)`) to seed the flags it `Define`s
+  and use its `ApplicationName`. Any storage choice in it (`UseSqlServerStorage`, ...) is ignored: no database is touched.
+- Test-safe defaults: auto-create and usage tracking are off, and startup fails fast. Change them with the second
+  argument, e.g. `TestFlagon.Create(testing: t => t.SeedDefinitions = false)` to start empty.
+- `flags.Admin` is the `IFlagonAdmin` over the same store, for code under test that manages flags.
+
+`flags.Evaluations` records every evaluation, so a test can assert which flags the code evaluated, for whom, and what
+it got. Each entry has the key, requested type, value, variant, reason, error, effective context (explicit or ambient),
+source (`InProcess` or `Remote` for OFREP) and time. They are plain .NET types, so any assertion library works:
+
+```csharp
+new CheckoutService(flags).Flow(userId: "42");
+
+var checkout = Assert.Single(flags.Evaluations.For("new-checkout"));
+Assert.Equal("42", checkout.Context.TargetingKey);
+Assert.Equal("on", checkout.Variant);
+Assert.False(flags.Evaluations.WasEvaluated("legacy-checkout"));
+```
+
+The log is thread-safe and in evaluation order. `flags.Evaluations.Clear()` empties it, as `Reset()` does. Management
+previews (draft evaluate) are not recorded. Turn recording off with `testing: t => t.RecordEvaluations = false`.
+
+### Integration tests
+
+For a running app (e.g. with `WebApplicationFactory`), call `AddFlagonTesting()` after the app's own `AddFlagon`. It
+replaces the app's store with the in-memory test store, so its SQL Server or Postgres connection is never opened:
+
+```csharp
+public class AppFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder b) =>
+        b.ConfigureTestServices(s => s.AddFlagonTesting());
+}
+
+// in a test
+var flags = factory.Services.GetRequiredService<TestFlags>();
+flags.SetFlag("new-checkout", true);
+```
+
+- The app's in-process evaluation, OFREP endpoints and management API see each `TestFlags` write on the next request.
+- `flags.Evaluations` records the app's in-process evaluations and its OFREP requests (source `Remote`).
+- The app's `Define`s, `ApplicationName`, ambient context (`AddFlagonAmbientContext()`), actor accessor and refresh
+  interval are kept, so per-user targeting works through real requests.
+- The same test-safe defaults apply; change them with `AddFlagonTesting(t => t.UsageTracking = true)`. Recorded usage
+  is written when the host stops.
+- It throws if `AddFlagon` hasn't been registered, and calling it twice is harmless.
+
 ## Roadmap
 
 Flagon evaluates boolean, string, number and object flags, with flagd targeting rules, `fractional` rollouts and
@@ -477,11 +574,10 @@ N-variant percentage splits. The flagd document format already accommodates what
 
 1. Redis store, cache decorator and push-based invalidation
 2. MongoDB, MySQL and SQLite stores
-3. `Jorrk.Flagon.Testing` package
-4. Segments; scheduled changes and flag expiry
-5. Kill-switch / prerequisite flags, approval workflows and webhooks
-6. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
-7. Direct-database clients for other languages; experimentation exposure events
+3. Segments; scheduled changes and flag expiry
+4. Kill-switch / prerequisite flags, approval workflows and webhooks
+5. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
+6. Direct-database clients for other languages; experimentation exposure events
 
 ## Contributing and releasing
 

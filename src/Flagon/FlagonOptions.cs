@@ -11,6 +11,12 @@ public sealed partial class FlagonOptions
     internal Func<IServiceProvider, IFlagStore>? StoreFactory { get; private set; }
 
     /// <summary>
+    /// Whether the flags declared with <c>Define</c> are written to the store (default true). Flagon.Testing turns it off
+    /// so a test host can start empty; definitions are still validated.
+    /// </summary>
+    internal bool SeedDefinitions { get; set; } = true;
+
+    /// <summary>
     /// How often the background refresher polls the store's change version (default 10 seconds). The full flag set is
     /// reloaded only when the version has changed, so changes made by any app sharing the store are seen within one interval.
     /// </summary>

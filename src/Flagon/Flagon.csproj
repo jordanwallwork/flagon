@@ -18,5 +18,7 @@
     <InternalsVisibleTo Include="Flagon.Tests.Support" />
     <!-- Benchmarks (#24) register a compiler and build snapshots directly through the same seam. -->
     <InternalsVisibleTo Include="Flagon.Benchmarks" />
+    <!-- Flagon.Testing drives startup (validate, seed, load) and writes through the store, refreshing the snapshot itself. -->
+    <InternalsVisibleTo Include="Flagon.Testing" />
   </ItemGroup>
 </Project>

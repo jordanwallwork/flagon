@@ -33,7 +33,8 @@ dotnet run -c Release -f net10.0 --no-build --project benchmarks/Flagon.Benchmar
 ```
 
 The suite now measures only the default registration, as a regression guard. It runs with the same command; drop
-`--job short` to get a full-length run. CI builds the project but does not run it.
+`--job short` to get a full-length run. CI builds the project but does not run it. Later regression runs:
+[evaluation-observer.md](evaluation-observer.md) (#36).
 
 - BenchmarkDotNet 0.15.8, `ShortRun` job (`IterationCount=3, LaunchCount=1, WarmupCount=3`), `MemoryDiagnoser`.
 - Linux Ubuntu 24.04.5 in a shared 4-core cloud container (Intel Xeon 2.10 GHz). .NET 8.0.32 and .NET 10.0.13, x64 RyuJIT.

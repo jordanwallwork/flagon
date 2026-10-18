@@ -65,7 +65,7 @@ public sealed partial class FlagonOptions
     /// </exception>
     /// <exception cref="ArgumentException">The key has already been defined.</exception>
     public FlagonOptions Define(string key, double defaultValue, string? description = null, IEnumerable<string>? tags = null, string? targeting = null) =>
-        Single(key, Number(key, FlagVariants.SingleVariant, defaultValue), description, tags, targeting);
+        Single(key, FlagVariants.Number(key, FlagVariants.SingleVariant, defaultValue), description, tags, targeting);
 
     /// <summary>
     /// Declares an object flag in code: a missing flag is created with a single <c>default</c> variant serving the JSON
@@ -138,26 +138,9 @@ public sealed partial class FlagonOptions
         IEnumerable<string>? tags = null,
         string? targeting = null)
     {
-        ArgumentNullException.ThrowIfNull(variants);
-        if (typeof(T) != typeof(bool) && typeof(T) != typeof(string) && typeof(T) != typeof(int)
-            && typeof(T) != typeof(double) && typeof(T) != typeof(JsonElement))
-        {
-            throw new ArgumentException(
-                $"Flag '{key}' variants are of type {typeof(T).Name}; use bool, string, int, double or JsonElement.", nameof(variants));
-        }
-
-        var values = variants.Select(v => KeyValuePair.Create(v.Key, v.Value switch
-        {
-            double number => Number(key, v.Key, number),
-            JsonElement json => json,
-            var other => JsonSerializer.SerializeToElement(other),
-        }));
+        var values = FlagVariants.ToJson(key, variants);
         return Add(key, values, defaultVariant, description, tags, targeting);
     }
-
-    private static JsonElement Number(string key, string variant, double value) => double.IsFinite(value)
-        ? JsonSerializer.SerializeToElement(value)
-        : throw new FlagValidationException($"Flag '{key}' variant '{variant}' is {value}; number variants must be finite.");
 
     private FlagonOptions Single(string key, JsonElement value, string? description, IEnumerable<string>? tags, string? targeting)
     {

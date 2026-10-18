@@ -97,7 +97,7 @@ internal readonly struct CallerDefault
 
     /// <summary>
     /// The default as canonical JSON (see <see cref="CanonicalJson"/>), or null when it has no JSON form (a non-finite
-    /// double, or an object the serialiser rejects). A null string or object is JSON <c>null</c>.
+    /// double, or an object the serialiser or one of its converters rejects). A null string or object is JSON <c>null</c>.
     /// </summary>
     public JsonElement? ToJson()
     {
@@ -113,7 +113,7 @@ internal readonly struct CallerDefault
             };
             return CanonicalJson.Canonicalize(json);
         }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return null;
         }
