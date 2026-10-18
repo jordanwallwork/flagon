@@ -157,13 +157,22 @@ internal sealed partial class FlagonAdmin(
     /// <summary>
     /// Reads <paramref name="key"/>, builds its new document from the current record with <paramref name="update"/>
     /// (which may refuse the write by throwing), stamps and stores it at <paramref name="expectedVersion"/>, then
-    /// refreshes the snapshot.
+    /// refreshes the snapshot. A record already past <paramref name="expectedVersion"/> is a conflict before
+    /// <paramref name="update"/> runs.
     /// </summary>
+    /// <exception cref="FlagVersionConflictException">The flag is not at <paramref name="expectedVersion"/>.</exception>
     private async Task<FlagRecord> UpdateDocumentAsync(
         string key, long expectedVersion, Func<FlagRecord, FlagDocument> update, CancellationToken cancellationToken)
     {
         var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagNotFoundException(key);
+
+        // A stale edit is a conflict before anything else, so the caller gets currentVersion to reload from rather than
+        // a validation error about a document it has not seen.
+        if (current.Version != expectedVersion)
+        {
+            throw new FlagVersionConflictException(key, expectedVersion, current.Version);
+        }
 
         var change = changes.Begin();
         var document = update(current).StampUpdated(change);

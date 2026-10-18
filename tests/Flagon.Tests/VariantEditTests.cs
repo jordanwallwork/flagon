@@ -211,6 +211,28 @@ public class VariantEditTests
     }
 
     [Fact]
+    public async Task A_stale_edit_that_the_current_document_would_reject_still_conflicts()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest(
+            "theme", Variants: Variants("""{ "light": "light", "dark": "dark", "solar": "solar" }"""), DefaultVariant: "light"));
+
+        // Another admin removes 'dark' and splits light/solar.
+        var trimmed = await host.Admin.SetVariantsAsync("theme", Variants("""{ "light": "light", "solar": "solar" }"""), "light", created.Version);
+        var current = await host.Admin.SetTargetingAsync("theme", Json("""{ "fractional": [ [ "light", 50 ], [ "solar", 50 ] ] }"""), trimmed.Version);
+
+        // Stale edits made against 'created': select the removed 'dark', and remove the now-split 'solar'.
+        var defaultVariant = await Assert.ThrowsAsync<FlagVersionConflictException>(
+            () => host.Admin.SetDefaultVariantAsync("theme", "dark", created.Version));
+        var variants = await Assert.ThrowsAsync<FlagVersionConflictException>(
+            () => host.Admin.SetVariantsAsync("theme", Variants("""{ "light": "light", "dark": "dark" }"""), "light", created.Version));
+
+        Assert.Equal(current.Version, defaultVariant.CurrentVersion);
+        Assert.Equal(current.Version, variants.CurrentVersion);
+        Assert.Equal(current, await host.Admin.GetAsync("theme"));
+    }
+
+    [Fact]
     public async Task Unknown_flags_are_not_found()
     {
         await using var host = await FlagonTestHost.StartAsync();
