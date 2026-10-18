@@ -2,6 +2,7 @@ using System.Text.Json;
 using Flagon.Internal;
 using Flagon.Testing.Internal;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Flagon.Testing;
 
@@ -22,6 +23,7 @@ public sealed class TestFlagon : IFlagon, IDisposable, IAsyncDisposable
     private readonly ServiceProvider _services;
     private readonly FlagonEvaluator _evaluator;
     private readonly FlagonTestingSwitches _switches;
+    private readonly AmbientContext _ambient;
     private int _disposed;
 
     private TestFlagon(ServiceProvider services)
@@ -29,12 +31,24 @@ public sealed class TestFlagon : IFlagon, IDisposable, IAsyncDisposable
         _services = services;
         _evaluator = services.GetRequiredService<FlagonEvaluator>();
         _switches = services.GetRequiredService<FlagonTestingSwitches>();
+        _ambient = services.GetRequiredService<AmbientContext>();
         Flags = services.GetRequiredService<TestFlags>();
         Admin = services.GetRequiredService<IFlagonAdmin>();
     }
 
     /// <summary>Sets up flags for the test. Every write is visible to the next evaluation.</summary>
     public TestFlags Flags { get; }
+
+    /// <summary>
+    /// The ambient context: used by every evaluation whose caller passes no <see cref="EvaluationContext"/>, as an
+    /// <see cref="IEvaluationContextAccessor"/> (e.g. the current request's user) is in an app. Null (the default) for
+    /// none. Lets code that relies on the ambient context be tested without ASP.NET.
+    /// </summary>
+    public EvaluationContext? Context
+    {
+        get => _ambient.Current;
+        set => _ambient.Current = value;
+    }
 
     /// <summary>The management API over the same store, for code under test that manages flags.</summary>
     public IFlagonAdmin Admin { get; }
@@ -64,6 +78,10 @@ public sealed class TestFlagon : IFlagon, IDisposable, IAsyncDisposable
             options = o;
         });
         FlagonTestServices.Apply(services, options!, switches);
+        services.RemoveAll<IEvaluationContextAccessor>();
+        var ambient = new AmbientContext();
+        services.AddSingleton(ambient);
+        services.AddSingleton<IEvaluationContextAccessor>(ambient);
 
         var provider = services.BuildServiceProvider();
         try
@@ -207,6 +225,18 @@ public sealed class TestFlagon : IFlagon, IDisposable, IAsyncDisposable
         finally
         {
             await _services.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The settable ambient context behind <see cref="Context"/>.</summary>
+    private sealed class AmbientContext : IEvaluationContextAccessor
+    {
+        private volatile EvaluationContext? _current;
+
+        public EvaluationContext? Current
+        {
+            get => _current;
+            set => _current = value;
         }
     }
 }
