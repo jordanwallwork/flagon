@@ -307,15 +307,16 @@ function targetingCard(flag, reload) {
 
   function show() {
     editor = null;
+    // Only the server's recogniser (flag.rollout) decides what is a rollout; any other rule is never rewritten by the slider.
+    const custom = hasTargeting(flag) && !flag.rollout;
     card.replaceChildren(
       h("h2", {}, "Targeting"),
-      hasTargeting(flag)
-        ? h("pre", { class: "rule" }, saved)
-        : h("p", { class: "muted" }, "No targeting: everyone gets the default variant."),
-      // The percentage rollout control goes here, above the JSON actions.
+      custom
+        ? [h("p", { class: "small muted" }, "Custom rule: edit as JSON."), h("pre", { class: "rule" }, saved)]
+        : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."), rolloutControl()],
       h("div", { class: "actions" },
         h("button", { disabled: flag.archived, title: locked, onclick: () => edit(saved) }, hasTargeting(flag) ? "Edit JSON" : "Add rule"),
-        hasTargeting(flag) && h("button", { class: "danger", disabled: flag.archived, title: locked, onclick: clear }, "Clear…")),
+        custom && h("button", { class: "danger", disabled: flag.archived, title: locked, onclick: clear }, "Clear…")),
     );
     changed();
   }
@@ -392,6 +393,68 @@ function targetingCard(flag, reload) {
         h("button", { type: "button", onclick: show }, "Cancel"))));
     changed();
     editor.focus();
+  }
+
+  /** The percentage rollout form: writes the canonical `fractional` shape the server reports back as `flag.rollout`. */
+  function rolloutControl() {
+    const current = flag.rollout?.percentage;
+    let n = current ?? 0;
+    const message = h("p", { role: "status", class: "small error-text", hidden: true });
+    const share = h("strong", {});
+    const range = h("input", { type: "range", min: "0", max: "100", step: "1", value: n, disabled: flag.archived, title: locked,
+      "aria-label": "Rollout percentage", oninput: () => set(range.value) });
+    const number = h("input", { type: "number", class: "percent", min: "0", max: "100", step: "1", value: n, disabled: flag.archived, title: locked,
+      "aria-label": "Rollout percentage", oninput: () => { if (number.value !== "") set(number.value, true); }, onchange: () => set(number.value) });
+    const saveButton = h("button", { type: "submit", class: "primary", disabled: flag.archived, title: locked }, current === undefined ? "Start rollout" : "Save rollout");
+
+    /** Clamps to an integer 0–100 and syncs both inputs (except the number box mid-typing). */
+    function set(value, typing = false) {
+      const parsed = Math.round(Number(value));
+      n = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : n;
+      range.value = n;
+      if (!typing) number.value = n;
+      share.textContent = `${n}%`;
+      saveButton.disabled = flag.archived || n === current;
+      message.hidden = true;
+    }
+
+    async function save(e) {
+      e.preventDefault();
+      saveButton.disabled = true;
+      try {
+        await api.setTargeting(flag.key, flag.version, { fractional: [["on", n], ["off", 100 - n]] });
+      } catch (err) {
+        if (err instanceof ApiError && err.isVersionConflict) await conflictPrompt(err, reload);
+        else { message.replaceChildren(...ruleError(err)); message.hidden = false; }
+        if (saveButton.isConnected) saveButton.disabled = false;
+        return;
+      }
+      showNotice(`Rollout saved: ${n}% of users get on.`, "success");
+      await reload();
+    }
+
+    async function remove() {
+      const ok = await confirmDialog({
+        title: `Remove the rollout for ${flag.key}?`,
+        detail: "Targeting is cleared and everyone gets the default variant. The audit history keeps a copy.",
+        ok: "Remove",
+      });
+      if (ok && await write(() => api.clearTargeting(flag.key, flag.version), reload)) {
+        showNotice("Rollout removed.", "success");
+        await reload();
+      }
+    }
+
+    set(n);
+    return h("form", { class: "stack rollout", onsubmit: save },
+      h("h3", {}, "Percentage rollout"),
+      h("div", { class: "rollout-inputs" }, range, number, h("span", {}, "%")),
+      h("p", {}, share, " of users get ", h("strong", {}, "on"), "; the rest get ", h("code", {}, "off"), "."),
+      h("p", { class: "small muted" }, "Users are bucketed by their targeting key, so the same user stays in the same bucket as the percentage grows."),
+      message,
+      h("div", { class: "actions" },
+        saveButton,
+        current !== undefined && h("button", { type: "button", class: "danger", disabled: flag.archived, title: locked, onclick: remove }, "Remove rollout…")));
   }
 
   async function clear() {
