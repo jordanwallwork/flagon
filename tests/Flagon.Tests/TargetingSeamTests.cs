@@ -148,7 +148,7 @@ public class TargetingSeamTests
         for (var i = 0; i < 10; i++)
         {
             host.Flagon.GetBooleanDetails("targeted");
-            host.Flagon.GetAllBooleanDetails();
+            host.Flagon.GetAllDetails();
         }
 
         await host.AdvanceToNextRefreshAsync(); // unchanged store: the snapshot is kept, nothing recompiled
@@ -193,7 +193,7 @@ public class TargetingSeamTests
             host.Flagon.GetBooleanDetails("targeted");
         }
 
-        host.Flagon.GetAllBooleanDetails();
+        host.Flagon.GetAllDetails();
         var warning = Assert.Single(RuleFailureWarnings(host));
         Assert.Contains("'targeted'", warning.Message);
         Assert.IsType<InvalidOperationException>(warning.Exception);
@@ -292,7 +292,7 @@ public class TargetingSeamTests
 
         Assert.Equal(EvaluationReason.TargetingMatch, host.Flagon.GetBooleanDetails("targeted", context: matching).Reason);
         Assert.Equal(EvaluationReason.Default, host.Flagon.GetBooleanDetails("targeted", context: other).Reason);
-        Assert.Equal(EvaluationReason.TargetingMatch, host.Flagon.GetAllBooleanDetails(matching).Flags.Single().Reason);
+        Assert.Equal(EvaluationReason.TargetingMatch, host.Flagon.GetAllDetails(matching).Flags.Single().Reason);
     }
 
     [Fact]

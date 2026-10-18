@@ -222,12 +222,13 @@ public interface IFlagon
     ValueTask<FlagEvaluationDetails<T>> GetObjectDetailsAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Evaluates every flag in the current snapshot (bulk evaluation, e.g. for OFREP clients), ordered by key.
-    /// Each flag is evaluated with a caller default of <c>false</c>; an entry whose
-    /// <see cref="FlagEvaluationDetails{T}.Variant"/> is null (e.g. a disabled flag, or an error) carries no flag value,
-    /// so the consumer should apply its own default.
+    /// Evaluates every flag in the current snapshot (bulk evaluation, e.g. for OFREP clients), ordered by key. Each
+    /// entry's <see cref="FlagEvaluationDetails{T}.Value"/> is the served variant's JSON, whatever the flag's type. An
+    /// entry whose <see cref="FlagEvaluationDetails{T}.Variant"/> is null (e.g. a disabled flag, no default variant, or an
+    /// error) carries no flag value (<c>default</c>, <see cref="JsonValueKind.Undefined"/>), so the consumer should apply
+    /// its own default. Bulk evaluation is untyped, so it never reports <see cref="ErrorCode.TypeMismatch"/>.
     /// </summary>
-    FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null);
+    FlagEvaluationSet<JsonElement> GetAllDetails(EvaluationContext? context = null);
 }
 
 /// <summary>The result of evaluating every flag in one snapshot.</summary>

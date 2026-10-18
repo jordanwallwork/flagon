@@ -345,6 +345,28 @@ public class TypedEvaluationTests
     }
 
     [Fact]
+    public async Task Bulk_evaluation_serves_each_flags_variant_as_json_ordered_by_key()
+    {
+        await using var host = await HostAsync(
+            ("theme", Flag(FlagType.String)),
+            ("layout", Flag(FlagType.Object, targeting: AliceGetsB)),
+            ("checkout", Flag(FlagType.Boolean, defaultVariant: "\"b\"")),
+            ("ratio", Flag(FlagType.Number, state: "DISABLED")));
+
+        var set = host.Flagon.GetAllDetails(new EvaluationContext("alice"));
+
+        Assert.Equal(host.Status.Version, set.Version);
+        Assert.Equal(
+            [
+                ("checkout", "true", "b", EvaluationReason.Static),
+                ("layout", """{"n":2}""", "b", EvaluationReason.TargetingMatch),
+                ("ratio", "(none)", null, EvaluationReason.Disabled),
+                ("theme", "\"x\"", "a", EvaluationReason.Static),
+            ],
+            set.Flags.Select(d => (d.FlagKey, d.Value.ValueKind == JsonValueKind.Undefined ? "(none)" : d.Value.GetRawText(), d.Variant, d.Reason)));
+    }
+
+    [Fact]
     public async Task A_typed_getter_warns_about_a_missing_key_once()
     {
         await using var host = await HostAsync();

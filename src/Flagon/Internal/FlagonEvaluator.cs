@@ -120,7 +120,11 @@ internal sealed partial class FlagonEvaluator(
     }
 
     /// <summary>Bulk counterpart of <see cref="GetRemoteBooleanDetails"/>: uses only <paramref name="context"/>.</summary>
-    internal FlagEvaluationSet<bool> GetAllRemoteBooleanDetails(EvaluationContext context) => EvaluateAllBoolean(context);
+    internal FlagEvaluationSet<bool> GetAllRemoteBooleanDetails(EvaluationContext context)
+    {
+        var all = EvaluateAll(context);
+        return new FlagEvaluationSet<bool>(all.Version, all.Flags.Select(details => details.AsBoolean(defaultValue: false)).ToList());
+    }
 
     /// <summary>
     /// Previews <paramref name="key"/> for the management API: the stored flag as of the current snapshot, evaluated
@@ -163,13 +167,7 @@ internal sealed partial class FlagonEvaluator(
         return Evaluate(key, flag, snapshot.Version, context);
     }
 
-    public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null) => EvaluateAllBoolean(context ?? ambientContext.Current);
-
-    private FlagEvaluationSet<bool> EvaluateAllBoolean(EvaluationContext? context)
-    {
-        var all = EvaluateAll(context);
-        return new FlagEvaluationSet<bool>(all.Version, all.Flags.Select(details => details.AsBoolean(defaultValue: false)).ToList());
-    }
+    public FlagEvaluationSet<JsonElement> GetAllDetails(EvaluationContext? context = null) => EvaluateAll(context ?? ambientContext.Current);
 
     private FlagEvaluationSet<JsonElement> EvaluateAll(EvaluationContext? context)
     {
