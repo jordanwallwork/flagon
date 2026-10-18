@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Flagon.Internal;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 
 namespace Flagon.Testing;
@@ -9,74 +10,101 @@ namespace Flagon.Testing;
 /// is visible to the very next evaluation: the snapshot is refreshed before the method returns. Writes go straight to
 /// the store without an audit entry, so the audit history shows only the app's own admin writes.
 /// </summary>
-/// <remarks>Safe to call from parallel tasks and from inside a single-threaded <see cref="SynchronizationContext"/>.</remarks>
+/// <remarks>
+/// <para>
+/// Writes are checked with the same write-time rules as <see cref="IFlagonAdmin"/>: an invalid key or variant set throws
+/// <see cref="FlagValidationException"/>, and a targeting rule the registered compiler rejects throws
+/// <see cref="FlagTargetingException"/>, from the call that sets it.
+/// </para>
+/// <para>
+/// Every <c>targeting</c> parameter is a flagd targeting rule as JSON text (JsonLogic plus flagd's operators), e.g.
+/// <c>{"if":[{"in":[{"var":"email"},["a@example.com"]]},"on",null]}</c>. A rule that matches serves the variant it names;
+/// otherwise the flag serves its default variant.
+/// </para>
+/// <para>Safe to call from parallel tasks and from inside a single-threaded <see cref="SynchronizationContext"/>.</para>
+/// </remarks>
 public sealed class TestFlags
 {
     private readonly IFlagStore _store;
     private readonly FlagSnapshotManager _snapshots;
+    private readonly ITargetingCompiler _compiler;
 
-    internal TestFlags(IFlagStore store, FlagSnapshotManager snapshots)
+    internal TestFlags(IFlagStore store, FlagSnapshotManager snapshots, ITargetingCompiler compiler)
     {
         _store = store;
         _snapshots = snapshots;
+        _compiler = compiler;
     }
 
     /// <summary>Sets <paramref name="key"/> to an enabled boolean flag (<c>on</c>/<c>off</c> variants) serving <paramref name="value"/>.</summary>
     /// <param name="key">The flag key.</param>
-    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <param name="value">The value the flag serves when no targeting rule applies.</param>
+    /// <param name="targeting">Optional targeting rule as JSON text; it names <c>"on"</c> or <c>"off"</c>.</param>
     /// <returns>This instance, for chaining.</returns>
-    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key.</exception>
-    public TestFlags SetFlag(string key, bool value) => Upsert(key, FlagDocument.Boolean(value));
+    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key, or <paramref name="targeting"/> is not JSON.</exception>
+    /// <exception cref="FlagTargetingException"><paramref name="targeting"/> does not compile.</exception>
+    public TestFlags SetFlag(string key, bool value, string? targeting = null) =>
+        SetSingle(key, JsonSerializer.SerializeToElement(value), targeting);
 
     /// <summary>
     /// Sets <paramref name="key"/> to an enabled string flag with a single <c>default</c> variant serving
     /// <paramref name="value"/>, the same shape as a string flag defined in code or auto-created.
     /// </summary>
     /// <param name="key">The flag key.</param>
-    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <param name="value">The value the flag serves when no targeting rule applies.</param>
+    /// <param name="targeting">Optional targeting rule as JSON text; it names <c>"default"</c> (or null for the caller's default).</param>
     /// <returns>This instance, for chaining.</returns>
-    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key.</exception>
-    public TestFlags SetFlag(string key, string value)
+    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key, or <paramref name="targeting"/> is not JSON.</exception>
+    /// <exception cref="FlagTargetingException"><paramref name="targeting"/> does not compile.</exception>
+    public TestFlags SetFlag(string key, string value, string? targeting = null)
     {
         ArgumentNullException.ThrowIfNull(value);
-        return Upsert(key, FlagDocument.SingleValue(JsonSerializer.SerializeToElement(value)));
+        return SetSingle(key, JsonSerializer.SerializeToElement(value), targeting);
     }
 
     /// <summary>
     /// Sets <paramref name="key"/> to an enabled number flag with a single <c>default</c> variant serving
-    /// <paramref name="value"/>. Otherwise as <see cref="SetFlag(string, string)"/>.
+    /// <paramref name="value"/>. Otherwise as <see cref="SetFlag(string, string, string?)"/>.
     /// </summary>
     /// <param name="key">The flag key.</param>
-    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <param name="value">The value the flag serves when no targeting rule applies.</param>
+    /// <param name="targeting">Optional targeting rule as JSON text.</param>
     /// <returns>This instance, for chaining.</returns>
-    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key.</exception>
-    public TestFlags SetFlag(string key, int value) =>
-        Upsert(key, FlagDocument.SingleValue(JsonSerializer.SerializeToElement(value)));
+    /// <exception cref="FlagValidationException"><paramref name="key"/> is not a valid flag key, or <paramref name="targeting"/> is not JSON.</exception>
+    /// <exception cref="FlagTargetingException"><paramref name="targeting"/> does not compile.</exception>
+    public TestFlags SetFlag(string key, int value, string? targeting = null) =>
+        SetSingle(key, JsonSerializer.SerializeToElement(value), targeting);
 
     /// <summary>
     /// Sets <paramref name="key"/> to an enabled number flag with a single <c>default</c> variant serving
-    /// <paramref name="value"/>. Otherwise as <see cref="SetFlag(string, string)"/>.
+    /// <paramref name="value"/>. Otherwise as <see cref="SetFlag(string, string, string?)"/>.
     /// </summary>
     /// <param name="key">The flag key.</param>
-    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <param name="value">The value the flag serves when no targeting rule applies.</param>
+    /// <param name="targeting">Optional targeting rule as JSON text.</param>
     /// <returns>This instance, for chaining.</returns>
     /// <exception cref="FlagValidationException">
-    /// <paramref name="key"/> is not a valid flag key, or <paramref name="value"/> is NaN or infinite (JSON has no such numbers).
+    /// <paramref name="key"/> is not a valid flag key, <paramref name="value"/> is NaN or infinite (JSON has no such
+    /// numbers), or <paramref name="targeting"/> is not JSON.
     /// </exception>
-    public TestFlags SetFlag(string key, double value) =>
-        Upsert(key, FlagDocument.SingleValue(FlagVariants.Number(key, FlagVariants.SingleVariant, value)));
+    /// <exception cref="FlagTargetingException"><paramref name="targeting"/> does not compile.</exception>
+    public TestFlags SetFlag(string key, double value, string? targeting = null) =>
+        SetSingle(key, FlagVariants.Number(key, FlagVariants.SingleVariant, value), targeting);
 
     /// <summary>
     /// Sets <paramref name="key"/> to an enabled object flag with a single <c>default</c> variant serving the JSON object
-    /// <paramref name="json"/>. Otherwise as <see cref="SetFlag(string, string)"/>.
+    /// <paramref name="json"/>. Otherwise as <see cref="SetFlag(string, string, string?)"/>.
     /// </summary>
     /// <param name="key">The flag key.</param>
-    /// <param name="json">The value every evaluation of the flag is served: JSON text of an object, e.g. <c>{"columns":3}</c>.</param>
+    /// <param name="json">The value the flag serves: JSON text of an object, e.g. <c>{"columns":3}</c>.</param>
+    /// <param name="targeting">Optional targeting rule as JSON text.</param>
     /// <returns>This instance, for chaining.</returns>
     /// <exception cref="FlagValidationException">
-    /// <paramref name="key"/> is not a valid flag key, or <paramref name="json"/> is not valid JSON or not an object.
+    /// <paramref name="key"/> is not a valid flag key, <paramref name="json"/> is not valid JSON or not an object, or
+    /// <paramref name="targeting"/> is not JSON.
     /// </exception>
-    public TestFlags SetObjectFlag(string key, string json)
+    /// <exception cref="FlagTargetingException"><paramref name="targeting"/> does not compile.</exception>
+    public TestFlags SetObjectFlag(string key, string json, string? targeting = null)
     {
         ArgumentNullException.ThrowIfNull(json);
         JsonElement value;
@@ -90,28 +118,52 @@ public sealed class TestFlags
             throw new FlagValidationException($"Flag '{key}' object value is not valid JSON: {ex.Message}");
         }
 
-        return Upsert(key, SingleObject(key, value, nameof(SetObjectFlag)));
+        return SetSingle(key, RequireObject(key, value, nameof(SetObjectFlag)), targeting);
     }
 
     /// <summary>
     /// Sets <paramref name="key"/> to an enabled object flag with a single <c>default</c> variant serving
     /// <paramref name="value"/> serialised to JSON, as <see cref="IFlagon.GetObject{T}"/> reads it back. Otherwise as
-    /// <see cref="SetFlag(string, string)"/>.
+    /// <see cref="SetFlag(string, string, string?)"/>.
     /// </summary>
     /// <typeparam name="T">The type of the value; it must serialise to a JSON object.</typeparam>
     /// <param name="key">The flag key.</param>
-    /// <param name="value">The value every evaluation of the flag is served.</param>
+    /// <param name="value">The value the flag serves.</param>
     /// <param name="options">Serializer options for <paramref name="value"/>; pass the same options to the getter.</param>
     /// <returns>This instance, for chaining.</returns>
     /// <exception cref="FlagValidationException">
     /// <paramref name="key"/> is not a valid flag key, or <paramref name="value"/> does not serialise to a JSON object.
     /// </exception>
     public TestFlags SetFlag<T>(string key, T value, JsonSerializerOptions? options = null) =>
-        Upsert(key, SingleObject(key, JsonSerializer.SerializeToElement(value, options), nameof(SetFlag)));
+        SetFlag(key, value, options, targeting: null);
+
+    /// <summary>
+    /// Sets <paramref name="key"/> to an enabled object flag with a single <c>default</c> variant serving
+    /// <paramref name="value"/> serialised to JSON, with a targeting rule. Otherwise as
+    /// <see cref="SetFlag{T}(string, T, JsonSerializerOptions?)"/>.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="options"/> and <paramref name="targeting"/> are both required here so that a boolean, string or
+    /// number value always picks its own overload; pass <c>options: null</c> for the default serializer options.
+    /// </remarks>
+    /// <typeparam name="T">The type of the value; it must serialise to a JSON object.</typeparam>
+    /// <param name="key">The flag key.</param>
+    /// <param name="value">The value the flag serves when no targeting rule applies.</param>
+    /// <param name="options">Serializer options for <paramref name="value"/>, or null for the defaults.</param>
+    /// <param name="targeting">The targeting rule as JSON text, or null for none.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagValidationException">
+    /// <paramref name="key"/> is not a valid flag key, <paramref name="value"/> does not serialise to a JSON object, or
+    /// <paramref name="targeting"/> is not JSON.
+    /// </exception>
+    /// <exception cref="FlagTargetingException"><paramref name="targeting"/> does not compile.</exception>
+    public TestFlags SetFlag<T>(string key, T value, JsonSerializerOptions? options, string? targeting) =>
+        SetSingle(key, RequireObject(key, JsonSerializer.SerializeToElement(value, options), nameof(SetFlag)), targeting);
 
     /// <summary>
     /// Sets <paramref name="key"/> to an enabled flag with named <paramref name="variants"/>, serving
-    /// <paramref name="defaultVariant"/>, as a flag defined in code with <see cref="FlagonOptions.Define{T}"/>.
+    /// <paramref name="defaultVariant"/> when no targeting rule applies, as a flag defined in code with
+    /// <see cref="FlagonOptions.Define{T}"/>.
     /// </summary>
     /// <typeparam name="T">
     /// The flag type of the variants: <see cref="bool"/>, <see cref="string"/>, <see cref="int"/>, <see cref="double"/> or
@@ -122,51 +174,106 @@ public sealed class TestFlags
     /// <param name="defaultVariant">
     /// The variant served when no targeting rule applies, or null for none (the caller's default is served).
     /// </param>
+    /// <param name="targeting">Optional targeting rule as JSON text; a rule names the variant it serves.</param>
     /// <returns>This instance, for chaining.</returns>
     /// <exception cref="FlagValidationException">
-    /// The key is invalid; there are no variants; a variant name is empty, longer than 128 characters or repeated; a value
-    /// is null, a non-finite number, an array, or of a different type from the others; or
+    /// The key or targeting JSON is invalid; there are no variants; a variant name is empty, longer than 128 characters
+    /// or repeated; a value is null, a non-finite number, an array, or of a different type from the others; or
     /// <paramref name="defaultVariant"/> is not one of the variants. Boolean variants must be exactly
     /// <c>{ "on": true, "off": false }</c>.
     /// </exception>
+    /// <exception cref="FlagTargetingException"><paramref name="targeting"/> does not compile.</exception>
     /// <exception cref="ArgumentException"><typeparamref name="T"/> is not a supported variant type.</exception>
     [System.Runtime.CompilerServices.OverloadResolutionPriority(1)]
-    public TestFlags SetFlag<T>(string key, IReadOnlyDictionary<string, T> variants, string? defaultVariant)
+    public TestFlags SetFlag<T>(string key, IReadOnlyDictionary<string, T> variants, string? defaultVariant, string? targeting = null)
     {
         ArgumentNullException.ThrowIfNull(variants);
         FlagKey.Validate(key);
-        var (validated, _) = FlagVariants.Validate(key, FlagVariants.ToJson(key, variants), defaultVariant);
-        return Upsert(key, new FlagDocument(FlagState.Enabled, validated, defaultVariant, new FlagMetadata()));
+        return Set(key, FlagVariants.ToJson(key, variants), defaultVariant, targeting);
     }
 
-    private static FlagDocument SingleObject(string key, JsonElement value, string method) =>
+    /// <summary>
+    /// Replaces the targeting rule of the existing flag <paramref name="key"/>, or clears it when
+    /// <paramref name="targeting"/> is null. Its variants, default variant and state are kept.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <param name="targeting">The new targeting rule as JSON text, or null for none.</param>
+    /// <returns>This instance, for chaining.</returns>
+    /// <exception cref="FlagNotFoundException">There is no flag <paramref name="key"/>.</exception>
+    /// <exception cref="FlagValidationException"><paramref name="targeting"/> is not JSON.</exception>
+    /// <exception cref="FlagTargetingException"><paramref name="targeting"/> does not compile.</exception>
+    public TestFlags SetTargeting(string key, string? targeting)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var rule = Rule(key, targeting);
+        return Update(key, document => document with { Targeting = rule });
+    }
+
+    // Production rejects a single value that is not an object only on the typed getter; an object setter checks it here.
+    private static JsonElement RequireObject(string key, JsonElement value, string method) =>
         value.ValueKind == JsonValueKind.Object
-            ? FlagDocument.SingleValue(value)
+            ? value
             : throw new FlagValidationException(
                 $"Flag '{key}' object value is a JSON {value.ValueKind.ToString().ToLowerInvariant()}; {method} takes a JSON object.");
 
-    private TestFlags Upsert(string key, FlagDocument document)
+    /// <summary>A flag of one value, the shape <c>Define</c> and auto-create give it: <c>on</c>/<c>off</c> for a boolean, else <c>default</c>.</summary>
+    private TestFlags SetSingle(string key, JsonElement value, string? targeting)
     {
         FlagKey.Validate(key);
-        // The in-memory store completes synchronously and every awaited path uses ConfigureAwait(false), so blocking here
-        // cannot deadlock a test framework's synchronization context.
-        UpsertAsync(key, document).GetAwaiter().GetResult();
-        return this;
+        var single = FlagDocument.SingleValue(value);
+        return Set(key, single.Variants, single.DefaultVariant, targeting);
     }
 
-    private async Task UpsertAsync(string key, FlagDocument document)
+    /// <summary>Validates an enabled flag with the write-time rules and upserts it.</summary>
+    private TestFlags Set(string key, IEnumerable<KeyValuePair<string, JsonElement>> variants, string? defaultVariant, string? targeting)
+    {
+        var (validated, _) = FlagVariants.Validate(key, variants, defaultVariant);
+        var document = new FlagDocument(FlagState.Enabled, validated, defaultVariant, new FlagMetadata(), Rule(key, targeting));
+        return Upsert(key, _ => document);
+    }
+
+    /// <summary>The rule to store for <paramref name="targeting"/>, compiled now with the registered compiler.</summary>
+    private JsonElement? Rule(string key, string? targeting) =>
+        TargetingRules.Validate(_compiler, key, TargetingRules.ParseJson(key, targeting));
+
+    /// <summary>Rewrites the document of the existing flag <paramref name="key"/>.</summary>
+    /// <exception cref="FlagNotFoundException">There is no flag <paramref name="key"/>.</exception>
+    private TestFlags Update(string key, Func<FlagDocument, FlagDocument> update) =>
+        Upsert(key, current => current is null ? throw new FlagNotFoundException(key) : update(current.Document));
+
+    /// <summary>
+    /// Writes the document <paramref name="build"/> makes from the current record (null when there is none), restoring
+    /// an archived flag, then refreshes the snapshot.
+    /// </summary>
+    private TestFlags Upsert(string key, Func<FlagRecord?, FlagDocument> build) => Run(async () =>
     {
         // A concurrent write to the same key (another task, or the app's own admin write) moves the version: re-read and retry.
-        while (!await TryWriteAsync(key, document).ConfigureAwait(false))
+        while (!await TryWriteAsync(key, build).ConfigureAwait(false))
         {
         }
+    });
 
-        await _snapshots.RefreshAsync().ConfigureAwait(false);
+    /// <summary>
+    /// Runs <paramref name="write"/> then refreshes the snapshot, blocking until both finish. The in-memory store
+    /// completes synchronously and every awaited path uses <c>ConfigureAwait(false)</c>, so blocking here cannot deadlock
+    /// a test framework's synchronization context.
+    /// </summary>
+    private TestFlags Run(Func<Task> write)
+    {
+        RunAsync().GetAwaiter().GetResult();
+        return this;
+
+        async Task RunAsync()
+        {
+            await write().ConfigureAwait(false);
+            await _snapshots.RefreshAsync().ConfigureAwait(false);
+        }
     }
 
-    private async Task<bool> TryWriteAsync(string key, FlagDocument document)
+    private async Task<bool> TryWriteAsync(string key, Func<FlagRecord?, FlagDocument> build)
     {
         var current = await _store.GetAsync(key).ConfigureAwait(false);
+        var document = build(current);
         if (current is null)
         {
             return await _store.TryCreateAsync(key, document).ConfigureAwait(false) is not null;
