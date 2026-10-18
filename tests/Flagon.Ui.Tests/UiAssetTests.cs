@@ -297,6 +297,18 @@ public class UiAssetTests
     }
 
     [Fact]
+    public async Task The_usage_panel_shows_each_apps_code_default_as_typed_json()
+    {
+        await using var host = await StartAsync();
+
+        var app = await ImportsOfAppAsync(host);
+
+        var view = app[app.IndexOf("function observedDefaultView", StringComparison.Ordinal)..];
+        Assert.Contains("formatValue(value, true)", view, StringComparison.Ordinal);
+        Assert.Contains("observedDefaultView(a.observedDefault)", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task The_audit_history_summarises_targeting_changes()
     {
         await using var host = await StartAsync();

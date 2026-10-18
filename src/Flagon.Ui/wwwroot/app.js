@@ -78,6 +78,12 @@ function valueView(value) {
   return typeof value === "object" ? h("pre", { class: "value" }, formatValue(value, true)) : h("code", {}, formatValue(value));
 }
 
+/** An app's code default in the usage panel, as typed JSON (strings quoted, objects pretty-printed); "—" when unknown. */
+function observedDefaultView(value) {
+  if (value === null || value === undefined) return h("span", { class: "muted" }, "—");
+  return typeof value === "object" ? h("pre", { class: "value" }, formatValue(value, true)) : h("code", {}, formatValue(value));
+}
+
 /** The list's value cell for a non-boolean flag: its default variant and (truncated) value, or that it has none. */
 function valueSummary(flag) {
   if (flag.defaultVariant === null || flag.defaultVariant === undefined) {
@@ -755,7 +761,7 @@ async function renderDetail(key) {
         h("tbody", {}, apps.map((a) => h("tr", {},
           h("td", {}, a.applicationName),
           h("td", {}, time(a.lastEvaluatedAt)),
-          h("td", {}, h("code", {}, a.observedDefault === null || a.observedDefault === undefined ? "—" : JSON.stringify(a.observedDefault))))))),
+          h("td", {}, observedDefaultView(a.observedDefault)))))),
     flag.usage?.hasDefaultMismatch && h("p", { class: "warning" }, "Applications pass different code defaults for this flag, so they disagree whenever it is archived, disabled or unavailable."));
 
   const history = h("section", { class: "card" }, h("h2", {}, "Audit history"),

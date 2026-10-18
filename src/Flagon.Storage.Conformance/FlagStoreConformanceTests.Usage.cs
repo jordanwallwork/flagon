@@ -59,6 +59,21 @@ public abstract partial class FlagStoreConformanceTests
         Assert.Null(Assert.Single(await store.GetUsageAsync("never-created")).ObservedDefault);
     });
 
+    /// <summary>Conformance: an observed default of any flag type round-trips as the same JSON.</summary>
+    [Theory]
+    [InlineData("\"dark\"")]
+    [InlineData("25")]
+    [InlineData("0.5")]
+    [InlineData("""{"columns":3,"tags":["a"],"title":"Pics"}""")]
+    public Task Typed_observed_defaults_round_trip(string json) => WithStoreAsync(async store =>
+    {
+        using var observed = JsonDocument.Parse(json);
+        await store.UpsertUsageAsync([new FlagUsage("typed", "AppA", Epoch, observed.RootElement)]);
+
+        var usage = Assert.Single(await store.GetUsageAsync("typed"));
+        Assert.Equal(json, usage.ObservedDefault!.Value.GetRawText());
+    });
+
     /// <summary>Conformance: concurrent usage batches for the same keys converge on the latest record.</summary>
     [Fact]
     public Task Concurrent_usage_batches_converge_on_the_latest_record() => WithStoreAsync(async store =>

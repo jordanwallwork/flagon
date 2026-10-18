@@ -52,5 +52,5 @@ public sealed record FlagAuditEntry(
 /// <param name="Key">The flag key (need not exist as a flag).</param>
 /// <param name="ApplicationName">The evaluating application.</param>
 /// <param name="LastEvaluatedAt">When the application last evaluated the flag.</param>
-/// <param name="ObservedDefault">The default value the application's code supplied (a JSON value; boolean in the MVP).</param>
+/// <param name="ObservedDefault">The default value the application's code supplied, as canonical JSON (object keys sorted, one number format); null when unknown.</param>
 public sealed record FlagUsage(string Key, string ApplicationName, DateTimeOffset LastEvaluatedAt, JsonElement? ObservedDefault = null);
