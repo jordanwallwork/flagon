@@ -36,17 +36,17 @@ Each suite runs against its own flag files, in its own store.
   substitution before storing. A reference to an unknown evaluator stays in the rule, and the compiler must then
   report PARSE_ERROR, as flagd does. Because the substitution works on parsed JSON, the "whitespace around the colon"
   cases pass trivially.
-- **Boolean subset**: Flagon evaluates boolean flags only (`IFlagon`). A case is included when its flag is boolean,
-  or when its flag has a `targeting` rule. Choosing a variant from a rule does not depend on the variant values'
-  type, so a targeted flag of any type is stored as a *boolean projection*: the state, variant names,
-  `defaultVariant` and rule are kept, and every variant value becomes `true`. The case is then evaluated with a
-  caller default of `false`. The expected variant is the one whose original value is the Gherkin's expected value,
-  so `(variant, true)` means "the rule chose this variant" and `(null, false)` means "the caller's default was served".
-  Where the Gherkin cannot tell these apart (the expected value is both a variant value and the caller default),
-  either result is accepted.
-- **Excluded**: non-boolean flags without targeting (typed-value resolution, including TYPE_MISMATCH), a key not in
-  the suite's flags (FLAG_NOT_FOUND), metadata assertions (Flagon's evaluation details have no flag metadata), and
-  fractional examples for other bucketing generations. Flagon targets `@fractional-v3`, the generation flagd 0.18
+- **Typed getters**: every fixture flag is stored as it is, typed variant values and all. Each case is evaluated
+  through the `IFlagon` getter its `<type>-flag` step names (`Boolean` → `GetBooleanDetails`, `String` →
+  `GetStringDetails`, `Integer` → `GetIntDetails`, `Float` → `GetDoubleDetails`, `Object` → `GetObjectDetails`),
+  with the Gherkin's fallback value as the caller's default. So the typed cases of `evaluation`, `zero-values`,
+  `string`, `errors` (TYPE_MISMATCH) and targeting/fractional over typed flags all run. The expected result is a
+  variant whose value equals the Gherkin's expected value (compared as the step's type: numbers numerically, objects
+  as JSON). Where the Gherkin cannot tell a variant from the caller's default (the expected value is both a variant
+  value and the caller default), either result is accepted.
+- **Excluded**: a key not in the suite's flags (FLAG_NOT_FOUND: type-agnostic and covered by Flagon's own tests),
+  metadata assertions (Flagon's evaluation details have no flag metadata), and fractional examples for other
+  bucketing generations. Flagon targets `@fractional-v3`, the generation flagd 0.18
   implements; `@fractional-v1` and `@fractional-v2` examples expect different buckets for the same inputs. The
   `Summary` test prints every excluded case and why.
 - **No `defaultVariant`**: flagd allows a null or absent `defaultVariant`, and so does Flagon: when no rule applies the

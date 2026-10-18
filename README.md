@@ -70,13 +70,37 @@ FlagEvaluationDetails<bool> details = flags.GetBooleanDetails("new-checkout");
 // details.ErrorCode (None, FlagNotFound, ...)
 ```
 
+String, number and object flags (flagd's other flag types) have typed getters, each with `*Details` and `*Async`
+counterparts. The default is required:
+
+```csharp
+string theme = flags.GetString("theme", "light");
+int pageSize = flags.GetInt("page-size", 20);
+double ratio = await flags.GetDoubleAsync("ratio", 0.5);
+JsonElement layout = flags.GetObject("layout", fallbackJson);               // the variant's JSON object, as is
+Layout typed = flags.GetObject("layout", Layout.Default, options: jsonOptions); // deserialised into your type
+
+FlagEvaluationDetails<int> sizeDetails = flags.GetIntDetails("page-size", 20);
+```
+
+A served value of the wrong type never throws: you get your default with reason `Error` and error code `TypeMismatch`.
+That includes a number that is not an integer within `Int32` range from `GetInt` (never truncated), and an object that
+does not deserialise into your type from `GetObject<T>`. The type check applies only to a served variant: a missing,
+archived or disabled flag, or one with no default variant, returns your default with its usual reason, whatever the
+type you asked for. Targeting rules and `fractional` rollouts work for every type.
+
+`GetAllDetails()` evaluates every flag at once (e.g. for a frontend): each entry's `Value` is the served variant's JSON,
+or `default` (`JsonValueKind.Undefined`) when no variant was served (disabled, no default variant, error), so apply
+your own default.
+
 Every evaluation method takes an optional `EvaluationContext` (targeting key plus attributes). When you don't pass one,
 Flagon uses the ambient context: with `builder.Services.AddFlagonAmbientContext()` (Flagon.AspNetCore) that is the
 current request's user; a context you pass always wins. A flag's flagd `targeting` rule is evaluated against that
 context (see [Targeting](#targeting)).
 
 The first time code evaluates an unknown key, Flagon creates the flag (in the background, off the evaluation path) with
-the default the code supplied, marked `source: auto`. Archived keys are never re-created.
+the default the code supplied, marked `source: auto`. Archived keys are never re-created. For now only the boolean
+getters auto-create and record usage; the typed getters do neither yet.
 
 ### Options
 
@@ -164,8 +188,8 @@ written to the store by another tool evaluates to `PARSE_ERROR`, as an unresolve
 **flagd parity.** Flagon follows flagd 0.18 rather than generic JsonLogic: only the operators in flagd's targeting
 schema, Go JsonLogic's coercions and truthiness, `targetingKey`, `$flagd.flagKey` and `$flagd.timestamp` in the context,
 and flagd's `fractional` (v3) bucketing. The vendored [flagd-testbed](https://github.com/open-feature/flagd-testbed)
-evaluation suite (boolean subset) passes in full. Flagon evaluates boolean flags only; the flags it creates have the
-variants `on` and `off`.
+evaluation suite passes in full, every flag type through its typed getter (TYPE_MISMATCH and zero values included).
+The flags Flagon creates have the variants `on` and `off`.
 See [ADR 0001](docs/adr/0001-targeting-engine.md) for the engine choice.
 
 ## Storage
