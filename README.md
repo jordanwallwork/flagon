@@ -124,14 +124,44 @@ builder.Services.AddFlagon(opts =>
     opts.UsageTracking = true;                        // record last-evaluated time per flag and app
     opts.FailFastOnStartup = false;                   // true: throw at startup if the store is unreachable
 
-    // Flags as code: created on startup if missing; description and tags are kept in sync,
-    // but the on/off state (and any targeting) an admin has chosen is never overwritten.
+    // Flags as code (see below).
     opts.Define("new-checkout", defaultValue: false, description: "New checkout flow", tags: ["checkout"]);
 });
 ```
 
 If the store is unavailable at startup, the app still boots with code defaults and keeps retrying; if it fails later,
 Flagon keeps serving the last snapshot it loaded.
+
+### Flags as code
+
+`Define` declares a flag so it exists before first use. On startup (after migrations) a missing flag is created with
+`source: code`; an existing one only has its description, tags and source kept in sync. Its variants, default variant,
+on/off state and targeting are applied **only when the flag is created**, so a redeploy never overwrites what an admin
+chose. Archived flags are left alone.
+
+```csharp
+opts.Define("new-checkout", true);                    // boolean: { on: true, off: false }, serving on
+opts.Define("theme", "light");                        // string
+opts.Define("page-size", 20);                         // number (an int literal)
+opts.Define("ratio", 0.5);                            // number (a double literal)
+opts.DefineObject("layout", """{ "columns": 3 }""");  // object, from JSON text
+
+// Named variants and the default variant (null: none, so the caller's default is served).
+// Values are bool, string, int, double or JsonElement (for objects).
+opts.Define("size", new Dictionary<string, string>
+{
+    ["small"] = "S", ["medium"] = "M", ["large"] = "L",
+}, defaultVariant: "medium", description: "T-shirt size", tags: ["catalog"]);
+```
+
+The single-value overloads create one variant named `default`. Every overload takes the same `description`, `tags`
+and `targeting` parameters. Definitions are checked when `Define` is called, with the same rules as an admin create (at
+least one variant; names non-empty, at most 128 characters and unique; values of one type, no arrays or nulls; a
+default variant that exists), and an invalid one throws `FlagValidationException`.
+
+If an existing flag's type differs from its definition (say `theme` was created as a boolean and is now defined as a
+string), Flagon leaves the flag untouched, metadata included, and logs a warning (event 1106) once at startup. The host
+still starts; change the definition or the flag so the types match.
 
 ## Targeting
 
@@ -260,17 +290,19 @@ app.MapHealthChecks("/health");
 ```
 
 - **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags (including by type); create
-  boolean, string, number and object flags; toggle, edit, archive, restore and purge them; view audit history,
+  boolean, string, number and object flags; toggle, enable or disable, edit, archive, restore and purge them; view audit history,
   last-evaluated time and code default (as typed JSON) per app, and default-mismatch warnings. It is plain
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
 - **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI
-  (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT/DELETE /flags/{key}/targeting`,
+  (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT /flags/{key}/state`, `PUT/DELETE /flags/{key}/targeting`,
   `POST /flags/{key}/archive|restore`, `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
   version gets `409 Conflict`. `POST /flags` creates a boolean flag from `enabled`, or a string, number or object flag
   from `variants` and `defaultVariant` (see below). Flags are returned with their `type` (`boolean`, `string`,
   `number` or `object`), `variants`, `value` (the default variant's value, or `null`) and `enabled` (the on/off
-  toggle; `null` for non-boolean flags); `GET /flags?type=string` filters by type. `POST /flags/{key}/evaluate`
+  toggle; `null` for non-boolean flags) and `state` (`enabled` or `disabled`); `GET /flags?type=string` filters by
+  type. `PUT /flags/{key}/enabled` (`{ "enabled": true }`) is the boolean on/off toggle and answers `400` for other
+  types; `PUT /flags/{key}/state` (`{ "state": "disabled" }`) is the kill switch for a flag of any type. `POST /flags/{key}/evaluate`
   (`{ "context": {...}, "document"?: {...} }`) previews the stored flag, or an unsaved flagd flag document, against a
   context without side effects (no usage, auto-create, metric or store write) and returns
   `{ value, variant, reason, errorCode?, errorMessage? }`, where `value` is the served variant's JSON value of any type
@@ -313,6 +345,20 @@ names non-empty, at most 128 characters and unique; values all of one type (bool
 objects, never arrays or `null`); `defaultVariant` one of them or `null` (no default variant: callers get their own
 default when no rule matches). Variants can't be combined with `enabled: true`.
 
+Any flag can be disabled, and enabled again. A disabled flag serves each app its own code default with reason
+`DISABLED` (OFREP answers with no `value`, so remote clients use theirs too); its variants, default variant and
+targeting are kept. `SetEnabledAsync` stays the boolean on/off toggle and throws `FlagValidationException` for other
+types. Both are version-checked, refuse archived flags and are audited as `Updated`:
+
+```csharp
+flag = await admin.SetStateAsync("theme", FlagState.Disabled, expectedVersion: flag.Version);
+```
+
+```http
+PUT /flagon/api/flags/theme/state
+{ "state": "disabled", "version": 3 }
+```
+
 ## OpenFeature
 
 `Flagon.OpenFeature` plugs Flagon into the [OpenFeature](https://openfeature.dev) .NET SDK, so your code can use the
@@ -321,6 +367,7 @@ vendor-neutral `IFeatureClient` (and any OpenFeature hooks you already have):
 ```csharp
 using OpenFeature;
 using OpenFeature.Hosting;
+using OpenFeature.Model;
 
 builder.Services.AddFlagon(opts => opts.UsePostgresStorage("Flags"));
 builder.Services.AddOpenFeature(of => of.AddFlagon());
@@ -328,7 +375,19 @@ builder.Services.AddOpenFeature(of => of.AddFlagon());
 // ...
 app.MapGet("/checkout", async (IFeatureClient features) =>
     await features.GetBooleanValueAsync("new-checkout", false) ? "New checkout" : "Old checkout");
+
+app.MapGet("/settings", async (IFeatureClient features) => new
+{
+    Theme = await features.GetStringValueAsync("theme", "light"),
+    PageSize = await features.GetIntegerValueAsync("page-size", 20),
+    Ratio = await features.GetDoubleValueAsync("ratio", 0.5),
+    Layout = (await features.GetObjectValueAsync("layout", new Value(Structure.Empty))).AsStructure, // a JSON object flag
+});
 ```
+
+Every OpenFeature type resolves through Flagon's typed getters, with the same rules: a flag of another type returns
+your default with `ERROR` / `TYPE_MISMATCH`, and integer resolution accepts only a whole number within `int` range (as
+`GetInt`), so `2.5` is a mismatch, never truncated. Structures map to and from JSON objects (numbers become doubles).
 
 ## Other languages and the browser (OFREP)
 
@@ -349,6 +408,11 @@ const enabled = OpenFeature.getClient().getBooleanValue('new-checkout', false);
 curl -X POST https://my-app.example.com/ofrep/v1/evaluate/flags/new-checkout \
      -H 'Content-Type: application/json' -d '{"context":{"targetingKey":"user-123"}}'
 ```
+
+Responses carry the served variant's value of any type (a boolean, string, number or JSON object). OFREP requests
+don't say which type the client wants, so Flagon never reports `TYPE_MISMATCH` over OFREP: the client SDK checks the
+type, as with flagd. Disabled flags, and flags with no default variant when no rule matches, come back without a
+value, which tells the SDK to use the code default.
 
 The bulk endpoint (`POST /ofrep/v1/evaluate/flags`) supports `ETag`/`If-None-Match`, so polling clients only download
 flags when something has changed. The ETag tracks flag changes, not the context: a client that changes its context

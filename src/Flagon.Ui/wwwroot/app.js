@@ -98,7 +98,7 @@ function badges(flag) {
   return h("span", { class: "badges" },
     flag.type && h("span", { class: `badge type type-${flag.type}`, title: `A ${flag.type} flag` }, flag.type),
     flag.archived && h("span", { class: "badge archived", title: "Archived: evaluates to the code default" }, "archived"),
-    flag.state === "disabled" && h("span", { class: "badge warn", title: "flagd state DISABLED: evaluates to the code default" }, "disabled"),
+    flag.state === "disabled" && h("span", { class: "badge warn", title: "Disabled: each app gets its code default" }, "disabled"),
     flag.source === "auto" && h("span", { class: "badge auto", title: "Created automatically on first evaluation" }, "auto"),
     flag.source === "code" && h("span", { class: "badge code", title: "Defined in code" }, "code"),
     !flag.archived && isStale(flag) && h("span", { class: "badge stale", title: `Not evaluated in the last ${staleDays()} days` }, "stale"),
@@ -243,9 +243,10 @@ async function renderList() {
     if (q && !f.key.toLowerCase().includes(q) && !(f.description ?? "").toLowerCase().includes(q)) return false;
     if (listState.tag && !f.tags.includes(listState.tag)) return false;
     if (listState.type && f.type !== listState.type) return false;
-    // On/off is the boolean toggle: non-boolean flags (enabled null) match neither.
+    // On/off is the boolean toggle: non-boolean flags (enabled null) match neither. Disabled is the state, any type.
     if (listState.state === "on" && f.enabled !== true) return false;
     if (listState.state === "off" && f.enabled !== false) return false;
+    if (listState.state === "disabled" && f.state !== "disabled") return false;
     if (listState.source && f.source !== listState.source) return false;
     if (listState.archived === "active" && f.archived) return false;
     if (listState.archived === "archived" && !f.archived) return false;
@@ -303,7 +304,7 @@ async function renderList() {
     search,
     select("tag", "Tag", [["", "Any"], ...tags.map((t) => [t, t])]),
     select("type", "Type", [["", "Any"], ["boolean", "Boolean"], ["string", "String"], ["number", "Number"], ["object", "Object"]]),
-    select("state", "State", [["", "Any"], ["on", "On"], ["off", "Off"]]),
+    select("state", "State", [["", "Any"], ["on", "On"], ["off", "Off"], ["disabled", "Disabled"]]),
     select("source", "Source", [["", "Any"], ["manual", "Manual"], ["auto", "Auto"], ["code", "Code"]]),
     select("archived", "Show", [["active", "Active"], ["archived", "Archived"], ["all", "All"]]),
     select("hygiene", "Hygiene", [["", "Any"], ["stale", "Stale"], ["mismatch", "Default mismatch"]]),
@@ -793,12 +794,54 @@ async function renderDetail(key) {
       `Version ${flag.version} · source ${flag.source} · created `, time(flag.createdAt), flag.createdBy ? ` by ${flag.createdBy}` : "",
       " · updated ", time(flag.updatedAt), flag.updatedBy ? ` by ${flag.updatedBy}` : ""),
     h("div", { class: "grid" }, metadata, lifecycle),
+    stateCard(flag, reload),
     !isBoolean(flag) && variantsCard(flag),
     targeting.card,
     tryItCard(flag, targeting.draft),
     usage,
     history,
   ];
+}
+
+/**
+ * The Enabled/Disabled state switch, for a flag of any type. Disabling is a kill switch: each app gets its code
+ * default (reason DISABLED); the variants, default variant and targeting are kept for when it is enabled again.
+ */
+function stateCard(flag, reload) {
+  const enabled = flag.state === "enabled";
+  const served = isBoolean(flag) ? "its on/off value and targeting" : "its default variant and targeting";
+  const confirmation = (enable) => enable
+    ? {
+      title: `Enable ${flag.key}?`,
+      detail: `Applications stop getting their code default and get this flag's value again (${served}).`,
+      ok: "Enable",
+    }
+    : {
+      title: `Disable ${flag.key}?`,
+      detail: "Every application evaluating this flag will get its own code default (reason DISABLED), whatever its variants and targeting say. You can enable it again at any time.",
+      ok: "Disable",
+    };
+  const stateSwitch = toggle({ ...flag, enabled }, async (enable) => {
+    if (!await confirmDialog(confirmation(enable))) return false;
+    if (await write(() => api.setState(flag.key, flag.version, enable ? "enabled" : "disabled"), reload)) {
+      showNotice(`${flag.key} ${enable ? "enabled" : "disabled"}.`, "success");
+      await reload();
+      return true;
+    }
+    return false;
+  });
+  stateSwitch.querySelector("input").setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} ${flag.key} (state)`);
+  return h("section", { class: "card stack state" },
+    h("h2", {}, "State"),
+    h("div", { class: "title-row" }, stateSwitch, h("strong", {}, enabled ? "Enabled" : "Disabled")),
+    h("p", { class: "small muted" }, enabled
+      ? `Serving ${served}. Disable it and each app gets its code default.`
+      : "Disabled: each app gets its code default. Enable it to serve its value again."));
+}
+
+/** "enabled" / "disabled" for a flagd document state (ENABLED / DISABLED). */
+function stateName(state) {
+  return typeof state === "string" ? state.toLowerCase() : String(state);
 }
 
 /** The variants of a non-boolean flag, with the default variant marked. */
@@ -821,7 +864,7 @@ function describeChange(entry) {
   const changes = [];
   if (before && after) {
     if (before.defaultVariant !== after.defaultVariant) changes.push(`default ${before.defaultVariant} → ${after.defaultVariant}`);
-    if (before.state !== after.state) changes.push(`state ${before.state} → ${after.state}`);
+    if (before.state !== after.state) changes.push(`state ${stateName(before.state)} → ${stateName(after.state)}`);
     const bm = before.metadata ?? {}, am = after.metadata ?? {};
     if ((bm.description ?? "") !== (am.description ?? "")) changes.push("description");
     if ((bm.tags ?? "") !== (am.tags ?? "")) changes.push(`tags → ${am.tags || "none"}`);

@@ -97,14 +97,17 @@ internal sealed partial class FlagonEvaluator(
     }
 
     /// <summary>
-    /// Evaluates <paramref name="key"/> as a boolean for a remote caller (OFREP). Unlike <see cref="GetBooleanDetails"/>, a
-    /// remote evaluation is not this app's code using a flag, so it records no usage, never auto-creates or logs a missing
-    /// key, and uses only the <paramref name="context"/> the caller sent (never the ambient one). Missing keys are not
-    /// counted on the evaluation metric either, so arbitrary keys sent by clients cannot inflate its cardinality.
+    /// Evaluates <paramref name="key"/> untyped for a remote caller (OFREP): the served variant's JSON of any type, or
+    /// Undefined when no variant was served. The protocol carries no requested type, so this never reports
+    /// TYPE_MISMATCH (client SDKs type-check). Unlike the typed getters, a remote evaluation is not this app's code using
+    /// a flag, so it records no usage, never auto-creates or logs a missing key, and uses only the
+    /// <paramref name="context"/> the caller sent (never the ambient one). The evaluation metric is recorded with its
+    /// usual tags (key, variant, reason), except for missing keys, so arbitrary keys sent by clients cannot inflate its
+    /// cardinality.
     /// </summary>
-    internal FlagEvaluationDetails<bool> GetRemoteBooleanDetails(string key, EvaluationContext context)
+    internal FlagEvaluationDetails<JsonElement> GetRemoteDetails(string key, EvaluationContext context)
     {
-        var details = Evaluate(key, context).AsBoolean(defaultValue: false);
+        var details = Evaluate(key, context);
         if (details.ErrorCode != ErrorCode.FlagNotFound)
         {
             instrumentation.RecordEvaluation(details);
@@ -113,12 +116,11 @@ internal sealed partial class FlagonEvaluator(
         return details;
     }
 
-    /// <summary>Bulk counterpart of <see cref="GetRemoteBooleanDetails"/>: uses only <paramref name="context"/>.</summary>
-    internal FlagEvaluationSet<bool> GetAllRemoteBooleanDetails(EvaluationContext context)
-    {
-        var all = EvaluateAll(context);
-        return new FlagEvaluationSet<bool>(all.Version, all.Flags.Select(details => details.AsBoolean(defaultValue: false)).ToList());
-    }
+    /// <summary>
+    /// Bulk counterpart of <see cref="GetRemoteDetails"/>: uses only <paramref name="context"/>. Like
+    /// <see cref="GetAllDetails"/> it records no evaluation metric.
+    /// </summary>
+    internal FlagEvaluationSet<JsonElement> GetAllRemoteDetails(EvaluationContext context) => EvaluateAll(context);
 
     /// <summary>
     /// Previews <paramref name="key"/> for the management API: the stored flag as of the current snapshot, evaluated

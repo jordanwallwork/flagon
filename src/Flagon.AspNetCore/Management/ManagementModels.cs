@@ -126,6 +126,9 @@ internal sealed record UpdateMetadataBody(string? Description = null, IReadOnlyL
 
 internal sealed record SetEnabledBody(bool? Enabled = null, long? Version = null);
 
+/// <summary><c>state</c> is <c>enabled</c> or <c>disabled</c> (case-insensitive).</summary>
+internal sealed record SetStateBody(string? State = null, long? Version = null);
+
 internal sealed record VersionBody(long? Version = null);
 
 /// <summary>

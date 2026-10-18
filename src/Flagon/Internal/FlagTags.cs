@@ -1,6 +1,6 @@
 namespace Flagon.Internal;
 
-/// <summary>The one tag rule, shared by <see cref="FlagonOptions.Define"/> and <see cref="FlagonAdmin"/>.</summary>
+/// <summary>The one tag rule, shared by <c>FlagonOptions.Define</c> and <see cref="FlagonAdmin"/>.</summary>
 internal static class FlagTags
 {
     /// <summary>
