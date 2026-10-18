@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Flagon.Testing.Tests;
 
@@ -100,6 +101,59 @@ public class EvaluationLogTests
 
         Assert.Empty(flags.Evaluations);
         Assert.Same(flags.Flags.Evaluations, flags.Evaluations);
+    }
+
+    [Fact]
+    public void A_caller_default_that_cannot_be_serialised_does_not_change_the_evaluation()
+    {
+        using var flags = TestFlagon.Create();
+
+        var details = flags.GetObjectDetails("missing", new Unserialisable(), options: UnserialisableOptions(new ThrowingConverter()));
+
+        Assert.Equal(ErrorCode.FlagNotFound, details.ErrorCode);
+        Assert.IsType<Unserialisable>(details.Value);
+        Assert.Single(flags.Evaluations);
+    }
+
+    [Fact]
+    public void A_caller_default_is_not_serialised_when_recording_is_switched_off()
+    {
+        using var flags = TestFlagon.Create(testing: t => t.RecordEvaluations = false);
+        var converter = new CountingConverter();
+
+        flags.GetObjectDetails("missing", new Unserialisable(), options: UnserialisableOptions(converter));
+
+        Assert.Equal(0, converter.Writes);
+        Assert.Empty(flags.Evaluations);
+    }
+
+    private static JsonSerializerOptions UnserialisableOptions(JsonConverter<Unserialisable> converter) =>
+        new() { Converters = { converter } };
+
+    private sealed class Unserialisable;
+
+    private sealed class ThrowingConverter : JsonConverter<Unserialisable>
+    {
+        public override Unserialisable Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => new();
+
+        public override void Write(Utf8JsonWriter writer, Unserialisable value, JsonSerializerOptions options) =>
+            throw new IOException("cannot write");
+    }
+
+    private sealed class CountingConverter : JsonConverter<Unserialisable>
+    {
+        private int _writes;
+
+        public int Writes => Volatile.Read(ref _writes);
+
+        public override Unserialisable Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => new();
+
+        public override void Write(Utf8JsonWriter writer, Unserialisable value, JsonSerializerOptions options)
+        {
+            Interlocked.Increment(ref _writes);
+            writer.WriteStartObject();
+            writer.WriteEndObject();
+        }
     }
 
     [Fact]

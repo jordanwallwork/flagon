@@ -10,6 +10,12 @@ namespace Flagon.Internal;
 /// </summary>
 internal interface IFlagonEvaluationObserver
 {
+    /// <summary>
+    /// Whether the observer wants results right now. The evaluator checks it before building a result, so a switched-off
+    /// observer costs no serialisation.
+    /// </summary>
+    bool IsEnabled { get; }
+
     /// <summary>Called synchronously on the evaluating thread, possibly from many threads at once.</summary>
     void OnEvaluated(in ObservedEvaluation evaluation);
 }

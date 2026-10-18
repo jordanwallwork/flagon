@@ -48,8 +48,11 @@ internal sealed partial class FlagSeeder(
         }
     }
 
-    /// <summary>Seeds every definition. Throws on store failure; already-seeded definitions are idempotent on retry.</summary>
-    public async Task SeedAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Seeds every definition. Throws on store failure; already-seeded definitions are idempotent on retry. Writes are
+    /// audited and stamped with the actor unless <paramref name="audited"/> is false (test setup that must not leave a trace).
+    /// </summary>
+    public async Task SeedAsync(CancellationToken cancellationToken, bool audited = true)
     {
         if (store.IsReadOnly || !options.SeedDefinitions || options.Definitions.Count == 0)
         {
@@ -61,27 +64,31 @@ internal sealed partial class FlagSeeder(
             activity?.SetTag("flagon.seed.definitions", options.Definitions.Count);
             foreach (var definition in options.Definitions)
             {
-                await SeedAsync(definition, cancellationToken).ConfigureAwait(false);
+                await SeedAsync(definition, audited, cancellationToken).ConfigureAwait(false);
             }
 
             return true;
         }).ConfigureAwait(false);
     }
 
-    private async Task SeedAsync(FlagDefinition definition, CancellationToken cancellationToken)
+    private async Task SeedAsync(FlagDefinition definition, bool audited, CancellationToken cancellationToken)
     {
         // Another app/instance may be seeding or editing the same flag; on a version conflict re-read and try again.
         for (var attempt = 0; ; attempt++)
         {
             var current = await store.GetAsync(definition.Key, cancellationToken).ConfigureAwait(false);
-            var change = changes.Begin();
+            var change = audited ? changes.Begin() : null;
 
             if (current is null)
             {
                 var metadata = new FlagMetadata(
                     Description: definition.Description,
                     Tags: definition.Tags,
-                    Source: FlagSource.Code).StampCreated(change);
+                    Source: FlagSource.Code);
+                if (change is not null)
+                {
+                    metadata = metadata.StampCreated(change);
+                }
 
                 var created = await store.TryCreateAsync(
                     definition.Key,
@@ -117,7 +124,7 @@ internal sealed partial class FlagSeeder(
                 return;
             }
 
-            var document = (current.Document with
+            var updated = current.Document with
             {
                 Metadata = current.Document.Metadata with
                 {
@@ -125,7 +132,8 @@ internal sealed partial class FlagSeeder(
                     Tags = definition.Tags,
                     Source = FlagSource.Code,
                 },
-            }).StampUpdated(change);
+            };
+            var document = change is null ? updated : updated.StampUpdated(change);
 
             try
             {

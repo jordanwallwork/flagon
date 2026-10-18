@@ -9,9 +9,11 @@ namespace Flagon.Testing.Internal;
 /// </summary>
 internal sealed class EvaluationRecorder(EvaluationLog log, FlagonTestingSwitches switches, TimeProvider time) : IFlagonEvaluationObserver
 {
+    public bool IsEnabled => switches.RecordEvaluations;
+
     public void OnEvaluated(in ObservedEvaluation evaluation)
     {
-        if (!switches.RecordEvaluations)
+        if (!IsEnabled)
         {
             return;
         }

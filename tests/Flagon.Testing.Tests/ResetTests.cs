@@ -23,6 +23,19 @@ public class ResetTests
     }
 
     [Fact]
+    public async Task Reset_adds_no_audit_entries()
+    {
+        using var flags = TestFlagon.Create(App);
+        var before = (await flags.Admin.GetAuditHistoryAsync("new-checkout")).Count;
+        flags.Flags.SetFlag("new-checkout", false);
+
+        flags.Flags.Reset().Reset();
+
+        Assert.Equal(before, (await flags.Admin.GetAuditHistoryAsync("new-checkout")).Count);
+        Assert.True(flags.IsEnabled("new-checkout"));
+    }
+
+    [Fact]
     public void Reset_restores_defined_flags_that_were_disabled_archived_or_removed()
     {
         using var flags = TestFlagon.Create(App);

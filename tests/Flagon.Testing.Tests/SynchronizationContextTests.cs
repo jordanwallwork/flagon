@@ -85,6 +85,7 @@ public class SynchronizationContextTests
                     callback(state);
                 }
             });
+            thread.IsBackground = true; // A deadlocked body must not keep the test process alive.
             thread.Start();
 
             Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "Deadlocked inside the synchronization context.");

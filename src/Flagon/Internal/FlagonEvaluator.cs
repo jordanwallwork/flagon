@@ -165,7 +165,7 @@ internal sealed partial class FlagonEvaluator(
         }
 
         instrumentation.RecordEvaluation(details);
-        if (observer is not null)
+        if (observer is { IsEnabled: true })
         {
             // A typed view serves the variant's JSON or, when it served none (including on TYPE_MISMATCH), the caller's default.
             var value = details.Variant is not null ? resolution.Value : callerDefault.ToJson() ?? default;
@@ -177,9 +177,14 @@ internal sealed partial class FlagonEvaluator(
 
     /// <summary>Tells the observer, if any, about one result; <paramref name="value"/> is the JSON it was served as.</summary>
     private void Observe<T>(
-        FlagEvaluationDetails<T> details, FlagType? requestedType, JsonElement value, EvaluationContext? context, EvaluationOrigin origin) =>
-        observer?.OnEvaluated(new ObservedEvaluation(details.FlagKey, requestedType, value, details.Variant,
-            details.Reason, details.ErrorCode, details.ErrorMessage, context, origin));
+        FlagEvaluationDetails<T> details, FlagType? requestedType, JsonElement value, EvaluationContext? context, EvaluationOrigin origin)
+    {
+        if (observer is { IsEnabled: true } enabled)
+        {
+            enabled.OnEvaluated(new ObservedEvaluation(details.FlagKey, requestedType, value, details.Variant,
+                details.Reason, details.ErrorCode, details.ErrorMessage, context, origin));
+        }
+    }
 
     /// <summary>
     /// Evaluates <paramref name="key"/> untyped for a remote caller (OFREP): the served variant's JSON of any type, or
@@ -260,7 +265,7 @@ internal sealed partial class FlagonEvaluator(
             .OrderBy(f => f.Record.Key, StringComparer.Ordinal)
             .Select(f => Evaluate(f.Record.Key, f, snapshot.Version, context).ToDetails())
             .ToList();
-        if (observer is not null)
+        if (observer is { IsEnabled: true })
         {
             foreach (var details in results)
             {

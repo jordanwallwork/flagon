@@ -343,8 +343,8 @@ public sealed class TestFlags
             await RemoveAsync(flag.Key).ConfigureAwait(false);
         }
 
-        // The seeder seeds nothing when SeedDefinitions is switched off.
-        await _seeder.SeedAsync(CancellationToken.None).ConfigureAwait(false);
+        // The seeder seeds nothing when SeedDefinitions is switched off. Reseeding is test setup, so it leaves no audit entry.
+        await _seeder.SeedAsync(CancellationToken.None, audited: false).ConfigureAwait(false);
     });
 
     /// <summary>Archives <paramref name="current"/>, or returns null when a concurrent write got there first.</summary>
