@@ -472,17 +472,16 @@ should drop its ETag.
 
 ## Roadmap
 
-Flagon evaluates boolean flags, with flagd targeting rules and `fractional` rollouts. The flagd document format already
-accommodates what comes next, in roughly this order:
+Flagon evaluates boolean, string, number and object flags, with flagd targeting rules, `fractional` rollouts and
+N-variant percentage splits. The flagd document format already accommodates what comes next, in roughly this order:
 
-1. String, number and JSON flags; rule editing and rollout sliders in the UI
-2. Redis store, cache decorator and push-based invalidation
-3. MongoDB, MySQL and SQLite stores
-4. `Flagon.Testing` package
-5. Segments; scheduled changes and flag expiry
-6. Kill-switch / prerequisite flags, approval workflows and webhooks
-7. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
-8. Direct-database clients for other languages; experimentation exposure events
+1. Redis store, cache decorator and push-based invalidation
+2. MongoDB, MySQL and SQLite stores
+3. `Flagon.Testing` package
+4. Segments; scheduled changes and flag expiry
+5. Kill-switch / prerequisite flags, approval workflows and webhooks
+6. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
+7. Direct-database clients for other languages; experimentation exposure events
 
 ## Contributing and releasing
 
