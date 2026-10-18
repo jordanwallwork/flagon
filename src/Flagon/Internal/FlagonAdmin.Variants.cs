@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Flagon.Internal.Targeting;
 using Flagon.Storage;
 
 namespace Flagon.Internal;
@@ -24,6 +25,13 @@ internal sealed partial class FlagonAdmin
             {
                 throw new FlagValidationException(
                     $"Flag '{key}' cannot remove variant '{defaultVariant}' while it is the default variant; choose another default variant (or none) in the same edit.");
+            }
+
+            if (RolloutShape.Split(document.Targeting, document.Variants) is { } split
+                && split.Buckets.FirstOrDefault(b => !variants.ContainsKey(b.Variant)) is { } removed)
+            {
+                throw new FlagValidationException(
+                    $"Flag '{key}' cannot remove variant '{removed.Variant}' while it is a bucket in the percentage split; change the split first.");
             }
 
             var validated = FlagVariants.Validate(key, variants, defaultVariant);

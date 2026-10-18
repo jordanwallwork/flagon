@@ -20,8 +20,10 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// <item><c>GET {path}/flags/{key}</c>: one flag (with an <c>ETag</c> of its version). Flags carry their <c>type</c>
     /// (derived from the variants; <c>null</c> if they are empty or mixed), <c>variants</c>, <c>value</c> (the default
     /// variant's value, or <c>null</c>), <c>enabled</c> (the on/off toggle; <c>null</c> for non-boolean flags), their raw
-    /// <c>targeting</c> (or <c>null</c>) and a <c>rollout</c> summary, <c>{ percentage }</c>, when the rule is exactly
-    /// <c>{"fractional": [["on", N], ["off", 100 - N]]}</c> with default bucketing (otherwise <c>null</c>).</item>
+    /// <c>targeting</c> (or <c>null</c>) and a <c>rollout</c> summary, <c>{ buckets: [{ variant, percentage }], percentage? }</c>,
+    /// when the rule is exactly a percentage split <c>{"fractional": [[v1, w1], …, [vn, wn]]}</c> (n ≥ 2; literal, distinct,
+    /// defined variant names; integral weights summing to 100; default bucketing), otherwise <c>null</c>. <c>percentage</c>
+    /// is N only for the boolean on/off shape <c>[["on", N], ["off", 100 - N]]</c>.</item>
     /// <item><c>POST {path}/flags</c>: creates a flag from <c>{ key, enabled?, description?, tags?, targeting? }</c>, or a
     /// string, number or object flag from <c>{ key, variants, defaultVariant?, description?, tags?, targeting? }</c>
     /// (at least one variant; names non-empty, at most 128 characters and unique; values all of one type, no arrays or
@@ -34,7 +36,8 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// (<c>null</c> removes it); <c>DELETE {path}/flags/{key}/targeting</c> removes it. Archived flags are refused (<c>400</c>).</item>
     /// <item><c>PUT {path}/flags/{key}/variants</c>: replaces a string, number or object flag's variants and default
     /// variant from <c>{ variants, defaultVariant? }</c> (create-time rules; the flag's type must not change; the current
-    /// default variant can only be removed by choosing another, or <c>null</c>). Boolean and archived flags are refused (<c>400</c>).</item>
+    /// default variant can only be removed by choosing another, or <c>null</c>; a bucket of the <c>rollout</c> split can't be
+    /// removed). Boolean and archived flags are refused (<c>400</c>).</item>
     /// <item><c>PUT {path}/flags/{key}/default-variant</c>: sets the variant served by default from <c>{ variant }</c>
     /// (one of the flag's variants, or <c>null</c> for none), for any type. Archived flags are refused (<c>400</c>).</item>
     /// <item><c>POST {path}/flags/{key}/evaluate</c>: previews the flag against <c>{ context?, document? }</c> and returns

@@ -95,6 +95,41 @@ public class VariantEditTests
         Assert.Equal(["dark"], updated.Document.Variants.Keys);
     }
 
+    [Fact]
+    public async Task A_variant_cannot_be_removed_while_it_is_a_bucket_in_the_percentage_split()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest(
+            "theme", Variants: Variants("""{ "light": "light", "dark": "dark", "solar": "solar" }"""), DefaultVariant: "light",
+            Targeting: Json("""{ "fractional": [ [ "light", 50 ], [ "dark", 50 ] ] }""")));
+
+        var ex = await Assert.ThrowsAsync<FlagValidationException>(
+            () => host.Admin.SetVariantsAsync("theme", Variants("""{ "light": "light", "solar": "solar" }"""), "light", created.Version));
+
+        Assert.Contains("remove", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("split", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("'dark'", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(created, await host.Admin.GetAsync("theme"));
+    }
+
+    [Fact]
+    public async Task Variants_outside_the_split_and_custom_rule_names_can_still_be_removed()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var split = await host.Admin.CreateAsync(new CreateFlagRequest(
+            "theme", Variants: Variants("""{ "light": "light", "dark": "dark", "solar": "solar" }"""), DefaultVariant: "light",
+            Targeting: Json("""{ "fractional": [ [ "light", 50 ], [ "dark", 50 ] ] }""")));
+        var custom = await host.Admin.CreateAsync(new CreateFlagRequest(
+            "custom", Variants: Variants("""{ "light": "light", "dark": "dark" }"""), DefaultVariant: "light",
+            Targeting: Json("""{ "fractional": [ { "var": "email" }, [ "light", 50 ], [ "dark", 50 ] ] }""")));
+
+        var trimmed = await host.Admin.SetVariantsAsync("theme", Variants("""{ "light": "light", "dark": "black" }"""), "light", split.Version);
+        var customised = await host.Admin.SetVariantsAsync("custom", Variants("""{ "light": "light" }"""), "light", custom.Version);
+
+        Assert.Equal(["dark=\"black\"", "light=\"light\""], Raw(trimmed.Document.Variants));
+        Assert.Equal(["light"], customised.Document.Variants.Keys);
+    }
+
     [Theory]
     [InlineData("""{}""", null, "at least one variant")]
     [InlineData("""{ "": "x" }""", null, "empty")]

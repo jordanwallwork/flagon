@@ -108,8 +108,9 @@ public interface IFlagonAdmin
     /// Replaces the variants and default variant of a string, number or object flag in one write. Boolean flags keep
     /// their fixed <c>on</c>/<c>off</c> variants (use <see cref="SetEnabledAsync"/>). The variants follow the create-time
     /// rules (see <see cref="CreateFlagRequest.Variants"/>) and must keep the flag's type; the current default variant
-    /// can only be removed by choosing another (or none) in the same edit. Targeting and metadata are untouched, and
-    /// targeting rules are not checked for the names removed.
+    /// can only be removed by choosing another (or none) in the same edit, and a bucket of a canonical percentage split
+    /// (<c>{"fractional": [[v1, w1], …]}</c>, see the management API's <c>rollout</c>) can't be removed until the split
+    /// changes. Targeting and metadata are untouched, and custom targeting rules are not checked for the names removed.
     /// </summary>
     /// <param name="key">The flag key.</param>
     /// <param name="variants">The complete new set of variants (name to JSON value).</param>
@@ -117,8 +118,8 @@ public interface IFlagonAdmin
     /// <param name="expectedVersion">The version the caller last saw.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="FlagValidationException">
-    /// The variants are invalid, change the flag's type or remove its default variant; the flag is boolean; or it is
-    /// archived. The flag is unchanged.
+    /// The variants are invalid, change the flag's type, or remove its default variant or a bucket of its percentage
+    /// split; the flag is boolean; or it is archived. The flag is unchanged.
     /// </exception>
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>

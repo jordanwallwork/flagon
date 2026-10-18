@@ -108,6 +108,22 @@ public class ManagementApiVariantEditTests
     }
 
     [Fact]
+    public async Task Removing_a_bucket_of_the_percentage_split_is_a_bad_request_and_nothing_is_written()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest(
+            "theme", Variants: Variants("""{ "light": "light", "dark": "dark", "solar": "solar" }"""), DefaultVariant: "light",
+            Targeting: Json("""{ "fractional": [ [ "light", 34 ], [ "dark", 33 ], [ "solar", 33 ] ] }""")));
+
+        var problem = await ProblemAsync(await host.CreateClient().SendAsync(Put("/flagon/api/flags/theme/variants",
+            """{ "variants": { "light": "light", "dark": "dark" }, "defaultVariant": "light" }""", ifMatch: created.Version)), HttpStatusCode.BadRequest);
+
+        Assert.Contains("'solar'", problem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains("split", problem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Equal(created, await host.Admin.GetAsync("theme"));
+    }
+
+    [Fact]
     public async Task Putting_the_default_variant_switches_the_served_value()
     {
         await using var host = await StartAsync();
