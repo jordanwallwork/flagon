@@ -14,5 +14,9 @@
     <ProjectReference Include="..\..\src\Flagon.Testing\Flagon.Testing.csproj" />
     <!-- Only to show that an app's storage choice is ignored: the SQL Server store is never built. -->
     <ProjectReference Include="..\..\src\Flagon.Storage.SqlServer\Flagon.Storage.SqlServer.csproj" />
+    <!-- Host replacement is tested through a real WebApplication on a TestServer (OFREP, management API, ambient
+         context). The package itself takes no ASP.NET Core dependency. -->
+    <ProjectReference Include="..\..\src\Flagon.AspNetCore\Flagon.AspNetCore.csproj" />
+    <ProjectReference Include="..\Flagon.Tests.Support\Flagon.Tests.Support.csproj" />
   </ItemGroup>
 </Project>
