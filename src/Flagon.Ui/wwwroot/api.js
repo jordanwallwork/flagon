@@ -54,7 +54,9 @@ const flag = (key) => `flags/${encodeURIComponent(key)}`;
 export const api = {
   listFlags: () => request("GET", "flags"),
   getFlag: (key) => request("GET", flag(key)),
-  createFlag: ({ key, enabled, description, tags }) => request("POST", "flags", { body: { key, enabled, description, tags } }),
+  /** A boolean flag from `enabled`, or (with `variants`, name → JSON value) a string, number or object flag. */
+  createFlag: ({ key, enabled, description, tags, variants, defaultVariant }) =>
+    request("POST", "flags", { body: { key, enabled, description, tags, variants, defaultVariant } }),
   updateMetadata: (key, version, { description, tags }) => request("PATCH", flag(key), { body: { description, tags }, version }),
   setEnabled: (key, version, enabled) => request("PUT", `${flag(key)}/enabled`, { body: { enabled }, version }),
   setTargeting: (key, version, targeting) => request("PUT", `${flag(key)}/targeting`, { body: { targeting }, version }),

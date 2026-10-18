@@ -249,16 +249,22 @@ app.MapFlagonOfrep();                                            // POST /ofrep/
 app.MapHealthChecks("/health");
 ```
 
-- **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags; toggle, edit, archive,
-  restore and purge them; view audit history, last-evaluated time per app, and default-mismatch warnings. It is plain
+- **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags (including by type); create
+  boolean, string, number and object flags; toggle, edit, archive, restore and purge them; view audit history,
+  last-evaluated time per app, and default-mismatch warnings. It is plain
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
 - **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI
   (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT/DELETE /flags/{key}/targeting`,
   `POST /flags/{key}/archive|restore`, `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
-  version gets `409 Conflict`. `POST /flags/{key}/evaluate` (`{ "context": {...}, "document"?: {...} }`) previews the
-  stored flag, or an unsaved flagd flag document, against a context without side effects (no usage, auto-create,
-  metric or store write) and returns `{ value, variant, reason, errorCode?, errorMessage? }`.
+  version gets `409 Conflict`. `POST /flags` creates a boolean flag from `enabled`, or a string, number or object flag
+  from `variants` and `defaultVariant` (see below). Flags are returned with their `type` (`boolean`, `string`,
+  `number` or `object`), `variants`, `value` (the default variant's value, or `null`) and `enabled` (the on/off
+  toggle; `null` for non-boolean flags); `GET /flags?type=string` filters by type. `POST /flags/{key}/evaluate`
+  (`{ "context": {...}, "document"?: {...} }`) previews the stored flag, or an unsaved flagd flag document, against a
+  context without side effects (no usage, auto-create, metric or store write) and returns
+  `{ value, variant, reason, errorCode?, errorMessage? }`, where `value` is the served variant's JSON value of any type
+  (`null` when no variant is served).
 - **Safe by default:** the UI and the management API answer `404` outside the `Development` environment unless you add
   authorization to them. Changes made through them are recorded in the audit log under the signed-in user's name.
 - **OFREP** (`MapFlagonOfrep(prefix)`) is public unless you call `.RequireAuthorization(...)` on it. It evaluates with
@@ -274,6 +280,28 @@ using (FlagonActor.Use("release-bot"))   // who the audit log attributes the cha
     flag = await admin.SetEnabledAsync("dark-mode", enabled: true, expectedVersion: flag.Version);
 }
 ```
+
+A flag with named variants takes its type from their values (string, number or object), and that type never changes:
+
+```csharp
+var theme = await admin.CreateAsync(new CreateFlagRequest("theme",
+    Variants: new Dictionary<string, JsonElement>
+    {
+        ["light"] = JsonSerializer.SerializeToElement("light"),
+        ["dark"] = JsonSerializer.SerializeToElement("dark"),
+    },
+    DefaultVariant: "light"));
+```
+
+```http
+POST /flagon/api/flags
+{ "key": "page-size", "variants": { "small": 10, "large": 50 }, "defaultVariant": "small" }
+```
+
+Variants are validated on write (`FlagValidationException` in-process, `400` problem details over HTTP): at least one;
+names non-empty, at most 128 characters and unique; values all of one type (booleans, strings, numbers or JSON
+objects, never arrays or `null`); `defaultVariant` one of them or `null` (no default variant: callers get their own
+default when no rule matches). Variants can't be combined with `enabled: true`.
 
 ## OpenFeature
 

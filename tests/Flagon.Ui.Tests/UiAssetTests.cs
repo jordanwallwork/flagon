@@ -242,6 +242,49 @@ public class UiAssetTests
     }
 
     [Fact]
+    public async Task The_create_form_offers_typed_flags_with_a_variant_editor_and_default_variant_picker()
+    {
+        await using var host = await StartAsync();
+
+        var app = await ImportsOfAppAsync(host);
+        var client = await host.CreateClient().GetStringAsync("/flags/api.js");
+
+        Assert.Contains("createFlag: ({ key, enabled, description, tags, variants, defaultVariant })", client, StringComparison.Ordinal);
+        foreach (var text in new[] { "\"Type\"", "\"Variants\"", "\"Add variant\"", "\"Default variant\"", "variants: ", "defaultVariant: " })
+        {
+            Assert.Contains(text, app[app.IndexOf("async function renderCreate", StringComparison.Ordinal)..], StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task The_list_shows_type_badges_a_type_filter_and_a_value_column()
+    {
+        await using var host = await StartAsync();
+
+        var app = await ImportsOfAppAsync(host);
+
+        Assert.Contains("select(\"type\", \"Type\", [[\"\", \"Any\"], [\"boolean\", \"Boolean\"], [\"string\", \"String\"], [\"number\", \"Number\"], [\"object\", \"Object\"]])", app, StringComparison.Ordinal);
+        Assert.Contains("class: `badge type type-${flag.type}`", app, StringComparison.Ordinal);
+        Assert.Contains("h(\"th\", {}, \"Value\")", app, StringComparison.Ordinal);
+        Assert.Contains("function valueSummary(", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_console_api_creates_a_typed_flag_and_evaluates_it_to_a_typed_value()
+    {
+        await using var host = await StartAsync();
+        var client = host.CreateClient();
+
+        var created = await client.PostAsJsonAsync("/flags/_api/flags",
+            new { key = "layout", variants = new { compact = new { rows = 3 }, roomy = new { rows = 1 } }, defaultVariant = "compact" });
+        var result = await (await client.PostAsJsonAsync("/flags/_api/flags/layout/evaluate", new { context = new { } })).Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal("object", (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("type").GetString());
+        Assert.Equal(3, result.GetProperty("value").GetProperty("rows").GetInt32());
+    }
+
+    [Fact]
     public async Task Flags_show_a_targeting_badge_and_the_list_filters_by_targeting()
     {
         await using var host = await StartAsync();

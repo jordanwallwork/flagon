@@ -15,17 +15,24 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// Maps the management API, a JSON wrapper over <see cref="Flagon.IFlagonAdmin"/> for building your own tooling:
     /// <list type="bullet">
     /// <item><c>GET {path}/flags</c>: lists flags; optional filters <c>q</c> (key/description contains, case-insensitive),
-    /// <c>tag</c>, <c>source</c> (<c>manual</c>|<c>auto</c>|<c>code</c>), <c>enabled</c> and <c>archived</c> (<c>true</c>|<c>false</c>).</item>
-    /// <item><c>GET {path}/flags/{key}</c>: one flag (with an <c>ETag</c> of its version). Flags carry their raw
+    /// <c>tag</c>, <c>source</c> (<c>manual</c>|<c>auto</c>|<c>code</c>), <c>type</c>
+    /// (<c>boolean</c>|<c>string</c>|<c>number</c>|<c>object</c>), <c>enabled</c> and <c>archived</c> (<c>true</c>|<c>false</c>).</item>
+    /// <item><c>GET {path}/flags/{key}</c>: one flag (with an <c>ETag</c> of its version). Flags carry their <c>type</c>
+    /// (derived from the variants; <c>null</c> if they are empty or mixed), <c>variants</c>, <c>value</c> (the default
+    /// variant's value, or <c>null</c>), <c>enabled</c> (the on/off toggle; <c>null</c> for non-boolean flags), their raw
     /// <c>targeting</c> (or <c>null</c>) and a <c>rollout</c> summary, <c>{ percentage }</c>, when the rule is exactly
     /// <c>{"fractional": [["on", N], ["off", 100 - N]]}</c> with default bucketing (otherwise <c>null</c>).</item>
-    /// <item><c>POST {path}/flags</c>: creates a flag from <c>{ key, enabled?, description?, tags?, targeting? }</c>.</item>
+    /// <item><c>POST {path}/flags</c>: creates a flag from <c>{ key, enabled?, description?, tags?, targeting? }</c>, or a
+    /// string, number or object flag from <c>{ key, variants, defaultVariant?, description?, tags?, targeting? }</c>
+    /// (at least one variant; names non-empty, at most 128 characters and unique; values all of one type, no arrays or
+    /// <c>null</c>; <c>defaultVariant</c> one of them or <c>null</c>; <c>enabled</c> must not be <c>true</c>).</item>
     /// <item><c>PATCH {path}/flags/{key}</c>: updates <c>{ description?, tags? }</c> (omitted fields are unchanged).</item>
     /// <item><c>PUT {path}/flags/{key}/enabled</c>: toggles the flag from <c>{ enabled }</c>.</item>
     /// <item><c>PUT {path}/flags/{key}/targeting</c>: replaces the flag's flagd targeting rule from <c>{ targeting }</c>
     /// (<c>null</c> removes it); <c>DELETE {path}/flags/{key}/targeting</c> removes it. Archived flags are refused (<c>400</c>).</item>
     /// <item><c>POST {path}/flags/{key}/evaluate</c>: previews the flag against <c>{ context?, document? }</c> and returns
-    /// <c>{ value, variant, reason, errorCode?, errorMessage? }</c>. Without <c>document</c> the stored flag is evaluated;
+    /// <c>{ value, variant, reason, errorCode?, errorMessage? }</c>, untyped: <c>value</c> is the served variant's JSON
+    /// value of any type, or <c>null</c> when no variant is served (never <c>TYPE_MISMATCH</c>). Without <c>document</c> the stored flag is evaluated;
     /// with one, that unsaved flagd flag document is (as if stored and not archived). Previews have no side effects: no
     /// usage, auto-create, evaluation metric or store write.</item>
     /// <item><c>POST {path}/flags/{key}/archive</c>, <c>POST {path}/flags/{key}/restore</c>, <c>DELETE {path}/flags/{key}</c> (purge).</item>

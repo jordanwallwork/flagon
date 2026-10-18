@@ -36,9 +36,18 @@ public class ManagementApiEvaluateTests
         return await response.Content.ReadFromJsonAsync<JsonElement>();
     }
 
+    /// <summary>Same outcome as <paramref name="expected"/>; the preview is untyped, so no served variant is a null value, not the caller's default.</summary>
     private static void AssertMatches(FlagEvaluationDetails<bool> expected, JsonElement actual)
     {
-        Assert.Equal(expected.Value, actual.GetProperty("value").GetBoolean());
+        if (expected.Variant is null)
+        {
+            Assert.Equal(JsonValueKind.Null, actual.GetProperty("value").ValueKind);
+        }
+        else
+        {
+            Assert.Equal(expected.Value, actual.GetProperty("value").GetBoolean());
+        }
+
         Assert.Equal(expected.Variant, actual.GetProperty("variant").GetString());
         Assert.Equal(expected.Reason.ToWireName(), actual.GetProperty("reason").GetString());
         if (expected.ErrorCode == ErrorCode.None)
