@@ -28,7 +28,7 @@ internal sealed partial class FlagonEvaluator(
     public FlagEvaluationDetails<bool> GetBooleanDetails(string key, bool defaultValue = false, EvaluationContext? context = null)
     {
         usage.Record(key, defaultValue);
-        var details = Evaluate(key, defaultValue, context ?? ambientContext.Current);
+        var details = Evaluate(key, context ?? ambientContext.Current).AsBoolean(defaultValue);
         if (details.ErrorCode == ErrorCode.FlagNotFound)
         {
             WarnMissingOnce(details.FlagKey);
@@ -40,14 +40,14 @@ internal sealed partial class FlagonEvaluator(
     }
 
     /// <summary>
-    /// Evaluates <paramref name="key"/> for a remote caller (OFREP). Unlike <see cref="GetBooleanDetails"/>, a remote
-    /// evaluation is not this app's code using a flag, so it records no usage, never auto-creates or logs a missing key,
-    /// and uses only the <paramref name="context"/> the caller sent (never the ambient one). Missing keys are not counted
-    /// on the evaluation metric either, so arbitrary keys sent by clients cannot inflate its cardinality.
+    /// Evaluates <paramref name="key"/> as a boolean for a remote caller (OFREP). Unlike <see cref="GetBooleanDetails"/>, a
+    /// remote evaluation is not this app's code using a flag, so it records no usage, never auto-creates or logs a missing
+    /// key, and uses only the <paramref name="context"/> the caller sent (never the ambient one). Missing keys are not
+    /// counted on the evaluation metric either, so arbitrary keys sent by clients cannot inflate its cardinality.
     /// </summary>
     internal FlagEvaluationDetails<bool> GetRemoteBooleanDetails(string key, EvaluationContext context)
     {
-        var details = Evaluate(key, defaultValue: false, context);
+        var details = Evaluate(key, context).AsBoolean(defaultValue: false);
         if (details.ErrorCode != ErrorCode.FlagNotFound)
         {
             instrumentation.RecordEvaluation(details);
@@ -57,22 +57,22 @@ internal sealed partial class FlagonEvaluator(
     }
 
     /// <summary>Bulk counterpart of <see cref="GetRemoteBooleanDetails"/>: uses only <paramref name="context"/>.</summary>
-    internal FlagEvaluationSet<bool> GetAllRemoteBooleanDetails(EvaluationContext context) => EvaluateAll(context);
+    internal FlagEvaluationSet<bool> GetAllRemoteBooleanDetails(EvaluationContext context) => EvaluateAllBoolean(context);
 
     /// <summary>
     /// Previews <paramref name="key"/> for the management API: the stored flag as of the current snapshot, evaluated
-    /// exactly as <see cref="GetBooleanDetails"/> would with a <c>false</c> default, but with no side effects at all (no
-    /// usage, auto-create, missing-key warning, ambient context or evaluation metric): previewing is not using the flag.
+    /// untyped (the served variant's JSON, or Undefined when none was served) and with no side effects at all (no usage,
+    /// auto-create, missing-key warning, ambient context or evaluation metric): previewing is not using the flag.
     /// </summary>
-    internal FlagEvaluationDetails<bool> PreviewBooleanDetails(string key, EvaluationContext context) =>
-        Evaluate(key, defaultValue: false, context);
+    internal FlagEvaluationDetails<JsonElement> PreviewDetails(string key, EvaluationContext context) =>
+        Evaluate(key, context);
 
     /// <summary>
     /// Previews an unsaved <paramref name="draft"/> of <paramref name="key"/> as if it were stored (and not archived),
-    /// with the same side-effect-free evaluation as <see cref="PreviewBooleanDetails"/>.
+    /// with the same untyped, side-effect-free evaluation as <see cref="PreviewDetails"/>.
     /// </summary>
     /// <exception cref="FlagTargetingException">The draft's targeting rule does not compile.</exception>
-    internal FlagEvaluationDetails<bool> PreviewDraftBooleanDetails(string key, FlagDocument draft, EvaluationContext context)
+    internal FlagEvaluationDetails<JsonElement> PreviewDraftDetails(string key, FlagDocument draft, EvaluationContext context)
     {
         // Compiled once, as a snapshot would; a rule that fails to compile is rejected as on write.
         var flag = SnapshotFlag.Create(new FlagRecord(key, draft, Version: 0), compiler);
@@ -82,43 +82,55 @@ internal sealed partial class FlagonEvaluator(
         }
 
         // A version no snapshot has suppresses the once-per-snapshot rule-failure warning: a draft is not live.
-        return Evaluate(key, flag, snapshotVersion: -1, defaultValue: false, context);
+        return Evaluate(key, flag, snapshotVersion: -1, context);
     }
 
     /// <summary>
-    /// Evaluation against the current snapshot: no usage, auto-create or metrics. The only logging is a warning, once per
-    /// snapshot version, for a rule that throws.
+    /// Untyped evaluation against the current snapshot: no usage, auto-create or metrics. The only logging is a warning,
+    /// once per snapshot version, for a rule that throws.
     /// </summary>
-    private FlagEvaluationDetails<bool> Evaluate(string key, bool defaultValue, EvaluationContext? context)
+    private FlagEvaluationDetails<JsonElement> Evaluate(string key, EvaluationContext? context)
     {
         var snapshot = snapshots.Current;
         if (key is null || !snapshot.Flags.TryGetValue(key, out var flag))
         {
-            return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
+            return new(key ?? string.Empty, default, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 
-        return Evaluate(key, flag, snapshot.Version, defaultValue, context);
+        return Evaluate(key, flag, snapshot.Version, context);
     }
 
-    public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null) => EvaluateAll(context ?? ambientContext.Current);
+    public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null) => EvaluateAllBoolean(context ?? ambientContext.Current);
 
-    private FlagEvaluationSet<bool> EvaluateAll(EvaluationContext? context)
+    private FlagEvaluationSet<bool> EvaluateAllBoolean(EvaluationContext? context)
+    {
+        var all = EvaluateAll(context);
+        return new FlagEvaluationSet<bool>(all.Version, all.Flags.Select(details => details.AsBoolean(defaultValue: false)).ToList());
+    }
+
+    private FlagEvaluationSet<JsonElement> EvaluateAll(EvaluationContext? context)
     {
         // Read the snapshot once so the version and the flags agree.
         var snapshot = snapshots.Current;
         var results = snapshot.Flags.Values
             .OrderBy(f => f.Record.Key, StringComparer.Ordinal)
-            .Select(f => Evaluate(f.Record.Key, f, snapshot.Version, defaultValue: false, context))
+            .Select(f => Evaluate(f.Record.Key, f, snapshot.Version, context))
             .ToList();
-        return new FlagEvaluationSet<bool>(snapshot.Version, results);
+        return new FlagEvaluationSet<JsonElement>(snapshot.Version, results);
     }
 
-    private FlagEvaluationDetails<bool> Evaluate(string key, SnapshotFlag flag, long snapshotVersion, bool defaultValue, EvaluationContext? context)
+    /// <summary>
+    /// The untyped evaluation core. Checks run in order: archived, disabled, targeting, variant lookup. The value is the
+    /// served variant's JSON, or Undefined (<c>default</c>) when no variant was served. A typed caller (e.g.
+    /// <see cref="FlagEvaluationDetailsExtensions.AsBoolean"/>) type-checks a served variant only, and otherwise
+    /// substitutes its own default.
+    /// </summary>
+    private FlagEvaluationDetails<JsonElement> Evaluate(string key, SnapshotFlag flag, long snapshotVersion, EvaluationContext? context)
     {
         // An archived flag fails safe to the caller's default whatever its document says.
         if (flag.Record.Archived)
         {
-            return new(key, defaultValue, null, EvaluationReason.Archived);
+            return new(key, default, null, EvaluationReason.Archived);
         }
 
         var document = flag.Record.Document;
@@ -126,10 +138,10 @@ internal sealed partial class FlagonEvaluator(
         // flagd semantics: a DISABLED flag yields the caller's default with reason DISABLED (not an error).
         if (document.State == FlagState.Disabled)
         {
-            return new(key, defaultValue, null, EvaluationReason.Disabled);
+            return new(key, default, null, EvaluationReason.Disabled);
         }
 
-        if (ResolveTargeting(key, flag, snapshotVersion, defaultValue, context, out var variant, out var reason) is { } failed)
+        if (ResolveTargeting(key, flag, snapshotVersion, context, out var variant, out var reason) is { } failed)
         {
             return failed;
         }
@@ -137,22 +149,16 @@ internal sealed partial class FlagonEvaluator(
         if (variant is null)
         {
             // flagd: no defaultVariant and no rule result serves the caller's default (the testbed asserts DEFAULT).
-            return new(key, defaultValue, null, EvaluationReason.Default);
+            return new(key, default, null, EvaluationReason.Default);
         }
 
         if (!document.Variants.TryGetValue(variant, out var value))
         {
-            return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
+            return new(key, default, null, EvaluationReason.Error, ErrorCode.ParseError,
                 $"Flag '{key}' has defaultVariant '{variant}', which is not one of its variants.");
         }
 
-        if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-        {
-            return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.TypeMismatch,
-                $"Flag '{key}' variant '{variant}' is not a boolean.");
-        }
-
-        return new(key, value.GetBoolean(), variant, reason);
+        return new(key, value, variant, reason);
     }
 
     /// <summary>
@@ -160,8 +166,8 @@ internal sealed partial class FlagonEvaluator(
     /// names (TARGETING_MATCH) or, when it matches nothing, the default variant (DEFAULT). Returns the error result when
     /// the rule is broken, throws, or names a variant the flag does not define; otherwise null.
     /// </summary>
-    private FlagEvaluationDetails<bool>? ResolveTargeting(
-        string key, SnapshotFlag flag, long snapshotVersion, bool defaultValue, EvaluationContext? context,
+    private FlagEvaluationDetails<JsonElement>? ResolveTargeting(
+        string key, SnapshotFlag flag, long snapshotVersion, EvaluationContext? context,
         out string? variant, out EvaluationReason reason)
     {
         var document = flag.Record.Document;
@@ -174,7 +180,7 @@ internal sealed partial class FlagonEvaluator(
 
         if (targeting.Rule is not { } rule)
         {
-            return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
+            return new(key, default, null, EvaluationReason.Error, ErrorCode.ParseError,
                 $"Flag '{key}' has a targeting rule that could not be compiled: {targeting.Error?.Message}");
         }
 
@@ -187,7 +193,7 @@ internal sealed partial class FlagonEvaluator(
         {
             // flagd reports a JsonLogic failure while applying the rule (e.g. cat on a bool) as PARSE_ERROR.
             WarnRuleFailedOnce(key, snapshotVersion, ex);
-            return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
+            return new(key, default, null, EvaluationReason.Error, ErrorCode.ParseError,
                 $"Flag '{key}' targeting rule failed: {ex.Message}");
         }
 
@@ -199,7 +205,7 @@ internal sealed partial class FlagonEvaluator(
 
         if (!document.Variants.ContainsKey(matched))
         {
-            return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.General,
+            return new(key, default, null, EvaluationReason.Error, ErrorCode.General,
                 $"Flag '{key}' targeting resolved to variant '{matched}', which is not one of its variants.");
         }
 

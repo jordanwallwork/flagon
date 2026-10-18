@@ -40,7 +40,7 @@ internal sealed class FlagonInstrumentation : IDisposable
     }
 
     /// <summary>Counts one evaluation. Allocation-free when nobody listens.</summary>
-    public void RecordEvaluation(FlagEvaluationDetails<bool> details)
+    public void RecordEvaluation<T>(FlagEvaluationDetails<T> details)
     {
         if (!_evaluations.Enabled)
         {

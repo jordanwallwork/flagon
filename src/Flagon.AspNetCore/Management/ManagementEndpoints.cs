@@ -114,10 +114,10 @@ internal static class ManagementEndpoints
             throw new FlagValidationException(contextError);
         }
 
-        FlagEvaluationDetails<bool> details;
+        FlagEvaluationDetails<JsonElement> details;
         if (body.Document.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
         {
-            details = evaluator.PreviewBooleanDetails(key, context);
+            details = evaluator.PreviewDetails(key, context);
             if (details.ErrorCode == ErrorCode.FlagNotFound)
             {
                 throw new FlagNotFoundException(key);
@@ -130,10 +130,11 @@ internal static class ManagementEndpoints
                 throw new FlagValidationException("'document' must be a flagd flag definition (a JSON object).");
             }
 
-            details = evaluator.PreviewDraftBooleanDetails(key, FlagdJson.Deserialize(body.Document.GetRawText()), context);
+            details = evaluator.PreviewDraftDetails(key, FlagdJson.Deserialize(body.Document.GetRawText()), context);
         }
 
-        return Results.Ok(EvaluateResponse.From(details));
+        // Projected to a boolean (false when no variant is served) until draft evaluation returns typed values.
+        return Results.Ok(EvaluateResponse.From(details.AsBoolean(defaultValue: false)));
     }
 
     public static async Task<IResult> ArchiveAsync(string key, HttpContext http, IFlagonAdmin admin)
