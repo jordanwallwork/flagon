@@ -10,9 +10,6 @@ public sealed partial class FlagonOptions
 
     internal IReadOnlyList<FlagDefinition> Definitions => _definitions;
 
-    /// <summary>The variant name a flag defined with a single value (string, number or object) is created with.</summary>
-    private const string SingleVariant = "default";
-
     /// <summary>
     /// Declares a boolean flag in code. On startup (after migrations) a missing flag is created with source
     /// <see cref="FlagSource.Code"/> serving <paramref name="defaultValue"/>; an existing flag has its description, tags
@@ -71,7 +68,7 @@ public sealed partial class FlagonOptions
     /// </exception>
     /// <exception cref="ArgumentException">The key has already been defined.</exception>
     public FlagonOptions Define(string key, double defaultValue, string? description = null, IEnumerable<string>? tags = null, string? targeting = null) =>
-        Single(key, Number(key, SingleVariant, defaultValue), description, tags, targeting);
+        Single(key, Number(key, FlagVariants.SingleVariant, defaultValue), description, tags, targeting);
 
     /// <summary>
     /// Declares an object flag in code: a missing flag is created with a single <c>default</c> variant serving the JSON
@@ -166,7 +163,7 @@ public sealed partial class FlagonOptions
         : throw new FlagValidationException($"Flag '{key}' variant '{variant}' is {value}; number variants must be finite.");
 
     private FlagonOptions Single(string key, JsonElement value, string? description, IEnumerable<string>? tags, string? targeting) =>
-        Add(key, new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [SingleVariant] = value }, SingleVariant, description, tags, targeting);
+        Add(key, new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [FlagVariants.SingleVariant] = value }, FlagVariants.SingleVariant, description, tags, targeting);
 
     private FlagonOptions Add(
         string key,

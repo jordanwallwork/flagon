@@ -24,9 +24,6 @@ internal sealed partial class FlagAutoCreator(
     FlagonInstrumentation instrumentation,
     ILogger<FlagAutoCreator> logger) : IHostedService, IDisposable
 {
-    /// <summary>The variant a non-boolean auto-created flag holds the caller's default in.</summary>
-    internal const string DefaultVariant = "default";
-
     private readonly Channel<(string Key, JsonElement DefaultValue)> _queue =
         Channel.CreateUnbounded<(string, JsonElement)>(new UnboundedChannelOptions { SingleReader = true });
 
@@ -67,7 +64,7 @@ internal sealed partial class FlagAutoCreator(
         }
 
         // Serialised here, once per key per snapshot (the dedup above), not per evaluation or later on the worker.
-        if (defaultValue.ToJson() is { } json && HasFlagType(json))
+        if (defaultValue.ToJson() is { } json && FlagVariants.TypeOf(json.ValueKind) is not null)
         {
             _queue.Writer.TryWrite((key, json));
         }
@@ -157,20 +154,16 @@ internal sealed partial class FlagAutoCreator(
         }
     }
 
-    /// <summary>True when <paramref name="json"/> has a flag type (so a flag can be auto-created from it).</summary>
-    private static bool HasFlagType(JsonElement json) =>
-        json.ValueKind is JsonValueKind.True or JsonValueKind.False or JsonValueKind.String or JsonValueKind.Number or JsonValueKind.Object;
-
-    /// <summary>The flag a caller's default (one that <see cref="HasFlagType"/>) auto-creates.</summary>
+    /// <summary>The flag a caller's default (one with a flag type) auto-creates.</summary>
     private static FlagDocument Document(JsonElement json, FlagMetadata metadata)
     {
-        if (json.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        if (FlagVariants.TypeOf(json.ValueKind) == FlagType.Boolean)
         {
             return FlagDocument.Boolean(json.GetBoolean(), metadata);
         }
 
-        var variants = new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [DefaultVariant] = json };
-        return new FlagDocument(FlagState.Enabled, variants, DefaultVariant, metadata);
+        var variants = new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [FlagVariants.SingleVariant] = json };
+        return new FlagDocument(FlagState.Enabled, variants, FlagVariants.SingleVariant, metadata);
     }
 
     public void Dispose()

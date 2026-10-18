@@ -116,14 +116,7 @@ public sealed record FlagDocument(
             FlagType? type = null;
             foreach (var value in Variants.Values)
             {
-                FlagType? valueType = value.ValueKind switch
-                {
-                    JsonValueKind.True or JsonValueKind.False => FlagType.Boolean,
-                    JsonValueKind.String => FlagType.String,
-                    JsonValueKind.Number => FlagType.Number,
-                    JsonValueKind.Object => FlagType.Object,
-                    _ => null,
-                };
+                var valueType = Internal.FlagVariants.TypeOf(value.ValueKind);
                 if (valueType is null || (type is not null && type != valueType))
                 {
                     return null;

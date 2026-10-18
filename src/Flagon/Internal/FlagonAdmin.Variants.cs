@@ -54,7 +54,7 @@ internal sealed partial class FlagonAdmin
             if (variant is not null && !document.Variants.ContainsKey(variant))
             {
                 throw new FlagValidationException(
-                    $"Flag '{key}' has no variant '{variant}' ({string.Join(", ", document.Variants.Keys.Select(k => $"'{k}'"))}); the default variant must be one of its variants, or none.");
+                    $"Flag '{key}' has no variant '{variant}' ({FlagVariants.QuotedNames(document.Variants.Keys)}); the default variant must be one of its variants, or none.");
             }
 
             return document with { DefaultVariant = variant };

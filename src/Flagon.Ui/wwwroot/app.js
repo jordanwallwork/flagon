@@ -72,15 +72,12 @@ const formatValue = (value, pretty = false) => JSON.stringify(value, null, prett
 
 const truncate = (text, max = 40) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
-/** A served (or default) value: pretty JSON for objects; "none" when no variant is served (each app gets its code default). */
-function valueView(value) {
-  if (value === null || value === undefined) return h("span", { class: "muted" }, "none (each app gets its code default)");
-  return typeof value === "object" ? h("pre", { class: "value" }, formatValue(value, true)) : h("code", {}, formatValue(value));
-}
-
-/** An app's code default in the usage panel, as typed JSON (strings quoted, objects pretty-printed); "—" when unknown. */
-function observedDefaultView(value) {
-  if (value === null || value === undefined) return h("span", { class: "muted" }, "—");
+/**
+ * A value as typed JSON (strings quoted, objects pretty-printed), or `placeholder` (muted) when there is none. The default
+ * placeholder suits a served value: no variant is served, so each app gets its code default.
+ */
+function valueView(value, placeholder = "none (each app gets its code default)") {
+  if (value === null || value === undefined) return h("span", { class: "muted" }, placeholder);
   return typeof value === "object" ? h("pre", { class: "value" }, formatValue(value, true)) : h("code", {}, formatValue(value));
 }
 
@@ -842,7 +839,7 @@ async function renderDetail(key) {
         h("tbody", {}, apps.map((a) => h("tr", {},
           h("td", {}, a.applicationName),
           h("td", {}, time(a.lastEvaluatedAt)),
-          h("td", {}, observedDefaultView(a.observedDefault)))))),
+          h("td", {}, valueView(a.observedDefault, "—")))))),
     flag.usage?.hasDefaultMismatch && h("p", { class: "warning" }, "Applications pass different code defaults for this flag, so they disagree whenever it is archived, disabled or unavailable."));
 
   const history = h("section", { class: "card" }, h("h2", {}, "Audit history"),

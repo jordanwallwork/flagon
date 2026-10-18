@@ -303,9 +303,9 @@ public class UiAssetTests
 
         var app = await ImportsOfAppAsync(host);
 
-        var view = app[app.IndexOf("function observedDefaultView", StringComparison.Ordinal)..];
+        var view = app[app.IndexOf("function valueView", StringComparison.Ordinal)..];
         Assert.Contains("formatValue(value, true)", view, StringComparison.Ordinal);
-        Assert.Contains("observedDefaultView(a.observedDefault)", app, StringComparison.Ordinal);
+        Assert.Contains("valueView(a.observedDefault, \"—\")", app, StringComparison.Ordinal);
     }
 
     [Fact]

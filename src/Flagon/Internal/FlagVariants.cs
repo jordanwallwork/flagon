@@ -13,6 +13,28 @@ internal static class FlagVariants
     public const int MaxNameLength = 128;
 
     /// <summary>
+    /// The variant name of a flag created from a single value: a non-boolean flag auto-created from a caller's default,
+    /// or defined in code with one string, number or object value.
+    /// </summary>
+    public const string SingleVariant = "default";
+
+    /// <summary>
+    /// The flag type of a JSON value of kind <paramref name="kind"/>, as flagd derives it, or null when that kind has
+    /// none (arrays, <c>null</c>, undefined).
+    /// </summary>
+    public static FlagType? TypeOf(JsonValueKind kind) => kind switch
+    {
+        JsonValueKind.True or JsonValueKind.False => FlagType.Boolean,
+        JsonValueKind.String => FlagType.String,
+        JsonValueKind.Number => FlagType.Number,
+        JsonValueKind.Object => FlagType.Object,
+        _ => null,
+    };
+
+    /// <summary>Variant names for a message: each quoted and comma-separated, e.g. <c>'a', 'b'</c>.</summary>
+    public static string QuotedNames(IEnumerable<string> names) => string.Join(", ", names.Select(n => $"'{n}'"));
+
+    /// <summary>
     /// Validates <paramref name="variants"/> and <paramref name="defaultVariant"/> for flag <paramref name="key"/> and
     /// returns an immutable, ordinal copy of the variants (values cloned, so they outlive the caller's
     /// <see cref="JsonDocument"/>) with their flag type.
@@ -75,7 +97,7 @@ internal static class FlagVariants
         if (defaultVariant is not null && !copy.ContainsKey(defaultVariant))
         {
             throw new FlagValidationException(
-                $"Flag '{key}' has default variant '{defaultVariant}', which is not one of its variants ({string.Join(", ", copy.Keys.Select(k => $"'{k}'"))}).");
+                $"Flag '{key}' has default variant '{defaultVariant}', which is not one of its variants ({QuotedNames(copy.Keys)}).");
         }
 
         if (type == FlagType.Boolean)
@@ -144,12 +166,8 @@ internal static class FlagVariants
     private static FlagValidationException Repeated(string key, string name) =>
         new($"Flag '{key}' defines variant '{name}' more than once; variant names must be unique.");
 
-    private static FlagType TypeOf(string key, string name, JsonElement value) => value.ValueKind switch
+    private static FlagType TypeOf(string key, string name, JsonElement value) => TypeOf(value.ValueKind) ?? value.ValueKind switch
     {
-        JsonValueKind.True or JsonValueKind.False => FlagType.Boolean,
-        JsonValueKind.String => FlagType.String,
-        JsonValueKind.Number => FlagType.Number,
-        JsonValueKind.Object => FlagType.Object,
         JsonValueKind.Array => throw new FlagValidationException(
             $"Flag '{key}' variant '{name}' is an array; variant values must be booleans, strings, numbers or JSON objects."),
         JsonValueKind.Null => throw new FlagValidationException(
