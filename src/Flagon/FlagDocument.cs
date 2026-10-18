@@ -16,6 +16,25 @@ public enum FlagState
     Disabled,
 }
 
+/// <summary>
+/// The type of a flag's values, derived from its variants as flagd does (<c>booleanFlag</c>, <c>stringFlag</c>,
+/// <c>numberFlag</c>, <c>objectFlag</c>). It is not stored: see <see cref="FlagDocument.Type"/>.
+/// </summary>
+public enum FlagType
+{
+    /// <summary>Every variant is <c>true</c> or <c>false</c>.</summary>
+    Boolean,
+
+    /// <summary>Every variant is a JSON string.</summary>
+    String,
+
+    /// <summary>Every variant is a JSON number, integral or fractional (flagd has one number type).</summary>
+    Number,
+
+    /// <summary>Every variant is a JSON object.</summary>
+    Object,
+}
+
 /// <summary>How a flag came to exist.</summary>
 public enum FlagSource
 {
@@ -85,6 +104,37 @@ public sealed record FlagDocument(
         [OnVariant] = JsonSerializer.SerializeToElement(true),
         [OffVariant] = JsonSerializer.SerializeToElement(false),
     }.ToFrozenDictionary(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The flag's type, derived from its variant values. Null when it has no variants, or when they do not share one
+    /// flagd type (mixed types, arrays or nulls), which only documents written by other tools can have.
+    /// </summary>
+    public FlagType? Type
+    {
+        get
+        {
+            FlagType? type = null;
+            foreach (var value in Variants.Values)
+            {
+                FlagType? valueType = value.ValueKind switch
+                {
+                    JsonValueKind.True or JsonValueKind.False => FlagType.Boolean,
+                    JsonValueKind.String => FlagType.String,
+                    JsonValueKind.Number => FlagType.Number,
+                    JsonValueKind.Object => FlagType.Object,
+                    _ => null,
+                };
+                if (valueType is null || (type is not null && type != valueType))
+                {
+                    return null;
+                }
+
+                type = valueType;
+            }
+
+            return type;
+        }
+    }
 
     /// <summary>Creates an <see cref="FlagState.Enabled"/> boolean flag serving <paramref name="enabled"/>.</summary>
     public static FlagDocument Boolean(bool enabled, FlagMetadata? metadata = null) =>
