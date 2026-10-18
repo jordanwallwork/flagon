@@ -277,6 +277,34 @@ public class AutoCreateTests
         Assert.Equal(FlagSource.Auto, flag.Document.Metadata.Source);
     }
 
+    private sealed class MutableLayout
+    {
+        public int Columns { get; set; }
+    }
+
+    [Fact]
+    public async Task An_object_default_is_auto_created_as_it_was_when_evaluated_even_if_the_caller_changes_it_later()
+    {
+        var store = OutageFlagStore.Wrap();
+        var release = new TaskCompletionSource();
+        store.HangCreate = release.Task;
+        await using var host = await StartAsync(o => o.Store = store.Store);
+
+        // The first create hangs, so the second key waits in the queue behind it.
+        host.Flagon.IsEnabled("first");
+        await FlagonTestHost.EventuallyAsync(
+            () => Task.FromResult(store.CallCount(nameof(IFlagStore.TryCreateAsync)) == 1), "the first create has started");
+        var layout = new MutableLayout { Columns = 3 };
+        host.Flagon.GetObject("layout", layout);
+        layout.Columns = 99;
+
+        release.SetResult();
+        await host.StopAsync();
+
+        var flag = (await store.Inner.GetAsync("layout"))!;
+        Assert.Equal("""{"Columns":3}""", flag.Document.Variants["default"].GetRawText());
+    }
+
     [Fact]
     public async Task An_auto_created_typed_flag_is_then_served_to_this_app()
     {

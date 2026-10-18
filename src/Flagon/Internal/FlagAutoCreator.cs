@@ -12,7 +12,8 @@ namespace Flagon.Internal;
 /// worker dedupes and calls create-if-absent with <see cref="FlagSource.Auto"/>, then refreshes the snapshot so this app
 /// sees the new flag. The flag takes the type of the caller's default: a boolean default creates the on/off flag, any
 /// other <c>{ variants: { "default": &lt;default&gt; }, defaultVariant: "default" }</c>; a default with no flag type
-/// (null, an array) creates nothing. Create-if-absent never revives an archived key and returns null when another app won the race,
+/// (null, an array) creates nothing. The queue carries the default as <see cref="JsonElement"/>, serialised when the key
+/// is enqueued (once per key per snapshot), so a caller changing an object default afterwards does not change the flag. Create-if-absent never revives an archived key and returns null when another app won the race,
 /// so many apps hitting the same unknown key create exactly one flag. Pending work is drained on graceful shutdown.
 /// </summary>
 internal sealed partial class FlagAutoCreator(
@@ -26,8 +27,8 @@ internal sealed partial class FlagAutoCreator(
     /// <summary>The variant a non-boolean auto-created flag holds the caller's default in.</summary>
     internal const string DefaultVariant = "default";
 
-    private readonly Channel<(string Key, CallerDefault DefaultValue)> _queue =
-        Channel.CreateUnbounded<(string, CallerDefault)>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<(string Key, JsonElement DefaultValue)> _queue =
+        Channel.CreateUnbounded<(string, JsonElement)>(new UnboundedChannelOptions { SingleReader = true });
 
     private const long InFlight = long.MaxValue;
 
@@ -60,9 +61,20 @@ internal sealed partial class FlagAutoCreator(
             return;
         }
 
-        if (FlagKey.IsValid(key))
+        if (!FlagKey.IsValid(key))
         {
-            _queue.Writer.TryWrite((key, defaultValue));
+            return;
+        }
+
+        // Serialised here, once per key per snapshot (the dedup above), not per evaluation or later on the worker.
+        if (defaultValue.ToJson() is { } json && HasFlagType(json))
+        {
+            _queue.Writer.TryWrite((key, json));
+        }
+        else
+        {
+            // No flag type to create; park the key like one that exists, so later evaluations don't keep serialising it.
+            _pending[key] = snapshots.Current.Version;
         }
     }
 
@@ -99,7 +111,7 @@ internal sealed partial class FlagAutoCreator(
         }
     }
 
-    private async Task CreateAsync(string key, CallerDefault defaultValue, CancellationToken cancellationToken)
+    private async Task CreateAsync(string key, JsonElement defaultValue, CancellationToken cancellationToken)
     {
         try
         {
@@ -112,13 +124,7 @@ internal sealed partial class FlagAutoCreator(
 
             var change = changes.Begin();
             var metadata = new FlagMetadata(Source: FlagSource.Auto).StampCreated(change);
-            if (Document(defaultValue, metadata) is not { } document)
-            {
-                // No flag type to create; park the key like one that exists, so later evaluations don't keep queueing it.
-                _pending[key] = snapshots.Current.Version;
-                return;
-            }
-
+            var document = Document(defaultValue, metadata);
             var created = await instrumentation.TraceStoreOperationAsync("auto_create", key, async activity =>
             {
                 var record = await store.TryCreateAsync(key, document, change, cancellationToken)
@@ -151,22 +157,16 @@ internal sealed partial class FlagAutoCreator(
         }
     }
 
-    /// <summary>The flag a caller's default auto-creates, or null when the default has no flag type.</summary>
-    private static FlagDocument? Document(CallerDefault defaultValue, FlagMetadata metadata)
-    {
-        if (defaultValue.ToJson() is not { } json)
-        {
-            return null;
-        }
+    /// <summary>True when <paramref name="json"/> has a flag type (so a flag can be auto-created from it).</summary>
+    private static bool HasFlagType(JsonElement json) =>
+        json.ValueKind is JsonValueKind.True or JsonValueKind.False or JsonValueKind.String or JsonValueKind.Number or JsonValueKind.Object;
 
-        if (defaultValue.IsBoolean)
+    /// <summary>The flag a caller's default (one that <see cref="HasFlagType"/>) auto-creates.</summary>
+    private static FlagDocument Document(JsonElement json, FlagMetadata metadata)
+    {
+        if (json.ValueKind is JsonValueKind.True or JsonValueKind.False)
         {
             return FlagDocument.Boolean(json.GetBoolean(), metadata);
-        }
-
-        if (json.ValueKind is not (JsonValueKind.String or JsonValueKind.Number or JsonValueKind.Object))
-        {
-            return null;
         }
 
         var variants = new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [DefaultVariant] = json };
