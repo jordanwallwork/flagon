@@ -410,6 +410,132 @@ function targetingCard(flag, reload) {
   return { card, draft };
 }
 
+// ---------------------------------------------------------------- try it
+
+/** An attribute value as typed: JSON when it parses (numbers, booleans, arrays…), otherwise the text itself. */
+function attributeValue(text) {
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+/**
+ * The "Try it" card: evaluates the saved flag, or the Targeting editor's unsaved `draft`, for a context typed here.
+ * Read-only by design: it calls nothing but the side-effect-free evaluate endpoint. The last context is remembered per
+ * flag in this browser only, as a convenience.
+ */
+function tryItCard(flag, draft) {
+  const storageKey = `flagon.tryit.${flag.key}`;
+  let remembered = {};
+  try { remembered = JSON.parse(localStorage.getItem(storageKey) ?? "{}") ?? {}; } catch { /* ignore */ }
+
+  const remember = () => {
+    const value = { targetingKey: targetingKey.value, attributes: rows.map((r) => [r.key.value, r.value.value]) };
+    try { localStorage.setItem(storageKey, JSON.stringify(value)); } catch { /* ignore */ }
+  };
+
+  const targetingKey = h("input", {
+    value: typeof remembered.targetingKey === "string" ? remembered.targetingKey : "",
+    placeholder: "e.g. user-123", spellcheck: "false", autocomplete: "off", oninput: remember,
+  });
+  const rowList = h("div", { class: "stack attributes" });
+  const rows = [];
+
+  function addRow(key = "", value = "") {
+    const row = {
+      key: h("input", { value: key, placeholder: "attribute", "aria-label": "Attribute name", spellcheck: "false", autocomplete: "off", oninput: remember }),
+      value: h("input", { value, placeholder: "value (JSON or text)", "aria-label": "Attribute value", spellcheck: "false", autocomplete: "off", oninput: remember }),
+    };
+    row.el = h("div", { class: "attribute" }, row.key, row.value,
+      h("button", { type: "button", title: "Remove attribute", "aria-label": "Remove attribute", onclick: () => {
+        rows.splice(rows.indexOf(row), 1);
+        row.el.remove();
+        remember();
+      } }, "×"));
+    rows.push(row);
+    rowList.append(row.el);
+    return row;
+  }
+  for (const pair of Array.isArray(remembered.attributes) ? remembered.attributes : []) {
+    if (Array.isArray(pair)) addRow(String(pair[0] ?? ""), String(pair[1] ?? ""));
+  }
+
+  /** The evaluation context: attributes with a name, then the targeting key when one is given. */
+  function context() {
+    const ctx = {};
+    for (const r of rows) {
+      const name = r.key.value.trim();
+      if (name && name !== "targetingKey") ctx[name] = attributeValue(r.value.value);
+    }
+    if (targetingKey.value.trim()) ctx.targetingKey = targetingKey.value.trim();
+    return ctx;
+  }
+
+  const results = h("div", { class: "tryit-results" });
+  const outcomes = { saved: null, draft: null }; // each a rendered result column, or null when not run (or stale)
+
+  function drawResults() {
+    results.replaceChildren(...[outcomes.saved, outcomes.draft].filter(Boolean));
+    results.hidden = !outcomes.saved && !outcomes.draft;
+  }
+
+  function resultColumn(title, content) {
+    return h("div", { class: "tryit-result" }, h("h3", {}, title), content);
+  }
+
+  function describeResult(r) {
+    return h("dl", {},
+      h("dt", {}, "Value"), h("dd", {}, h("code", {}, JSON.stringify(r.value))),
+      h("dt", {}, "Variant"), h("dd", {}, r.variant != null ? h("code", {}, r.variant) : h("span", { class: "muted" }, "none")),
+      h("dt", {}, "Reason"), h("dd", {}, r.reason),
+      r.errorCode && [h("dt", {}, "Error"), h("dd", { class: "error-text" }, r.errorCode, r.errorMessage ? `: ${r.errorMessage}` : "")]);
+  }
+
+  async function run(which, e) {
+    const button = e.currentTarget;
+    let document;
+    if (which === "draft") {
+      try { document = draft.document(); } catch (err) {
+        // Invalid JSON in the editor: shown here, never as a page notice.
+        outcomes.draft = resultColumn("Draft", h("p", { class: "small error-text" }, ruleError(err)));
+        drawResults();
+        return;
+      }
+    }
+    button.disabled = true;
+    const title = which === "draft" ? "Draft" : "Saved";
+    try {
+      const result = await api.evaluate(flag.key, context(), document);
+      outcomes[which] = resultColumn(title, describeResult(result));
+    } catch (err) {
+      // Compile errors (with their location) and context errors stay inline in this card.
+      outcomes[which] = resultColumn(title, h("p", { class: "small error-text" }, ruleError(err)));
+    } finally {
+      button.disabled = false;
+    }
+    drawResults();
+  }
+
+  const draftButton = h("button", { type: "button", onclick: (e) => run("draft", e) }, "Evaluate draft");
+  const syncDraft = () => {
+    draftButton.hidden = !draft.dirty;
+    // A draft result no longer describes the editor once its text changes.
+    if (outcomes.draft) { outcomes.draft = null; drawResults(); }
+  };
+  draft.subscribe(syncDraft);
+  draftButton.hidden = !draft.dirty;
+  drawResults();
+
+  return h("section", { class: "card stack tryit" },
+    h("h2", {}, "Try it"),
+    h("p", { class: "small muted" }, "Preview what this flag returns for a user. Nothing is saved and no usage is recorded."),
+    h("label", {}, "Targeting key", targetingKey),
+    h("div", { class: "stack" }, h("strong", { class: "small" }, "Attributes"), rowList,
+      h("div", {}, h("button", { type: "button", onclick: () => { addRow().key.focus(); remember(); } }, "Add attribute"))),
+    h("div", { class: "actions" },
+      h("button", { type: "button", class: "primary", onclick: (e) => run("saved", e) }, "Evaluate saved"),
+      draftButton),
+    results);
+}
+
 // ---------------------------------------------------------------- detail
 
 async function renderDetail(key) {
@@ -524,6 +650,7 @@ async function renderDetail(key) {
       " · updated ", time(flag.updatedAt), flag.updatedBy ? ` by ${flag.updatedBy}` : ""),
     h("div", { class: "grid" }, metadata, lifecycle),
     targeting.card,
+    tryItCard(flag, targeting.draft),
     usage,
     history,
   ];

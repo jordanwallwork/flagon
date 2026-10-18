@@ -122,3 +122,14 @@ dialog label { display: flex; flex-direction: column; gap: .3rem; }
 .targeting pre.rule { margin: 0; padding: .6rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
   max-width: none; max-height: 24rem; overflow: auto; }
 textarea.code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; tab-size: 2; }
+
+.tryit p { margin: 0; }
+.tryit .attribute { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 2fr) auto; gap: .4rem; }
+.tryit .attributes:empty { display: none; }
+.tryit-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
+.tryit-results[hidden] { display: none; }
+.tryit-result { padding: .6rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.tryit-result h3 { font-size: .95rem; margin: 0 0 .4rem; }
+.tryit-result dl { display: grid; grid-template-columns: auto 1fr; gap: .2rem .75rem; margin: 0; }
+.tryit-result dt { color: var(--muted); }
+.tryit-result dd { margin: 0; word-break: break-word; }

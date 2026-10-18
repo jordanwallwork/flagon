@@ -201,6 +201,47 @@ public class UiAssetTests
     }
 
     [Fact]
+    public async Task The_flag_page_has_a_try_it_panel_that_only_evaluates()
+    {
+        await using var host = await StartAsync();
+
+        var app = await ImportsOfAppAsync(host);
+
+        var panel = System.Text.RegularExpressions.Regex.Match(app, @"\nfunction tryItCard\(.*?\n}\n", System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.True(panel.Success, "app.js has no tryItCard function");
+        foreach (var text in new[] { "\"Try it\"", "\"Evaluate saved\"", "\"Evaluate draft\"", "\"Add attribute\"", "api.evaluate(", "localStorage", "flagon.tryit." })
+        {
+            Assert.Contains(text, panel.Value, StringComparison.Ordinal);
+        }
+        // The panel never writes: the only API it calls is evaluate.
+        Assert.All(System.Text.RegularExpressions.Regex.Matches(panel.Value, @"api\.(\w+)\("), call => Assert.Equal("evaluate", call.Groups[1].Value));
+        Assert.Contains("tryItCard(flag, targeting.draft)", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_console_api_evaluates_saved_and_draft_rules_for_a_context_without_changing_the_flag()
+    {
+        await using var host = await StartAsync();
+        var client = host.CreateClient();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("checkout", Enabled: true));
+        var rule = JsonDocument.Parse("""{"if":[{"==":[{"var":"plan"},"pro"]},"on","off"]}""").RootElement;
+        await host.Admin.SetTargetingAsync("checkout", rule, created.Version);
+        var before = await host.Admin.GetAsync("checkout");
+        var context = new { targetingKey = "user-1", plan = "pro" };
+        var draft = JsonDocument.Parse("""
+            {"state":"ENABLED","variants":{"on":true,"off":false},"defaultVariant":"off","targeting":{"if":[{"==":[{"var":"plan"},"free"]},"on","off"]}}
+            """).RootElement;
+
+        var saved = await (await client.PostAsJsonAsync("/flags/_api/flags/checkout/evaluate", new { context })).Content.ReadFromJsonAsync<JsonElement>();
+        var drafted = await (await client.PostAsJsonAsync("/flags/_api/flags/checkout/evaluate", new { context, document = draft })).Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(("on", true, "TARGETING_MATCH"), (saved.GetProperty("variant").GetString(), saved.GetProperty("value").GetBoolean(), saved.GetProperty("reason").GetString()));
+        Assert.Equal(("off", false, "TARGETING_MATCH"), (drafted.GetProperty("variant").GetString(), drafted.GetProperty("value").GetBoolean(), drafted.GetProperty("reason").GetString()));
+        Assert.Equal(before!.Version, (await host.Admin.GetAsync("checkout"))!.Version);
+        Assert.Equal(2, (await host.Admin.GetAuditHistoryAsync("checkout")).Count);
+    }
+
+    [Fact]
     public async Task The_console_loads_nothing_from_other_origins()
     {
         await using var host = await StartAsync();
