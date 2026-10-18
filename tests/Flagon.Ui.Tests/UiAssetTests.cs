@@ -201,6 +201,87 @@ public class UiAssetTests
     }
 
     [Fact]
+    public async Task Flags_show_a_targeting_badge_and_the_list_filters_by_targeting()
+    {
+        await using var host = await StartAsync();
+
+        var app = await ImportsOfAppAsync(host);
+
+        Assert.Contains("`rollout ${flag.rollout.percentage}%`", app, StringComparison.Ordinal);
+        Assert.Contains("\"targeted\")", app, StringComparison.Ordinal);
+        Assert.Contains("select(\"targeting\", \"Targeting\", [[\"\", \"Any\"], [\"targeted\", \"Targeted\"], [\"rollout\", \"Rollout\"], [\"none\", \"None\"]])", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_audit_history_summarises_targeting_changes()
+    {
+        await using var host = await StartAsync();
+
+        var app = await ImportsOfAppAsync(host);
+
+        foreach (var summary in new[] { "\"targeting added\"", "\"targeting removed\"", "\"targeting changed\"", "`rollout ${from}% → ${to}%`" })
+        {
+            Assert.Contains(summary, app, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task Audit_entries_offer_to_restore_their_rule_unless_the_flag_is_archived()
+    {
+        await using var host = await StartAsync();
+
+        var app = await ImportsOfAppAsync(host);
+
+        Assert.Contains("\"Restore this rule\"", app, StringComparison.Ordinal);
+        Assert.Contains("disabled: flag.archived", app[app.IndexOf("function restoreRuleButton", StringComparison.Ordinal)..], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Restoring_a_rule_from_the_audit_history_puts_back_the_exact_rule_as_a_new_change()
+    {
+        await using var host = await StartAsync();
+        var client = host.CreateClient("alice");
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("checkout"));
+        var original = await host.Admin.SetTargetingAsync("checkout",
+            JsonDocument.Parse("""{"if":[{"in":[{"var":"country"},["GB","IE"]]},"on",{"fractional":[["on",10],["off",90]]}]}""").RootElement,
+            created.Version);
+        var changed = await host.Admin.SetTargetingAsync("checkout",
+            JsonDocument.Parse("""{"fractional":[["on",25],["off",75]]}""").RootElement, original.Version);
+        var history = await client.GetFromJsonAsync<JsonElement>("/flags/_api/flags/checkout/audit");
+        var priorRule = history[0].GetProperty("before").GetProperty("targeting");
+
+        var restored = await client.SendAsync(
+            WithIfMatch(HttpMethod.Put, "/flags/_api/flags/checkout/targeting", changed.Version, new { targeting = priorRule }));
+
+        Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+        var flag = await host.Admin.GetAsync("checkout");
+        Assert.Equal(original.Document.Targeting!.Value.GetRawText(), flag!.Document.Targeting!.Value.GetRawText());
+        var after = await client.GetFromJsonAsync<JsonElement>("/flags/_api/flags/checkout/audit");
+        Assert.Equal(history.GetArrayLength() + 1, after.GetArrayLength());
+        Assert.Equal("alice", after[0].GetProperty("actor").GetString());
+        Assert.Equal(priorRule.GetRawText(), after[0].GetProperty("after").GetProperty("targeting").GetRawText());
+    }
+
+    [Fact]
+    public async Task Restoring_a_side_without_a_rule_clears_targeting_as_a_new_change()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("checkout"));
+        var targeted = await host.Admin.SetTargetingAsync("checkout",
+            JsonDocument.Parse("""{"fractional":[["on",10],["off",90]]}""").RootElement, created.Version);
+        var client = host.CreateClient();
+        var history = await client.GetFromJsonAsync<JsonElement>("/flags/_api/flags/checkout/audit");
+
+        var cleared = await client.SendAsync(WithIfMatch(HttpMethod.Delete, "/flags/_api/flags/checkout/targeting", targeted.Version));
+
+        Assert.Equal(HttpStatusCode.OK, cleared.StatusCode);
+        Assert.Null((await host.Admin.GetAsync("checkout"))!.Document.Targeting);
+        var after = await client.GetFromJsonAsync<JsonElement>("/flags/_api/flags/checkout/audit");
+        Assert.Equal(history.GetArrayLength() + 1, after.GetArrayLength());
+        Assert.False(after[0].GetProperty("after").TryGetProperty("targeting", out _));
+    }
+
+    [Fact]
     public async Task The_console_loads_nothing_from_other_origins()
     {
         await using var host = await StartAsync();

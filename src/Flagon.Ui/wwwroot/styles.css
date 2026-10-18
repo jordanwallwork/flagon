@@ -89,7 +89,7 @@ ul.apps { list-style: none; margin: 0; padding: 0; }
   white-space: nowrap; }
 .tag { margin: 0 .25rem .25rem 0; background: var(--bg); }
 .badge.archived { background: var(--border); }
-.badge.auto, .badge.code { color: var(--accent); border-color: var(--accent); }
+.badge.auto, .badge.code, .badge.targeting { color: var(--accent); border-color: var(--accent); }
 .badge.stale, .badge.warn, .badge.mismatch { background: var(--warn-bg); color: var(--warn-text); border-color: transparent; }
 .badge.mismatch { font-weight: 600; }
 
@@ -122,3 +122,4 @@ dialog label { display: flex; flex-direction: column; gap: .3rem; }
 .targeting pre.rule { margin: 0; padding: .6rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
   max-width: none; max-height: 24rem; overflow: auto; }
 textarea.code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; tab-size: 2; }
+.restore-rule { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .3rem; }
