@@ -72,7 +72,15 @@ function badges(flag) {
     flag.source === "code" && h("span", { class: "badge code", title: "Defined in code" }, "code"),
     !flag.archived && isStale(flag) && h("span", { class: "badge stale", title: `Not evaluated in the last ${staleDays()} days` }, "stale"),
     flag.usage?.hasDefaultMismatch && h("span", { class: "badge mismatch", title: "Applications pass different code defaults" }, "default mismatch"),
+    targetingBadge(flag),
   );
+}
+
+/** "rollout N%" for a simple percentage rollout, "targeted" for any other rule, nothing without one. */
+function targetingBadge(flag) {
+  if (flag.rollout) return h("span", { class: "badge targeting", title: "Percentage rollout: this share of users gets on" }, `rollout ${flag.rollout.percentage}%`);
+  if (hasTargeting(flag)) return h("span", { class: "badge targeting", title: "Has a targeting rule" }, "targeted");
+  return null;
 }
 
 function toggle(flag, onChange) {
@@ -151,7 +159,7 @@ function errorView(e) {
 
 // ---------------------------------------------------------------- list
 
-const listState = { q: "", tag: "", state: "", source: "", archived: "active", hygiene: "" };
+const listState = { q: "", tag: "", state: "", source: "", archived: "active", hygiene: "", targeting: "" };
 
 async function renderList() {
   let flags;
@@ -181,6 +189,9 @@ async function renderList() {
     if (listState.archived === "archived" && !f.archived) return false;
     if (listState.hygiene === "stale" && (f.archived || !isStale(f))) return false;
     if (listState.hygiene === "mismatch" && !f.usage?.hasDefaultMismatch) return false;
+    if (listState.targeting === "targeted" && !hasTargeting(f)) return false;
+    if (listState.targeting === "rollout" && !f.rollout) return false;
+    if (listState.targeting === "none" && hasTargeting(f)) return false;
     return true;
   }
 
@@ -231,6 +242,7 @@ async function renderList() {
     select("source", "Source", [["", "Any"], ["manual", "Manual"], ["auto", "Auto"], ["code", "Code"]]),
     select("archived", "Show", [["active", "Active"], ["archived", "Archived"], ["all", "All"]]),
     select("hygiene", "Hygiene", [["", "Any"], ["stale", "Stale"], ["mismatch", "Default mismatch"]]),
+    select("targeting", "Targeting", [["", "Any"], ["targeted", "Targeted"], ["rollout", "Rollout"], ["none", "None"]]),
     h("label", {}, "Stale after",
       h("select", {
         onchange: (e) => { try { localStorage.setItem(STALE_DAYS_KEY, e.target.value); } catch { /* ignore */ } draw(); },
@@ -694,7 +706,7 @@ async function renderDetail(key) {
           h("td", {}, entry.actor ?? h("span", { class: "muted" }, "system")),
           h("td", {}, entry.applicationName ?? ""),
           h("td", {}, String(entry.version)),
-          h("td", {}, describeChange(entry)))))));
+          h("td", {}, describeChange(entry), restoreRuleActions(flag, entry, reload)))))));
 
   return [
     h("p", {}, h("a", { href: "#/" }, "← Flags")),
@@ -732,10 +744,96 @@ function describeChange(entry) {
   } else if (after) {
     changes.push(`default ${after.defaultVariant}`);
   }
+  // A purge has no "after"; that is not a targeting removal.
+  const targetingChange = after && describeTargetingChange(before, after);
+  if (targetingChange) changes.push(targetingChange);
   const raw = { before, after };
   return h("details", {},
     h("summary", {}, changes.join(", ") || "details"),
     h("pre", {}, JSON.stringify(raw, null, 2)));
+}
+
+/**
+ * "Restore this rule" for each side of an audit entry whose rule differs from the flag's current one.
+ * A side without a document (before a create, after a purge) has nothing to restore; when both sides carry
+ * the same rule only one action is shown.
+ */
+function restoreRuleActions(flag, entry, reload) {
+  const current = ruleOf(flag);
+  const sides = [["Before", entry.before], ["After", entry.after]]
+    .filter(([, document]) => document)
+    .map(([label, document]) => [label, ruleOf(document)])
+    .filter(([, rule]) => !sameRule(rule, current));
+  if (sides.length === 2 && sameRule(sides[0][1], sides[1][1])) sides.shift();
+  if (sides.length === 0) return null;
+  return h("div", { class: "restore-rule" },
+    sides.map(([label, rule]) => h("span", {}, `${label}: `, restoreRuleButton(flag, entry, label, rule, reload))));
+}
+
+/** Puts an audited rule back with the flag's current version (or clears targeting when that side had none). */
+function restoreRuleButton(flag, entry, label, rule, reload) {
+  const side = `${label.toLowerCase()} the change to version ${entry.version}`;
+  async function restore() {
+    const percentage = rolloutPercentage(rule);
+    const ok = await confirmDialog({
+      title: `Restore this rule on ${flag.key}?`,
+      detail: rule === null
+        ? `The flag had no targeting ${side}, so the current rule is removed and everyone gets the default variant.`
+        : `The current rule is replaced by the one in place ${side}${percentage === null ? "" : ` (rollout ${percentage}%)`}. The audit history keeps a copy of the current rule.`,
+      ok: "Restore",
+    });
+    if (!ok) return;
+    const done = await write(() => rule === null
+      ? api.clearTargeting(flag.key, flag.version)
+      : api.setTargeting(flag.key, flag.version, rule), reload);
+    if (done) {
+      showNotice("Targeting rule restored.", "success");
+      await reload();
+    }
+  }
+  return h("button", {
+    class: "small",
+    disabled: flag.archived,
+    title: flag.archived ? "Restore the flag to change it" : undefined,
+    "aria-label": `Restore the rule in place ${side}`,
+    onclick: restore,
+  }, "Restore this rule");
+}
+
+/** The rule a flagd document carries, or null when it has none (absent, null and `{}` alike). */
+function ruleOf(document) {
+  return document && hasTargeting(document) ? document.targeting : null;
+}
+
+/** True when two rules (or nulls) are the same; the server keeps key order, so serialised text compares exactly. */
+function sameRule(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * The percentage N of a simple rollout, exactly {"fractional": [["on", N], ["off", 100 - N]]} with an
+ * integer N, else null. Mirrors the server's RolloutShape (which fills `flag.rollout`); audit documents
+ * carry no `rollout`, so the history needs this client-side copy.
+ */
+function rolloutPercentage(rule) {
+  if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
+  const keys = Object.keys(rule);
+  const buckets = rule.fractional;
+  if (keys.length !== 1 || keys[0] !== "fractional" || !Array.isArray(buckets) || buckets.length !== 2) return null;
+  const [on, off] = buckets;
+  if (!Array.isArray(on) || !Array.isArray(off) || on.length !== 2 || off.length !== 2) return null;
+  if (on[0] !== "on" || off[0] !== "off" || !Number.isInteger(on[1]) || !Number.isInteger(off[1])) return null;
+  return on[1] >= 0 && on[1] <= 100 && on[1] + off[1] === 100 ? on[1] : null;
+}
+
+/** "targeting added/removed/changed", or "rollout N% → M%" between two simple rollouts; null when unchanged. */
+function describeTargetingChange(before, after) {
+  const was = ruleOf(before), now = ruleOf(after);
+  if (sameRule(was, now)) return null;
+  if (was === null) return "targeting added";
+  if (now === null) return "targeting removed";
+  const from = rolloutPercentage(was), to = rolloutPercentage(now);
+  return from !== null && to !== null ? `rollout ${from}% → ${to}%` : "targeting changed";
 }
 
 // ---------------------------------------------------------------- create
