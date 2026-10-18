@@ -128,4 +128,63 @@ public class TypedDefineTests
 
         Assert.Empty(options.Definitions);
     }
+
+    [Fact]
+    public async Task Redeploying_never_changes_the_variants_default_variant_or_targeting_of_an_existing_flag()
+    {
+        var store = new InMemoryFlagStore();
+        await using (await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.Define("size", new Dictionary<string, string> { ["small"] = "S", ["medium"] = "M" }, "medium",
+                "Old", targeting: """{"if":[{"==":[{"var":"plan"},"pro"]},"small",null]}""");
+        }))
+        {
+        }
+
+        var before = (await store.GetAsync("size"))!.Document;
+
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.Define("size", new Dictionary<string, string> { ["large"] = "L", ["small"] = "s" }, "large",
+                "New", ["sizing"], targeting: """{"if":[{"==":[{"var":"plan"},"free"]},"large",null]}""");
+        });
+
+        var after = (await host.Admin.GetAsync("size"))!.Document;
+        Assert.Equal("New", after.Metadata.Description);
+        Assert.Equal(["sizing"], after.Metadata.Tags);
+        Assert.Equal("medium", after.DefaultVariant);
+        Assert.Equal(FlagdJson.Serialize(before with { Metadata = after.Metadata }), FlagdJson.Serialize(after));
+        Assert.Equal("S", host.Flagon.GetString("size", "fallback", new EvaluationContext(null, new Dictionary<string, object?> { ["plan"] = "pro" })));
+    }
+
+    [Fact]
+    public async Task An_existing_flag_of_a_different_type_is_left_untouched_with_one_warning_and_the_host_still_starts()
+    {
+        var store = new InMemoryFlagStore();
+        await store.TryCreateAsync("theme", FlagDocument.Boolean(true, new FlagMetadata(Description: "Admin's flag")));
+        var versionBefore = await store.GetChangeVersionAsync();
+
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.Define("theme", "light", "Site theme").Define("other", 3);
+        });
+
+        var flag = (await host.Admin.GetAsync("theme"))!;
+        Assert.Equal(FlagType.Boolean, flag.Document.Type);
+        Assert.Equal("Admin's flag", flag.Document.Metadata.Description);
+        Assert.Equal(FlagSource.Manual, flag.Document.Metadata.Source);
+        Assert.True(host.Flagon.IsEnabled("theme"));
+        Assert.Equal(3, host.Flagon.GetInt("other", 0));
+
+        await host.AdvanceToNextRefreshAsync();
+        var warning = Assert.Single(host.Logs.Flagon(LogLevel.Warning), l => l.EventId.Id == 1106);
+        Assert.Contains("'theme'", warning.Message);
+        Assert.Contains("boolean", warning.Message);
+        Assert.Contains("string", warning.Message);
+        Assert.True(await store.GetChangeVersionAsync() > versionBefore); // "other" was still created
+        Assert.Equal(flag.Version, (await store.GetAsync("theme"))!.Version);
+    }
 }
