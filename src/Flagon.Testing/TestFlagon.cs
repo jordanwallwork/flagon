@@ -223,7 +223,10 @@ public sealed class TestFlagon : IFlagon, IDisposable, IAsyncDisposable
                 await _services.GetRequiredService<FlagAutoCreator>().StopAsync(CancellationToken.None).ConfigureAwait(false);
             }
 
-            await _services.GetRequiredService<UsageTracker>().FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            if (_switches.UsageTracking)
+            {
+                await _services.GetRequiredService<UsageTracker>().FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            }
         }
         finally
         {

@@ -81,11 +81,11 @@ public class EvaluationLogTests
         using var flags = TestFlagon.Create();
         flags.Flags.SetFlag("new-checkout", true);
 
-        flags.GetString("new-checkout", "fallback");
+        flags.GetString("new-checkout", "caller-default");
 
         var evaluation = Assert.Single(flags.Evaluations);
         Assert.Equal(FlagType.String, evaluation.RequestedType);
-        Assert.Equal("fallback", evaluation.Value.GetString());
+        Assert.Equal("caller-default", evaluation.Value.GetString());
         Assert.Equal(ErrorCode.TypeMismatch, evaluation.ErrorCode);
     }
 

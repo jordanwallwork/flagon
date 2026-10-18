@@ -36,13 +36,13 @@ public class FlagStateTests
 
         flags.Flags.Disable("greeting");
 
-        var disabled = flags.GetStringDetails("greeting", "fallback");
-        Assert.Equal("fallback", disabled.Value);
+        var disabled = flags.GetStringDetails("greeting", "caller-default");
+        Assert.Equal("caller-default", disabled.Value);
         Assert.Equal(EvaluationReason.Disabled, disabled.Reason);
 
         flags.Flags.Enable("greeting");
 
-        var enabled = flags.GetStringDetails("greeting", "fallback");
+        var enabled = flags.GetStringDetails("greeting", "caller-default");
         Assert.Equal("hello", enabled.Value);
         Assert.Equal(EvaluationReason.TargetingMatch, enabled.Reason);
     }

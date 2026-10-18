@@ -8,7 +8,8 @@ namespace Flagon.Testing;
 /// <summary>
 /// Synchronous, chainable flag setup for tests. Every write is an upsert that replaces a flag of any type and state, and
 /// is visible to the very next evaluation: the snapshot is refreshed before the method returns. Writes go straight to
-/// the store without an audit entry, so the audit history shows only the app's own admin writes.
+/// the store without an audit entry, so the audit history shows only the app's own admin writes. Every write other than
+/// <see cref="Archive"/> and <see cref="Remove"/> leaves the flag live: an archived flag is restored.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -209,7 +210,8 @@ public sealed class TestFlags
 
     /// <summary>
     /// Replaces the targeting rule of the existing flag <paramref name="key"/>, or clears it when
-    /// <paramref name="targeting"/> is null. Its variants, default variant and state are kept.
+    /// <paramref name="targeting"/> is null. Its variants, default variant and state are kept. An archived flag is
+    /// restored, as by every write here.
     /// </summary>
     /// <param name="key">The flag key.</param>
     /// <param name="targeting">The new targeting rule as JSON text, or null for none.</param>
@@ -225,9 +227,15 @@ public sealed class TestFlags
     }
 
     /// <summary>
-    /// Sets <paramref name="key"/> to an enabled boolean flag that is on only for the listed targeting keys
-    /// (<see cref="EvaluationContext.TargetingKey"/>) and off for everyone else, including evaluations with no context.
+    /// Sets <paramref name="key"/> to a boolean flag that serves <c>true</c> only for the listed targeting keys
+    /// (<see cref="EvaluationContext.TargetingKey"/>) and <c>false</c> for everyone else, including evaluations with no
+    /// context.
     /// </summary>
+    /// <remarks>
+    /// Despite its name, this does not change the flag state (that is <see cref="Enable"/>): it writes an enabled boolean
+    /// flag whose default variant is <c>off</c>, plus a targeting rule serving <c>on</c> for the listed keys, replacing
+    /// any flag <paramref name="key"/> already held. It is <c>SetFlag(key, false, targeting)</c> with the rule built for you.
+    /// </remarks>
     /// <param name="key">The flag key.</param>
     /// <param name="targetingKeys">The targeting keys the flag is on for; none means off for everyone.</param>
     /// <returns>This instance, for chaining.</returns>
@@ -297,6 +305,7 @@ public sealed class TestFlags
         return Run(() => RemoveAsync(key));
     }
 
+    /// <summary>Archives (if needed) and purges <paramref name="key"/>, retrying on a lost race, until it is gone.</summary>
     private async Task RemoveAsync(string key)
     {
         while (await _store.GetAsync(key).ConfigureAwait(false) is { } current)
@@ -351,10 +360,16 @@ public sealed class TestFlags
         }
     }
 
-    // A concurrent write to the same key (another task, or the app's own admin write) moved or removed the flag: re-read and retry.
+    /// <summary>
+    /// True when a concurrent write to the same key (another task, or the app's own admin write) moved or removed the
+    /// flag: the caller re-reads and retries.
+    /// </summary>
     private static bool IsLostRace(Exception ex) => ex is FlagVersionConflictException or FlagNotFoundException;
 
-    // Production rejects a single value that is not an object only on the typed getter; an object setter checks it here.
+    /// <summary>
+    /// Returns <paramref name="value"/> if it is a JSON object, else throws. Production rejects a single value that is not
+    /// an object only on the typed getter; an object setter checks it here.
+    /// </summary>
     private static JsonElement RequireObject(string key, JsonElement value, string method) =>
         value.ValueKind == JsonValueKind.Object
             ? value
@@ -415,6 +430,10 @@ public sealed class TestFlags
         }
     }
 
+    /// <summary>
+    /// One attempt at the upsert: creates, or restores and updates, <paramref name="key"/>. Returns false when a concurrent
+    /// write got there first.
+    /// </summary>
     private async Task<bool> TryWriteAsync(string key, Func<FlagRecord?, FlagDocument> build)
     {
         var current = await _store.GetAsync(key).ConfigureAwait(false);

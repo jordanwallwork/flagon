@@ -3,7 +3,7 @@ namespace Flagon.Testing;
 /// <summary>
 /// Test-safe overrides of <see cref="FlagonOptions"/>, applied after the app's own configuration. Background behaviour
 /// that would race a test's assertions is off by default; <see cref="FlagonOptions.FailFastOnStartup"/> is always on, so
-/// a broken setup fails the test instead of starting with code defaults.
+/// a broken setup fails the test instead of starting without flags, with every evaluation serving the caller's default.
 /// </summary>
 public sealed class FlagonTestingSwitches
 {

@@ -87,6 +87,19 @@ public class TargetingTests
     }
 
     [Fact]
+    public void SetTargeting_on_an_archived_flag_restores_it_with_the_new_rule()
+    {
+        using var flags = TestFlagon.Create();
+        flags.Flags.SetFlag("staff-tools", false).Archive("staff-tools");
+
+        flags.Flags.SetTargeting("staff-tools", StaffOnly);
+
+        var details = flags.GetBooleanDetails("staff-tools", context: Email("ann@example.com"));
+        Assert.True(details.Value);
+        Assert.Equal(EvaluationReason.TargetingMatch, details.Reason);
+    }
+
+    [Fact]
     public void SetTargeting_with_a_rule_the_compiler_rejects_throws_and_keeps_the_old_rule()
     {
         using var flags = TestFlagon.Create();
@@ -120,7 +133,7 @@ public class TargetingTests
         {
             ["user"] = new Dictionary<string, object?> { ["name"] = name },
         });
-        Assert.Equal(expected, flags.GetString("fractional-flag", "fallback", context));
+        Assert.Equal(expected, flags.GetString("fractional-flag", "caller-default", context));
     }
 
     [Fact]
