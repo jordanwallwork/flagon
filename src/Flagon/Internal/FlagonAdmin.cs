@@ -75,6 +75,12 @@ internal sealed partial class FlagonAdmin(
         UpdateDocumentAsync(key, expectedVersion, current =>
         {
             var document = current.Document;
+            if (document.Type != FlagType.Boolean)
+            {
+                throw new FlagValidationException(
+                    $"Flag '{key}' is not a boolean flag; set its state (enabled/disabled) or default variant instead.");
+            }
+
             var variant = enabled ? FlagDocument.OnVariant : FlagDocument.OffVariant;
             if (!document.Variants.ContainsKey(variant))
             {
@@ -83,6 +89,21 @@ internal sealed partial class FlagonAdmin(
 
             return document with { DefaultVariant = variant };
         }, cancellationToken);
+
+    public Task<FlagRecord> SetStateAsync(string key, FlagState state, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("set_state", key, () => SetStateCoreAsync(key, state, expectedVersion, cancellationToken));
+
+    private Task<FlagRecord> SetStateCoreAsync(string key, FlagState state, long expectedVersion, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (!Enum.IsDefined(state))
+        {
+            throw new FlagValidationException($"'{state}' is not a flag state; use enabled or disabled.");
+        }
+
+        return UpdateDocumentAsync(
+            key, expectedVersion, current => Unarchived(current, expectedVersion) with { State = state }, cancellationToken);
+    }
 
     public Task<FlagRecord> SetTargetingAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken = default) =>
         WriteAsync("set_targeting", key, () => SetTargetingCoreAsync(key, targeting, expectedVersion, cancellationToken));

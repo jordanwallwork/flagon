@@ -87,6 +87,23 @@ internal static class ManagementEndpoints
         return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
 
+    public static async Task<IResult> SetStateAsync(string key, HttpContext http, IFlagonAdmin admin)
+    {
+        var body = await ReadBodyAsync<SetStateBody>(http, required: true).ConfigureAwait(false);
+        var state = ParseState(body!.State);
+        var version = ExpectedVersion(http, body.Version);
+        var record = await admin.SetStateAsync(key, state, version, http.RequestAborted).ConfigureAwait(false);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
+    }
+
+    private static FlagState ParseState(string? state) => state?.ToLowerInvariant() switch
+    {
+        null => throw new FlagValidationException("'state' is required: enabled or disabled."),
+        "enabled" => FlagState.Enabled,
+        "disabled" => FlagState.Disabled,
+        _ => throw new FlagValidationException($"'{state}' is not a flag state; use enabled or disabled."),
+    };
+
     public static async Task<IResult> SetTargetingAsync(string key, HttpContext http, IFlagonAdmin admin)
     {
         var body = await ReadBodyAsync<SetTargetingBody>(http, required: true).ConfigureAwait(false);

@@ -57,6 +57,21 @@ public class OpenFeatureProviderTests
     }
 
     [Fact]
+    public async Task A_flag_disabled_through_flagon_resolves_to_the_callers_default_with_reason_disabled()
+    {
+        await using var host = await StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("new-checkout", Enabled: true));
+        await host.Admin.SetStateAsync("new-checkout", FlagState.Disabled, flag.Version);
+
+        var details = await Client(host).GetBooleanDetailsAsync("new-checkout", false);
+
+        Assert.False(details.Value);
+        Assert.Null(details.Variant);
+        Assert.Equal(Reason.Disabled, details.Reason);
+        Assert.Equal(ErrorType.None, details.ErrorType);
+    }
+
+    [Fact]
     public async Task A_toggle_made_through_flagon_is_seen_by_the_OpenFeature_client()
     {
         await using var host = await StartAsync();

@@ -280,17 +280,19 @@ app.MapHealthChecks("/health");
 ```
 
 - **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags (including by type); create
-  boolean, string, number and object flags; toggle, edit, archive, restore and purge them; view audit history,
+  boolean, string, number and object flags; toggle, enable or disable, edit, archive, restore and purge them; view audit history,
   last-evaluated time per app, and default-mismatch warnings. It is plain
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
 - **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI
-  (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT/DELETE /flags/{key}/targeting`,
+  (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT /flags/{key}/state`, `PUT/DELETE /flags/{key}/targeting`,
   `POST /flags/{key}/archive|restore`, `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
   version gets `409 Conflict`. `POST /flags` creates a boolean flag from `enabled`, or a string, number or object flag
   from `variants` and `defaultVariant` (see below). Flags are returned with their `type` (`boolean`, `string`,
   `number` or `object`), `variants`, `value` (the default variant's value, or `null`) and `enabled` (the on/off
-  toggle; `null` for non-boolean flags); `GET /flags?type=string` filters by type. `POST /flags/{key}/evaluate`
+  toggle; `null` for non-boolean flags) and `state` (`enabled` or `disabled`); `GET /flags?type=string` filters by
+  type. `PUT /flags/{key}/enabled` (`{ "enabled": true }`) is the boolean on/off toggle and answers `400` for other
+  types; `PUT /flags/{key}/state` (`{ "state": "disabled" }`) is the kill switch for a flag of any type. `POST /flags/{key}/evaluate`
   (`{ "context": {...}, "document"?: {...} }`) previews the stored flag, or an unsaved flagd flag document, against a
   context without side effects (no usage, auto-create, metric or store write) and returns
   `{ value, variant, reason, errorCode?, errorMessage? }`, where `value` is the served variant's JSON value of any type
@@ -332,6 +334,20 @@ Variants are validated on write (`FlagValidationException` in-process, `400` pro
 names non-empty, at most 128 characters and unique; values all of one type (booleans, strings, numbers or JSON
 objects, never arrays or `null`); `defaultVariant` one of them or `null` (no default variant: callers get their own
 default when no rule matches). Variants can't be combined with `enabled: true`.
+
+Any flag can be disabled, and enabled again. A disabled flag serves each app its own code default with reason
+`DISABLED` (OFREP answers with no `value`, so remote clients use theirs too); its variants, default variant and
+targeting are kept. `SetEnabledAsync` stays the boolean on/off toggle and throws `FlagValidationException` for other
+types. Both are version-checked, refuse archived flags and are audited as `Updated`:
+
+```csharp
+flag = await admin.SetStateAsync("theme", FlagState.Disabled, expectedVersion: flag.Version);
+```
+
+```http
+PUT /flagon/api/flags/theme/state
+{ "state": "disabled", "version": 3 }
+```
 
 ## OpenFeature
 

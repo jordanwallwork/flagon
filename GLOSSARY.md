@@ -23,3 +23,7 @@ _Avoid_: Value type, kind
 **Caller's default**:
 The value the calling code supplies, returned whenever no variant is served (missing, archived, disabled, no default variant, or error).
 _Avoid_: Fallback, code value
+
+**Flag state**:
+ENABLED or DISABLED, for a flag of any type. A disabled flag serves no variant, so every caller gets the caller's default (reason `DISABLED`). Distinct from a boolean flag's on/off toggle, which switches its default variant.
+_Avoid_: Enabled (for the state of a non-boolean flag), active
