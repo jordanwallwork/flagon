@@ -109,29 +109,25 @@ public sealed record FlagDocument(
     /// The flag's type, derived from its variant values. Null when it has no variants, or when they do not share one
     /// flagd type (mixed types, arrays or nulls), which only documents written by other tools can have.
     /// </summary>
-    public FlagType? Type
-    {
-        get
-        {
-            FlagType? type = null;
-            foreach (var value in Variants.Values)
-            {
-                var valueType = Internal.FlagVariants.TypeOf(value.ValueKind);
-                if (valueType is null || (type is not null && type != valueType))
-                {
-                    return null;
-                }
-
-                type = valueType;
-            }
-
-            return type;
-        }
-    }
+    public FlagType? Type => Internal.FlagVariants.CommonType(Variants);
 
     /// <summary>Creates an <see cref="FlagState.Enabled"/> boolean flag serving <paramref name="enabled"/>.</summary>
     public static FlagDocument Boolean(bool enabled, FlagMetadata? metadata = null) =>
         new(FlagState.Enabled, BooleanVariants, enabled ? OnVariant : OffVariant, metadata ?? new FlagMetadata());
+
+    /// <summary>
+    /// An <see cref="FlagState.Enabled"/> flag serving the single value <paramref name="value"/>: a boolean is the usual
+    /// on/off flag (see <see cref="Boolean"/>); any other value is the one variant <c>default</c>, its default variant.
+    /// Used for a flag auto-created from a caller's default or defined in code with one value; the value is not checked.
+    /// </summary>
+    internal static FlagDocument SingleValue(JsonElement value, FlagMetadata? metadata = null) =>
+        value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? Boolean(value.GetBoolean(), metadata)
+            : new(
+                FlagState.Enabled,
+                new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [Internal.FlagVariants.SingleVariant] = value }.ToFrozenDictionary(StringComparer.Ordinal),
+                Internal.FlagVariants.SingleVariant,
+                metadata ?? new FlagMetadata());
 }
 
 /// <summary>A flag as held by a store: its key, document and the store-wide change version of its last write.</summary>

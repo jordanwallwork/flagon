@@ -32,11 +32,8 @@ public sealed partial class FlagonOptions
     /// </param>
     /// <exception cref="FlagValidationException">The key, a tag or the targeting JSON is invalid.</exception>
     /// <exception cref="ArgumentException">The key has already been defined.</exception>
-    public FlagonOptions Define(string key, bool defaultValue = false, string? description = null, IEnumerable<string>? tags = null, string? targeting = null)
-    {
-        var boolean = FlagDocument.Boolean(defaultValue);
-        return Add(key, boolean.Variants, boolean.DefaultVariant, description, tags, targeting);
-    }
+    public FlagonOptions Define(string key, bool defaultValue = false, string? description = null, IEnumerable<string>? tags = null, string? targeting = null) =>
+        Single(key, JsonSerializer.SerializeToElement(defaultValue), description, tags, targeting);
 
     /// <summary>
     /// Declares a string flag in code: a missing flag is created with a single <c>default</c> variant serving
@@ -162,8 +159,11 @@ public sealed partial class FlagonOptions
         ? JsonSerializer.SerializeToElement(value)
         : throw new FlagValidationException($"Flag '{key}' variant '{variant}' is {value}; number variants must be finite.");
 
-    private FlagonOptions Single(string key, JsonElement value, string? description, IEnumerable<string>? tags, string? targeting) =>
-        Add(key, new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [FlagVariants.SingleVariant] = value }, FlagVariants.SingleVariant, description, tags, targeting);
+    private FlagonOptions Single(string key, JsonElement value, string? description, IEnumerable<string>? tags, string? targeting)
+    {
+        var single = FlagDocument.SingleValue(value);
+        return Add(key, single.Variants, single.DefaultVariant, description, tags, targeting);
+    }
 
     private FlagonOptions Add(
         string key,

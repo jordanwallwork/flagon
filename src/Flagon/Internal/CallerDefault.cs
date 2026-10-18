@@ -9,6 +9,10 @@ namespace Flagon.Internal;
 /// </summary>
 internal readonly struct CallerDefault
 {
+    /// <summary>
+    /// The CLR shape of the typed getter's default (<c>int</c> and <c>double</c> are distinct shapes of the one number
+    /// flag type), not a <see cref="FlagType"/>.
+    /// </summary>
     private enum Shape : byte
     {
         Boolean,

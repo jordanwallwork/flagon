@@ -121,7 +121,7 @@ internal sealed partial class FlagAutoCreator(
 
             var change = changes.Begin();
             var metadata = new FlagMetadata(Source: FlagSource.Auto).StampCreated(change);
-            var document = Document(defaultValue, metadata);
+            var document = FlagDocument.SingleValue(defaultValue, metadata);
             var created = await instrumentation.TraceStoreOperationAsync("auto_create", key, async activity =>
             {
                 var record = await store.TryCreateAsync(key, document, change, cancellationToken)
@@ -152,18 +152,6 @@ internal sealed partial class FlagAutoCreator(
             // A later evaluation retries.
             _pending.TryRemove(key, out _);
         }
-    }
-
-    /// <summary>The flag a caller's default (one with a flag type) auto-creates.</summary>
-    private static FlagDocument Document(JsonElement json, FlagMetadata metadata)
-    {
-        if (FlagVariants.TypeOf(json.ValueKind) == FlagType.Boolean)
-        {
-            return FlagDocument.Boolean(json.GetBoolean(), metadata);
-        }
-
-        var variants = new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [FlagVariants.SingleVariant] = json };
-        return new FlagDocument(FlagState.Enabled, variants, FlagVariants.SingleVariant, metadata);
     }
 
     public void Dispose()

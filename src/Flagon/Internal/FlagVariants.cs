@@ -31,6 +31,30 @@ internal static class FlagVariants
         _ => null,
     };
 
+    /// <summary>
+    /// The one flag type all of <paramref name="variants"/> share, or null when there are none, or when a value has no
+    /// flag type or differs in type from those before it. At the first such value <paramref name="onConflict"/> (if
+    /// given) is called with its name, the value and the type so far (null for the first value); it may throw.
+    /// </summary>
+    public static FlagType? CommonType(
+        IEnumerable<KeyValuePair<string, JsonElement>> variants, Action<string, JsonElement, FlagType?>? onConflict = null)
+    {
+        FlagType? type = null;
+        foreach (var (name, value) in variants)
+        {
+            var flagType = TypeOf(value.ValueKind);
+            if (flagType is null || (type is not null && type != flagType))
+            {
+                onConflict?.Invoke(name, value, type);
+                return null;
+            }
+
+            type = flagType;
+        }
+
+        return type;
+    }
+
     /// <summary>Variant names for a message: each quoted and comma-separated, e.g. <c>'a', 'b'</c>.</summary>
     public static string QuotedNames(IEnumerable<string> names) => string.Join(", ", names.Select(n => $"'{n}'"));
 
@@ -54,7 +78,6 @@ internal static class FlagVariants
     {
         ArgumentNullException.ThrowIfNull(variants);
         var copy = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        FlagType? type = null;
         foreach (var (name, value) in variants)
         {
             if (string.IsNullOrEmpty(name))
@@ -72,17 +95,14 @@ internal static class FlagVariants
             {
                 throw Repeated(key, name);
             }
-
-            var valueType = TypeOf(key, name, value);
-            if (type is not null && type != valueType)
-            {
-                throw new FlagValidationException(
-                    $"Flag '{key}' mixes {Name(type.Value)} and {Name(valueType)} variants; all variant values must be of one type.");
-            }
-
-            type = valueType;
         }
 
+        var type = CommonType(copy, (name, value, typeSoFar) => throw (TypeOf(value.ValueKind), typeSoFar) switch
+        {
+            ({ } flagType, { } other) => new FlagValidationException(
+                $"Flag '{key}' mixes {Name(other)} and {Name(flagType)} variants; all variant values must be of one type."),
+            _ => NoType(key, name, value),
+        });
         if (type is null)
         {
             throw new FlagValidationException($"Flag '{key}' must have at least one variant.");
@@ -160,12 +180,13 @@ internal static class FlagVariants
     private static FlagValidationException Repeated(string key, string name) =>
         new($"Flag '{key}' defines variant '{name}' more than once; variant names must be unique.");
 
-    private static FlagType TypeOf(string key, string name, JsonElement value) => TypeOf(value.ValueKind) ?? value.ValueKind switch
+    // The rejection of a variant value that has no flag type.
+    private static FlagValidationException NoType(string key, string name, JsonElement value) => value.ValueKind switch
     {
-        JsonValueKind.Array => throw new FlagValidationException(
+        JsonValueKind.Array => new FlagValidationException(
             $"Flag '{key}' variant '{name}' is an array; variant values must be booleans, strings, numbers or JSON objects."),
-        JsonValueKind.Null => throw new FlagValidationException(
+        JsonValueKind.Null => new FlagValidationException(
             $"Flag '{key}' variant '{name}' is null; variant values must be booleans, strings, numbers or JSON objects."),
-        _ => throw new FlagValidationException($"Flag '{key}' variant '{name}' has no value."),
+        _ => new FlagValidationException($"Flag '{key}' variant '{name}' has no value."),
     };
 }

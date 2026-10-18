@@ -28,10 +28,10 @@ internal sealed partial class FlagonAdmin
             }
 
             if (RolloutShape.Split(document.Targeting, document.Variants) is { } split
-                && split.Buckets.FirstOrDefault(b => !variants.ContainsKey(b.Variant)) is { } removed)
+                && document.Variants.Keys.FirstOrDefault(name => !variants.ContainsKey(name) && split.Contains(name)) is { } removed)
             {
                 throw new FlagValidationException(
-                    $"Flag '{key}' cannot remove variant '{removed.Variant}' while it is a bucket in the percentage split; change the split first.");
+                    $"Flag '{key}' cannot remove variant '{removed}' while it is a bucket in the percentage split; change the split first.");
             }
 
             var validated = FlagVariants.Validate(key, variants, defaultVariant, document.Type);
