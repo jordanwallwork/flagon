@@ -27,7 +27,7 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(IsEnabled(key, defaultValue, context));
 
     public FlagEvaluationDetails<bool> GetBooleanDetails(string key, bool defaultValue = false, EvaluationContext? context = null) =>
-        Typed(key, defaultValue, CallerDefault.Of(defaultValue), FlagType.Boolean, context, static (in r, d, _) => r.AsBoolean(d));
+        Typed<bool, BooleanView>(key, defaultValue, context);
 
     public string GetString(string key, string defaultValue, EvaluationContext? context = null) =>
         GetStringDetails(key, defaultValue, context).Value;
@@ -36,7 +36,7 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(GetString(key, defaultValue, context));
 
     public FlagEvaluationDetails<string> GetStringDetails(string key, string defaultValue, EvaluationContext? context = null) =>
-        Typed(key, defaultValue, CallerDefault.Of(defaultValue), FlagType.String, context, static (in r, d, _) => r.AsString(d));
+        Typed<string, StringView>(key, defaultValue, context);
 
     public ValueTask<FlagEvaluationDetails<string>> GetStringDetailsAsync(string key, string defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetStringDetails(key, defaultValue, context));
@@ -48,7 +48,7 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(GetInt(key, defaultValue, context));
 
     public FlagEvaluationDetails<int> GetIntDetails(string key, int defaultValue, EvaluationContext? context = null) =>
-        Typed(key, defaultValue, CallerDefault.Of(defaultValue), FlagType.Number, context, static (in r, d, _) => r.AsInt(d));
+        Typed<int, IntView>(key, defaultValue, context);
 
     public ValueTask<FlagEvaluationDetails<int>> GetIntDetailsAsync(string key, int defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetIntDetails(key, defaultValue, context));
@@ -60,7 +60,7 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(GetDouble(key, defaultValue, context));
 
     public FlagEvaluationDetails<double> GetDoubleDetails(string key, double defaultValue, EvaluationContext? context = null) =>
-        Typed(key, defaultValue, CallerDefault.Of(defaultValue), FlagType.Number, context, static (in r, d, _) => r.AsDouble(d));
+        Typed<double, DoubleView>(key, defaultValue, context);
 
     public ValueTask<FlagEvaluationDetails<double>> GetDoubleDetailsAsync(string key, double defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetDoubleDetails(key, defaultValue, context));
@@ -72,28 +72,90 @@ internal sealed partial class FlagonEvaluator(
         ValueTask.FromResult(GetObject(key, defaultValue, context, options));
 
     public FlagEvaluationDetails<T> GetObjectDetails<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null) =>
-        Typed(key, defaultValue, CallerDefault.Of(defaultValue, options), FlagType.Object, context, static (in r, d, o) => r.AsObject(d, o), options);
+        Typed<T, ObjectView<T>>(key, defaultValue, context, options);
 
     public ValueTask<FlagEvaluationDetails<T>> GetObjectDetailsAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetObjectDetails(key, defaultValue, context, options));
 
-    /// <summary>Views an untyped result as the typed getter's type, with the caller's default.</summary>
-    private delegate FlagEvaluationDetails<T> TypedView<T>(in Resolution resolution, T defaultValue, JsonSerializerOptions? options);
+    /// <summary>
+    /// A typed getter's view of an untyped result: its flag type, its caller's default, and the typed details. A struct
+    /// with static members, so each <see cref="Typed{T, TView}"/> instantiation is specialised and inlined by the JIT (no
+    /// delegate call on the hot path).
+    /// </summary>
+    private interface ITypedView<T>
+    {
+        static abstract FlagType Type { get; }
+
+        static abstract CallerDefault Default(T defaultValue, JsonSerializerOptions? options);
+
+        static abstract FlagEvaluationDetails<T> View(in Resolution resolution, T defaultValue, JsonSerializerOptions? options);
+    }
+
+    private readonly struct BooleanView : ITypedView<bool>
+    {
+        public static FlagType Type => FlagType.Boolean;
+
+        public static CallerDefault Default(bool defaultValue, JsonSerializerOptions? options) => CallerDefault.Of(defaultValue);
+
+        public static FlagEvaluationDetails<bool> View(in Resolution resolution, bool defaultValue, JsonSerializerOptions? options) =>
+            resolution.AsBoolean(defaultValue);
+    }
+
+    private readonly struct StringView : ITypedView<string>
+    {
+        public static FlagType Type => FlagType.String;
+
+        public static CallerDefault Default(string defaultValue, JsonSerializerOptions? options) => CallerDefault.Of(defaultValue);
+
+        public static FlagEvaluationDetails<string> View(in Resolution resolution, string defaultValue, JsonSerializerOptions? options) =>
+            resolution.AsString(defaultValue);
+    }
+
+    private readonly struct IntView : ITypedView<int>
+    {
+        public static FlagType Type => FlagType.Number;
+
+        public static CallerDefault Default(int defaultValue, JsonSerializerOptions? options) => CallerDefault.Of(defaultValue);
+
+        public static FlagEvaluationDetails<int> View(in Resolution resolution, int defaultValue, JsonSerializerOptions? options) =>
+            resolution.AsInt(defaultValue);
+    }
+
+    private readonly struct DoubleView : ITypedView<double>
+    {
+        public static FlagType Type => FlagType.Number;
+
+        public static CallerDefault Default(double defaultValue, JsonSerializerOptions? options) => CallerDefault.Of(defaultValue);
+
+        public static FlagEvaluationDetails<double> View(in Resolution resolution, double defaultValue, JsonSerializerOptions? options) =>
+            resolution.AsDouble(defaultValue);
+    }
+
+    private readonly struct ObjectView<T> : ITypedView<T>
+    {
+        public static FlagType Type => FlagType.Object;
+
+        public static CallerDefault Default(T defaultValue, JsonSerializerOptions? options) => CallerDefault.Of(defaultValue, options);
+
+        public static FlagEvaluationDetails<T> View(in Resolution resolution, T defaultValue, JsonSerializerOptions? options) =>
+            resolution.AsObject(defaultValue, options);
+    }
 
     /// <summary>
     /// Every typed getter: evaluates <paramref name="key"/> with the caller's <paramref name="context"/> (or the ambient
-    /// one), views the result through <paramref name="view"/>, then applies the side effects of this app's code using a
+    /// one), views the result through <typeparamref name="TView"/>, then applies the side effects of this app's code using a
     /// flag: usage is recorded with the caller's default (also on <see cref="ErrorCode.TypeMismatch"/>), and a missing key
     /// is warned about once and queued for auto-create as a flag of the default's type. Then the evaluation metric and the
     /// observer, if any.
     /// </summary>
-    private FlagEvaluationDetails<T> Typed<T>(
-        string key, T defaultValue, in CallerDefault callerDefault, FlagType requestedType, EvaluationContext? context,
-        TypedView<T> view, JsonSerializerOptions? options = null)
+    private FlagEvaluationDetails<T> Typed<T, TView>(
+        string key, T defaultValue, EvaluationContext? context, JsonSerializerOptions? options = null)
+        where TView : struct, ITypedView<T>
     {
         context ??= ambientContext.Current;
         var resolution = Evaluate(key, context);
-        var details = view(resolution, defaultValue, options);
+        var details = TView.View(resolution, defaultValue, options);
+        var callerDefault = TView.Default(defaultValue, options);
 
         usage.Record(key, callerDefault);
         if (details.ErrorCode == ErrorCode.FlagNotFound)
@@ -107,7 +169,7 @@ internal sealed partial class FlagonEvaluator(
         {
             // A typed view serves the variant's JSON or, when it served none (including on TYPE_MISMATCH), the caller's default.
             var value = details.Variant is not null ? resolution.Value : callerDefault.ToJson() ?? default;
-            Observe(details, requestedType, value, context, EvaluationOrigin.InProcess);
+            Observe(details, TView.Type, value, context, EvaluationOrigin.InProcess);
         }
 
         return details;
