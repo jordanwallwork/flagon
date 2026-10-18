@@ -280,13 +280,14 @@ app.MapHealthChecks("/health");
 ```
 
 - **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags (including by type); create
-  boolean, string, number and object flags; toggle, enable or disable, edit, archive, restore and purge them; view audit history,
+  boolean, string, number and object flags; toggle, enable or disable, edit, archive, restore and purge them; edit a typed
+  flag's variants and pick its default variant; view audit history,
   last-evaluated time per app, and default-mismatch warnings. It is plain
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
 - **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI
   (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT /flags/{key}/state`, `PUT/DELETE /flags/{key}/targeting`,
-  `POST /flags/{key}/archive|restore`, `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
+  `PUT /flags/{key}/variants`, `PUT /flags/{key}/default-variant`, `POST /flags/{key}/archive|restore`, `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
   version gets `409 Conflict`. `POST /flags` creates a boolean flag from `enabled`, or a string, number or object flag
   from `variants` and `defaultVariant` (see below). Flags are returned with their `type` (`boolean`, `string`,
   `number` or `object`), `variants`, `value` (the default variant's value, or `null`) and `enabled` (the on/off
@@ -347,6 +348,27 @@ flag = await admin.SetStateAsync("theme", FlagState.Disabled, expectedVersion: f
 ```http
 PUT /flagon/api/flags/theme/state
 { "state": "disabled", "version": 3 }
+```
+
+A string, number or object flag's variants can be edited later: `SetVariantsAsync` (`PUT /flags/{key}/variants` with
+`{ "variants": {...}, "defaultVariant": ..., "version": N }`) replaces the variants and the default variant in one write.
+The same rules apply, and the values must keep the flag's type. The current default variant can only be removed by
+choosing another default (or `null`) in the same edit. Renaming a variant is a remove plus an add. Targeting rules are
+not checked for removed names; a rule that returns one fails at evaluation (each app gets its code default), and the UI
+warns when the rule mentions it. A boolean flag's `on`/`off` variants are fixed. `SetDefaultVariantAsync`
+(`PUT /flags/{key}/default-variant` with `{ "variant": "dark" }`, or `null` for none) switches the served variant for a
+flag of any type; for a boolean flag, `on`/`off` is the same as toggling it. Archived flags reject both. Both writes are
+version-checked (`409` on a stale version) and audited as `Updated` with the documents before and after.
+
+```csharp
+theme = await admin.SetVariantsAsync("theme",
+    new Dictionary<string, JsonElement>
+    {
+        ["light"] = JsonSerializer.SerializeToElement("light"),
+        ["solar"] = JsonSerializer.SerializeToElement("solarized"),
+    },
+    defaultVariant: "solar", expectedVersion: theme.Version);
+theme = await admin.SetDefaultVariantAsync("theme", "light", theme.Version);
 ```
 
 ## OpenFeature

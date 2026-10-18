@@ -11,7 +11,7 @@ using Microsoft.Net.Http.Headers;
 namespace Flagon.AspNetCore.Management;
 
 /// <summary>Management API handlers: thin translations between HTTP and <see cref="IFlagonAdmin"/>.</summary>
-internal static class ManagementEndpoints
+internal static partial class ManagementEndpoints
 {
     public static async Task<IResult> ListAsync(HttpContext http, IFlagonAdmin admin)
     {

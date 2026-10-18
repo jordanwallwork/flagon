@@ -789,7 +789,7 @@ async function renderDetail(key) {
       " · updated ", time(flag.updatedAt), flag.updatedBy ? ` by ${flag.updatedBy}` : ""),
     h("div", { class: "grid" }, metadata, lifecycle),
     stateCard(flag, reload),
-    !isBoolean(flag) && variantsCard(flag),
+    !isBoolean(flag) && variantsCard(flag, reload),
     targeting.card,
     tryItCard(flag, targeting.draft),
     usage,
@@ -838,18 +838,119 @@ function stateName(state) {
   return typeof state === "string" ? state.toLowerCase() : String(state);
 }
 
-/** The variants of a non-boolean flag, with the default variant marked. */
-function variantsCard(flag) {
-  const names = Object.keys(flag.variants ?? {});
-  return h("section", { class: "card variants" },
-    h("h2", {}, "Variants"),
-    h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Value"))),
-      h("tbody", {}, names.map((name) => h("tr", {},
-        h("td", {}, h("code", {}, name), name === flag.defaultVariant && [" ", h("span", { class: "badge targeting", title: "Served when no targeting rule matches" }, "default")]),
-        h("td", {}, valueView(flag.variants[name])))))),
-    (flag.defaultVariant === null || flag.defaultVariant === undefined)
-      && h("p", { class: "small muted" }, "No default variant: when no rule matches, each app gets its code default."));
+/**
+ * The variants of a non-boolean flag, with the default variant marked and a default-variant picker; "Edit variants"
+ * turns it into an editor that adds, removes and changes variants (renaming is a remove plus an add) and saves them
+ * with the default variant in one write. The editor warns when the saved targeting rule mentions a removed name.
+ */
+function variantsCard(flag, reload) {
+  const card = h("section", { class: "card stack variants" });
+  const locked = flag.archived ? ARCHIVED_LOCKED : undefined;
+  const saved = flag.variants ?? {};
+  const noDefault = flag.defaultVariant === null || flag.defaultVariant === undefined;
+
+  function show() {
+    const names = Object.keys(saved);
+    const picker = h("select", { "aria-label": "Default variant", disabled: flag.archived, title: locked },
+      ...names.map((n) => h("option", { value: n, selected: n === flag.defaultVariant }, n)),
+      h("option", { value: "", selected: noDefault }, "(none: each app gets its code default)"));
+    const setDefault = h("button", { type: "submit", disabled: true, title: locked }, "Set default");
+    picker.addEventListener("change", () => { setDefault.disabled = flag.archived || (picker.value || null) === (flag.defaultVariant ?? null); });
+
+    async function saveDefault(e) {
+      e.preventDefault();
+      const variant = picker.value || null;
+      if (await write(() => api.setDefaultVariant(flag.key, flag.version, variant), reload)) {
+        showNotice(variant === null ? "Default variant cleared." : `Default variant set to ${variant}.`, "success");
+        await reload();
+      }
+    }
+
+    card.replaceChildren(...[
+      h("h2", {}, "Variants"),
+      h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Value"))),
+        h("tbody", {}, names.map((name) => h("tr", {},
+          h("td", {}, h("code", {}, name), name === flag.defaultVariant && [" ", h("span", { class: "badge targeting", title: "Served when no targeting rule matches" }, "default")]),
+          h("td", {}, valueView(saved[name])))))),
+      noDefault && h("p", { class: "small muted" }, "No default variant: when no rule matches, each app gets its code default."),
+      h("form", { class: "inline-form", onsubmit: saveDefault }, h("label", { class: "inline" }, "Default variant", picker), setDefault),
+      // A flag with mixed or no variants (written by another tool) has no type to edit its values as.
+      h("div", { class: "actions" }, h("button", { disabled: flag.archived || !flag.type, title: locked, onclick: edit }, "Edit variants")),
+    ].filter(Boolean));
+  }
+
+  function edit() {
+    const message = h("p", { role: "status", class: "small error-text", hidden: true });
+    const warning = h("p", { class: "warning", hidden: true });
+    const literals = stringLiterals(flag.targeting);
+    const rows = variantRows(() => flag.type, { initialDefault: flag.defaultVariant ?? null, onChange: warn });
+    const showError = (content) => { message.replaceChildren(...content); message.hidden = false; };
+
+    /** Warns about removed names the saved rule still mentions: it would serve an unknown variant (an error) for them. */
+    function warn() {
+      message.hidden = true;
+      const kept = new Set(rows.names());
+      const stale = Object.keys(saved).filter((name) => !kept.has(name) && literals.has(name));
+      warning.hidden = stale.length === 0;
+      warning.replaceChildren("The targeting rule mentions ",
+        ...stale.flatMap((name, i) => [i ? ", " : "", h("code", {}, name)]),
+        `, which ${stale.length === 1 ? "is" : "are"} removed here: wherever the rule returns ${stale.length === 1 ? "it" : "them"}, evaluation fails and each app gets its code default until the rule is updated. Renaming a variant is a remove plus an add.`);
+    }
+
+    async function save(e) {
+      e.preventDefault();
+      let variants;
+      try { variants = rows.value(); } catch (err) { showError([err.message]); return; }
+      const defaultVariant = rows.defaultVariant();
+      const ok = await saveInline(() => api.setVariants(flag.key, flag.version, variants, defaultVariant),
+        { button: e.submitter, showError, reload });
+      if (!ok) return;
+      showNotice("Variants saved.", "success");
+      await reload();
+    }
+
+    for (const [name, value] of Object.entries(saved)) rows.add(name, value);
+    card.replaceChildren(h("form", { class: "stack variants-editor", onsubmit: save },
+      h("h2", {}, "Variants"),
+      h("p", { class: "small muted" }, `Every value must be a ${flag.type}: a flag's type can't change. Renaming a variant is a remove plus an add.`),
+      rows.list,
+      h("div", {}, h("button", { type: "button", onclick: () => rows.add().name.focus() }, "Add variant")),
+      h("label", {}, "Default variant", rows.picker),
+      warning,
+      message,
+      h("div", { class: "actions" },
+        h("button", { type: "submit", class: "primary" }, "Save variants"),
+        h("button", { type: "button", onclick: show }, "Cancel"))));
+    warn();
+  }
+
+  show();
+  return card;
+}
+
+/** Every string literal in a JSON value (a targeting rule), for spotting variant names it mentions. */
+function stringLiterals(value, found = new Set()) {
+  if (typeof value === "string") found.add(value);
+  else if (Array.isArray(value)) value.forEach((v) => stringLiterals(v, found));
+  else if (value && typeof value === "object") Object.values(value).forEach((v) => stringLiterals(v, found));
+  return found;
+}
+
+/** Summaries of the variants added, removed and changed between two audited documents. */
+function describeVariantChanges(before, after) {
+  const was = before.variants ?? {}, now = after.variants ?? {};
+  const changes = [];
+  for (const name of Object.keys(now)) {
+    if (!Object.hasOwn(was, name)) changes.push(`variant ${name} added`);
+    else if (JSON.stringify(was[name]) !== JSON.stringify(now[name])) {
+      changes.push(`variant ${name} ${truncate(formatValue(was[name]), 24)} → ${truncate(formatValue(now[name]), 24)}`);
+    }
+  }
+  for (const name of Object.keys(was)) {
+    if (!Object.hasOwn(now, name)) changes.push(`variant ${name} removed`);
+  }
+  return changes;
 }
 
 /** A short human summary of an audit entry, with the raw documents behind a disclosure. */
@@ -857,7 +958,8 @@ function describeChange(entry) {
   const before = entry.before, after = entry.after;
   const changes = [];
   if (before && after) {
-    if (before.defaultVariant !== after.defaultVariant) changes.push(`default ${before.defaultVariant} → ${after.defaultVariant}`);
+    changes.push(...describeVariantChanges(before, after));
+    if (before.defaultVariant !== after.defaultVariant) changes.push(`default ${before.defaultVariant ?? "none"} → ${after.defaultVariant ?? "none"}`);
     if (before.state !== after.state) changes.push(`state ${stateName(before.state)} → ${stateName(after.state)}`);
     const bm = before.metadata ?? {}, am = after.metadata ?? {};
     if ((bm.description ?? "") !== (am.description ?? "")) changes.push("description");
@@ -958,6 +1060,90 @@ function describeTargetingChange(before, after) {
   return from !== null && to !== null ? `rollout ${from}% → ${to}%` : "targeting changed";
 }
 
+// ---------------------------------------------------------------- variant rows
+
+/**
+ * Editable variant rows (a name and a typed value input each, removable) with a default-variant picker, shared by the
+ * create form and the flag page's variants card. Values are read as `typeOf()`: text for strings, a number box for
+ * numbers, a JSON textarea for objects. The picker keeps the admin's pick while it still exists; until they pick (or once
+ * it is gone) the first variant is the default. An `initialDefault` (null for none) counts as picked.
+ * Returns `list` and `picker` to place, `add(name, value)` (returns the row), `retype()` after the type changes, `count`,
+ * `names()`, `value()` (`{ name: value }`; throws Error naming the variant whose value can't be read) and
+ * `defaultVariant()` (null for none); `onChange` is called after every edit.
+ */
+function variantRows(typeOf, { initialDefault, onChange } = {}) {
+  const rows = [];
+  const list = h("div", { class: "stack variant-rows" });
+  const picker = h("select", { "aria-label": "Default variant" });
+  let choice = initialDefault === undefined ? undefined : (initialDefault ?? ""); // undefined until picked; "" is "none"
+  const changed = () => { drawDefaults(); onChange?.(); };
+  picker.addEventListener("change", () => { choice = picker.value; onChange?.(); });
+
+  /** A value as input text: strings as they are, numbers as digits, objects as indented JSON. */
+  function valueText(value) {
+    if (value === undefined) return "";
+    return typeof value === "string" ? value : JSON.stringify(value, null, typeof value === "object" ? 2 : undefined);
+  }
+
+  function valueInput(text = "") {
+    const common = { "aria-label": "Variant value", spellcheck: "false", autocomplete: "off", oninput: () => onChange?.() };
+    if (typeOf() === "number") return h("input", { ...common, type: "number", step: "any", required: true, value: text });
+    if (typeOf() === "object") return h("textarea", { ...common, class: "code", rows: 3, placeholder: '{ "rows": 3 }' }, text || "{}");
+    return h("input", { ...common, value: text, placeholder: "value" });
+  }
+
+  function add(name = "", value = undefined) {
+    const row = { name: h("input", { value: name, placeholder: "name", "aria-label": "Variant name", maxlength: 128, required: true,
+      spellcheck: "false", autocomplete: "off", oninput: changed }) };
+    row.value = valueInput(valueText(value));
+    row.el = h("div", { class: "variant-row" }, row.name, row.value,
+      h("button", { type: "button", title: "Remove variant", "aria-label": "Remove variant", onclick: () => {
+        rows.splice(rows.indexOf(row), 1);
+        row.el.remove();
+        changed();
+      } }, "×"));
+    rows.push(row);
+    list.append(row.el);
+    changed();
+    return row;
+  }
+
+  function retype() {
+    for (const row of rows) { const next = valueInput(); row.value.replaceWith(next); row.value = next; }
+  }
+
+  const names = () => [...new Set(rows.map((r) => r.name.value).filter(Boolean))];
+
+  function drawDefaults() {
+    const all = names();
+    const selected = choice === "" || all.includes(choice) ? choice : (all[0] ?? "");
+    picker.replaceChildren(
+      ...all.map((n) => h("option", { value: n, selected: n === selected }, n)),
+      h("option", { value: "", selected: selected === "" }, "(none: each app gets its code default)"));
+  }
+
+  function value() {
+    const variants = {};
+    for (const r of rows) {
+      const name = r.name.value;
+      if (Object.hasOwn(variants, name)) throw new Error(`Variant '${name}' is defined more than once.`);
+      if (typeOf() === "number") {
+        const n = Number(r.value.value);
+        if (r.value.value.trim() === "" || !Number.isFinite(n)) throw new Error(`Variant '${name}' needs a number.`);
+        variants[name] = n;
+      } else if (typeOf() === "object") {
+        try { variants[name] = JSON.parse(r.value.value); } catch (e) { throw new Error(`Variant '${name}' is not valid JSON: ${e.message}`); }
+      } else {
+        variants[name] = r.value.value;
+      }
+    }
+    return variants;
+  }
+
+  drawDefaults();
+  return { list, picker, add, retype, names, value, defaultVariant: () => picker.value || null, get count() { return rows.length; } };
+}
+
 // ---------------------------------------------------------------- create
 
 async function renderCreate() {
@@ -977,78 +1163,19 @@ async function renderCreate() {
   const submit = h("button", { type: "submit", class: "primary" }, "Create flag");
 
   // Type: boolean flags are on/off (the Enabled box); other types get named variants and a default-variant picker.
-  const type = h("select", { onchange: () => { variantRows.forEach((r) => r.retype()); drawType(); } },
+  const type = h("select", { onchange: () => { rows.retype(); drawType(); } },
     [["boolean", "Boolean (on/off)"], ["string", "String"], ["number", "Number"], ["object", "Object (JSON)"]]
       .map(([value, label]) => h("option", { value }, label)));
   const enabledLabel = h("label", { class: "inline" }, enabled, "Enabled");
-  const variantList = h("div", { class: "stack variant-rows" });
-  const defaultVariant = h("select", {});
-  const variantRows = [];
-
-  /** A typed value input for the selected type: text for strings, a number box for numbers, a JSON textarea for objects. */
-  function valueInput(value = "") {
-    const common = { "aria-label": "Variant value", spellcheck: "false", autocomplete: "off" };
-    if (type.value === "number") return h("input", { ...common, type: "number", step: "any", required: true, value });
-    if (type.value === "object") return h("textarea", { ...common, class: "code", rows: 3, placeholder: '{ "rows": 3 }' }, value || "{}");
-    return h("input", { ...common, value, placeholder: "value" });
-  }
-
-  function addVariant(name = "") {
-    const row = { name: h("input", { value: name, placeholder: "name", "aria-label": "Variant name", maxlength: 128, required: true,
-      spellcheck: "false", autocomplete: "off", oninput: drawDefaults }) };
-    row.value = valueInput();
-    row.el = h("div", { class: "variant-row" }, row.name, row.value,
-      h("button", { type: "button", title: "Remove variant", "aria-label": "Remove variant", onclick: () => {
-        variantRows.splice(variantRows.indexOf(row), 1);
-        row.el.remove();
-        drawDefaults();
-      } }, "×"));
-    row.retype = () => { const next = valueInput(); row.value.replaceWith(next); row.value = next; };
-    variantRows.push(row);
-    variantList.append(row.el);
-    drawDefaults();
-    return row;
-  }
-
-  /**
-   * The default-variant options: every named variant, or none (callers get their code default). Keeps the admin's
-   * pick while it still exists; until they pick (or once it is gone) the first variant is the default.
-   */
-  let defaultChoice; // undefined until picked; "" is "none"
-  defaultVariant.addEventListener("change", () => { defaultChoice = defaultVariant.value; });
-  function drawDefaults() {
-    const names = [...new Set(variantRows.map((r) => r.name.value).filter(Boolean))];
-    const selected = defaultChoice === "" || names.includes(defaultChoice) ? defaultChoice : (names[0] ?? "");
-    defaultVariant.replaceChildren(
-      ...names.map((n) => h("option", { value: n, selected: n === selected }, n)),
-      h("option", { value: "", selected: selected === "" }, "(none: each app gets its code default)"));
-  }
-
-  /** The variants to send, `{ name: value }`; throws Error naming the variant whose value can't be read. */
-  function variantsValue() {
-    const variants = {};
-    for (const r of variantRows) {
-      const name = r.name.value;
-      if (Object.hasOwn(variants, name)) throw new Error(`Variant '${name}' is defined more than once.`);
-      if (type.value === "number") {
-        const n = Number(r.value.value);
-        if (r.value.value.trim() === "" || !Number.isFinite(n)) throw new Error(`Variant '${name}' needs a number.`);
-        variants[name] = n;
-      } else if (type.value === "object") {
-        try { variants[name] = JSON.parse(r.value.value); } catch (e) { throw new Error(`Variant '${name}' is not valid JSON: ${e.message}`); }
-      } else {
-        variants[name] = r.value.value;
-      }
-    }
-    return variants;
-  }
+  // Values are read as the selected type; until the admin picks a default variant, the first one is it.
+  const rows = variantRows(() => type.value);
 
   const variantsSection = h("fieldset", { class: "stack variants-editor" },
     h("legend", {}, "Variants"),
     h("p", { class: "small muted" }, "Named values the flag can serve. All share the flag's type, which can't change after creation."),
-    variantList,
-    h("div", {}, h("button", { type: "button", onclick: () => addVariant().name.focus() }, "Add variant")),
-    h("label", {}, "Default variant", defaultVariant),
+    rows.list,
+    h("div", {}, h("button", { type: "button", onclick: () => rows.add().name.focus() }, "Add variant")),
+    h("label", {}, "Default variant", rows.picker),
     h("p", { class: "small muted" }, "Served when no targeting rule matches."));
 
   function drawType() {
@@ -1056,7 +1183,7 @@ async function renderCreate() {
     enabledLabel.hidden = typed;
     variantsSection.hidden = !typed;
     variantsSection.disabled = !typed; // hidden rows must not block submitting a boolean flag
-    if (typed && variantRows.length === 0) addVariant("default");
+    if (typed && rows.count === 0) rows.add("default");
   }
 
   function check() {
@@ -1086,7 +1213,7 @@ async function renderCreate() {
       if (problem) { showNotice(problem); return; }
       const typed = type.value !== "boolean";
       let variants;
-      try { variants = typed ? variantsValue() : undefined; } catch (err) { showNotice(err.message); return; }
+      try { variants = typed ? rows.value() : undefined; } catch (err) { showNotice(err.message); return; }
       submit.disabled = true;
       try {
         const created = await api.createFlag({
@@ -1096,7 +1223,7 @@ async function renderCreate() {
           tags: parseTags(tags.value),
           // Object values are checked server-side (they must be JSON objects); its problem details show as the notice.
           variants: typed ? variants : undefined,
-          defaultVariant: typed ? defaultVariant.value || null : undefined,
+          defaultVariant: typed ? rows.defaultVariant() : undefined,
         });
         showNotice(`${created.key} created.`, "success");
         location.hash = flagHref(created.key);

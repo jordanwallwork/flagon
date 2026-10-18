@@ -32,6 +32,11 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// <c>disabled</c>; a disabled flag serves each app's own code default).</item>
     /// <item><c>PUT {path}/flags/{key}/targeting</c>: replaces the flag's flagd targeting rule from <c>{ targeting }</c>
     /// (<c>null</c> removes it); <c>DELETE {path}/flags/{key}/targeting</c> removes it. Archived flags are refused (<c>400</c>).</item>
+    /// <item><c>PUT {path}/flags/{key}/variants</c>: replaces a string, number or object flag's variants and default
+    /// variant from <c>{ variants, defaultVariant? }</c> (create-time rules; the flag's type must not change; the current
+    /// default variant can only be removed by choosing another, or <c>null</c>). Boolean and archived flags are refused (<c>400</c>).</item>
+    /// <item><c>PUT {path}/flags/{key}/default-variant</c>: sets the variant served by default from <c>{ variant }</c>
+    /// (one of the flag's variants, or <c>null</c> for none), for any type. Archived flags are refused (<c>400</c>).</item>
     /// <item><c>POST {path}/flags/{key}/evaluate</c>: previews the flag against <c>{ context?, document? }</c> and returns
     /// <c>{ value, variant, reason, errorCode?, errorMessage? }</c>, untyped: <c>value</c> is the served variant's JSON
     /// value of any type, or <c>null</c> when no variant is served (never <c>TYPE_MISMATCH</c>). Without <c>document</c> the stored flag is evaluated;
@@ -70,6 +75,8 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
         group.MapPut("/flags/{key}/state", ManagementEndpoints.SetStateAsync);
         group.MapPut("/flags/{key}/targeting", ManagementEndpoints.SetTargetingAsync);
         group.MapDelete("/flags/{key}/targeting", ManagementEndpoints.ClearTargetingAsync);
+        group.MapPut("/flags/{key}/variants", ManagementEndpoints.SetVariantsAsync);
+        group.MapPut("/flags/{key}/default-variant", ManagementEndpoints.SetDefaultVariantAsync);
         group.MapPost("/flags/{key}/evaluate", ManagementEndpoints.EvaluateAsync);
         group.MapPost("/flags/{key}/archive", ManagementEndpoints.ArchiveAsync);
         group.MapPost("/flags/{key}/restore", ManagementEndpoints.RestoreAsync);
