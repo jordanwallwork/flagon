@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace Flagon.Internal;
@@ -90,14 +91,10 @@ internal static class FlagEvaluationDetailsExtensions
             return true;
         }
 
-        // An integral value written with a fraction or exponent (10.0, 1e2) is still an integer.
-        if (value.TryGetDecimal(out var number) && decimal.Truncate(number) == number && number is >= int.MinValue and <= int.MaxValue)
-        {
-            result = (int)number;
-            return true;
-        }
-
-        return false;
+        // An integral value written with a fraction or exponent (10.0, 1e2) is still an integer. Integrality is decided on
+        // the exact decimal value (no decimal or double rounding, which would turn 1e-29 into 0): its canonical text is an
+        // integer literal only when it is integral and has at most 21 trailing zeros, far beyond Int32 range.
+        return int.TryParse(CanonicalJson.CanonicalNumber(value.GetRawText()), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out result);
     }
 
     private static bool TryGetDouble(JsonElement value, out double result)

@@ -286,6 +286,8 @@ public class TypedEvaluationTests
     [InlineData("-2147483648", int.MinValue)]
     [InlineData("10.0", 10)]
     [InlineData("1e2", 100)]
+    [InlineData("-0.0", 0)]
+    [InlineData("21474836.47e2", int.MaxValue)]
     public async Task GetInt_serves_an_integral_number_within_int32_range(string number, int expected)
     {
         await using var host = await HostAsync(("n", Static($$"""{ "v": {{number}} }""", "v")));
@@ -299,6 +301,10 @@ public class TypedEvaluationTests
     [InlineData("2147483648")]
     [InlineData("-2147483649")]
     [InlineData("1e20")]
+    [InlineData("1e-29")]
+    [InlineData("1e-400")]
+    [InlineData("1.00000000000000000000000000001")]
+    [InlineData("2147483647.0000000000000000000001")]
     public async Task GetInt_never_truncates_a_fractional_or_out_of_range_number(string number)
     {
         await using var host = await HostAsync(("n", Static($$"""{ "v": {{number}} }""", "v")));
