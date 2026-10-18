@@ -64,7 +64,7 @@ function parseTags(text) {
   return [...new Set(text.split(",").map((t) => t.trim()).filter(Boolean))];
 }
 
-/** True for a boolean flag, the only kind with the on/off toggle and percentage rollout slider. */
+/** True for a boolean flag, the only type with the on/off toggle and percentage rollout slider. */
 const isBoolean = (flag) => flag.type === "boolean";
 
 /** A variant value as text: JSON (strings quoted), pretty-printed over several lines for objects when `pretty`. */

@@ -21,7 +21,7 @@ The type of a flag's values (boolean, string, number or object), derived from it
 _Avoid_: Value type, kind
 
 **Caller's default**:
-The value the calling code supplies, returned whenever no variant is served (missing, archived, disabled, no default variant, or error).
+The value the calling code supplies, returned whenever no variant is served (missing, archived, disabled, no default variant, or error). In admin UI copy it is called the **code default** ("each app gets its code default"), the spec's wording for admins, who see it from the app's side; use "caller's default" in code and API docs.
 _Avoid_: Fallback, code value
 
 **Flag state**:

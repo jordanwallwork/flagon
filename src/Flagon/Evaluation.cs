@@ -202,7 +202,7 @@ public interface IFlagon
     /// Returns the object flag <paramref name="key"/>'s value deserialised as <typeparamref name="T"/> with
     /// <paramref name="options"/> (<see cref="JsonSerializer"/>'s defaults when null), or <paramref name="defaultValue"/>
     /// if it cannot be evaluated or deserialised. With <typeparamref name="T"/> <see cref="JsonElement"/> (inferred from a
-    /// <see cref="JsonElement"/> default, e.g. <c>GetObject("layout", fallbackJson)</c>) the served JSON object is
+    /// <see cref="JsonElement"/> default, e.g. <c>GetObject("layout", defaultLayout)</c>) the served JSON object is
     /// returned as is.
     /// </summary>
     T GetObject<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null);

@@ -9,7 +9,7 @@ namespace Flagon.Internal;
 /// </summary>
 internal readonly struct CallerDefault
 {
-    private enum Kind : byte
+    private enum Shape : byte
     {
         Boolean,
         Int,
@@ -18,34 +18,31 @@ internal readonly struct CallerDefault
         Object,
     }
 
-    private readonly Kind _kind;
+    private readonly Shape _shape;
     private readonly long _bits;
     private readonly object? _value;
     private readonly Type? _type;
     private readonly JsonSerializerOptions? _options;
 
-    private CallerDefault(Kind kind, long bits, object? value = null, Type? type = null, JsonSerializerOptions? options = null)
+    private CallerDefault(Shape shape, long bits, object? value = null, Type? type = null, JsonSerializerOptions? options = null)
     {
-        _kind = kind;
+        _shape = shape;
         _bits = bits;
         _value = value;
         _type = type;
         _options = options;
     }
 
-    /// <summary>True when this is a boolean default (auto-created as an on/off flag).</summary>
-    public bool IsBoolean => _kind == Kind.Boolean;
+    public static CallerDefault Of(bool value) => new(Shape.Boolean, value ? 1 : 0);
 
-    public static CallerDefault Of(bool value) => new(Kind.Boolean, value ? 1 : 0);
+    public static CallerDefault Of(int value) => new(Shape.Int, value);
 
-    public static CallerDefault Of(int value) => new(Kind.Int, value);
+    public static CallerDefault Of(double value) => new(Shape.Double, BitConverter.DoubleToInt64Bits(value));
 
-    public static CallerDefault Of(double value) => new(Kind.Double, BitConverter.DoubleToInt64Bits(value));
-
-    public static CallerDefault Of(string? value) => new(Kind.String, 0, value);
+    public static CallerDefault Of(string? value) => new(Shape.String, 0, value);
 
     /// <summary>An object default of declared type <typeparamref name="T"/>, serialised later with <paramref name="options"/>.</summary>
-    public static CallerDefault Of<T>(T value, JsonSerializerOptions? options) => new(Kind.Object, 0, value, typeof(T), options);
+    public static CallerDefault Of<T>(T value, JsonSerializerOptions? options) => new(Shape.Object, 0, value, typeof(T), options);
 
     /// <summary>
     /// True when <paramref name="other"/> is the same default: equal booleans and numbers, ordinal-equal strings, and
@@ -53,12 +50,12 @@ internal readonly struct CallerDefault
     /// options. Allocation-free.
     /// </summary>
     public bool Matches(in CallerDefault other) =>
-        _kind == other._kind
+        _shape == other._shape
         && _bits == other._bits
-        && _kind switch
+        && _shape switch
         {
-            Kind.String => string.Equals((string?)_value, (string?)other._value, StringComparison.Ordinal),
-            Kind.Object => _type == other._type && ReferenceEquals(_options, other._options) && Equals(_value, other._value),
+            Shape.String => string.Equals((string?)_value, (string?)other._value, StringComparison.Ordinal),
+            Shape.Object => _type == other._type && ReferenceEquals(_options, other._options) && Equals(_value, other._value),
             _ => true,
         };
 
@@ -70,12 +67,12 @@ internal readonly struct CallerDefault
     {
         try
         {
-            var json = _kind switch
+            var json = _shape switch
             {
-                Kind.Boolean => JsonSerializer.SerializeToElement(_bits != 0),
-                Kind.Int => JsonSerializer.SerializeToElement((int)_bits),
-                Kind.Double => JsonSerializer.SerializeToElement(BitConverter.Int64BitsToDouble(_bits)),
-                Kind.String => JsonSerializer.SerializeToElement((string?)_value),
+                Shape.Boolean => JsonSerializer.SerializeToElement(_bits != 0),
+                Shape.Int => JsonSerializer.SerializeToElement((int)_bits),
+                Shape.Double => JsonSerializer.SerializeToElement(BitConverter.Int64BitsToDouble(_bits)),
+                Shape.String => JsonSerializer.SerializeToElement((string?)_value),
                 _ => JsonSerializer.SerializeToElement(_value, _type!, _options),
             };
             return CanonicalJson.Canonicalize(json);
