@@ -7,8 +7,10 @@ namespace Flagon.OpenFeature;
 
 /// <summary>
 /// An OpenFeature provider backed by Flagon's in-process evaluation (<see cref="IFlagon"/>).
-/// Resolution reads Flagon's in-memory snapshot and performs no I/O. Only boolean flags are supported:
-/// string, integer, double and structure resolutions return <see cref="ErrorType.TypeMismatch"/> with the caller's default.
+/// Resolution reads Flagon's in-memory snapshot and performs no I/O. Every OpenFeature type resolves through Flagon's
+/// typed getters: a flag of another type returns the caller's default with <see cref="ErrorType.TypeMismatch"/>, and
+/// integer resolution accepts only an integral number within <see cref="int"/> range (as <c>IFlagon.GetInt</c>).
+/// Structures map to and from JSON objects.
 /// </summary>
 public sealed class FlagonProvider : FeatureProvider
 {
@@ -30,42 +32,46 @@ public sealed class FlagonProvider : FeatureProvider
     public override Metadata GetMetadata() => ProviderMetadata;
 
     /// <inheritdoc />
-    public override Task<ResolutionDetails<bool>> ResolveBooleanValueAsync(string flagKey, bool defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default)
+    public override Task<ResolutionDetails<bool>> ResolveBooleanValueAsync(string flagKey, bool defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        Resolved(_flagon.GetBooleanDetails(flagKey, defaultValue, ToFlagonContext(context)));
+
+    /// <inheritdoc />
+    public override Task<ResolutionDetails<string>> ResolveStringValueAsync(string flagKey, string defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        Resolved(_flagon.GetStringDetails(flagKey, defaultValue, ToFlagonContext(context)));
+
+    /// <inheritdoc />
+    public override Task<ResolutionDetails<int>> ResolveIntegerValueAsync(string flagKey, int defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        Resolved(_flagon.GetIntDetails(flagKey, defaultValue, ToFlagonContext(context)));
+
+    /// <inheritdoc />
+    public override Task<ResolutionDetails<double>> ResolveDoubleValueAsync(string flagKey, double defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        Resolved(_flagon.GetDoubleDetails(flagKey, defaultValue, ToFlagonContext(context)));
+
+    /// <inheritdoc />
+    public override Task<ResolutionDetails<Value>> ResolveStructureValueAsync(string flagKey, Value defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default)
     {
-        var details = _flagon.GetBooleanDetails(flagKey, defaultValue, ToFlagonContext(context));
-        return Task.FromResult(new ResolutionDetails<bool>(
+        ArgumentNullException.ThrowIfNull(defaultValue);
+
+        // The default goes to Flagon as JSON (for usage and auto-create); when no variant is served the caller gets their
+        // own Value back untouched, so nothing JSON cannot express (e.g. a DateTime) is lost.
+        var details = _flagon.GetObjectDetails(flagKey, StructureJson.ToJson(defaultValue), ToFlagonContext(context));
+        var value = details.Variant is not null && details.ErrorCode == ErrorCode.None
+            ? StructureJson.ToValue(details.Value)
+            : defaultValue;
+        return Resolved(details, value);
+    }
+
+    private static Task<ResolutionDetails<T>> Resolved<T>(FlagEvaluationDetails<T> details) => Resolved(details, details.Value);
+
+    private static Task<ResolutionDetails<TValue>> Resolved<T, TValue>(FlagEvaluationDetails<T> details, TValue value) =>
+        Task.FromResult(new ResolutionDetails<TValue>(
             details.FlagKey,
-            details.Value,
+            value,
             ToErrorType(details.ErrorCode),
             // OpenFeature reason codes are Flagon's shared wire names; Flagon-only reasons (ARCHIVED) are custom reasons.
             details.Reason.ToWireName(),
             details.Variant,
             details.ErrorMessage));
-    }
-
-    /// <inheritdoc />
-    public override Task<ResolutionDetails<string>> ResolveStringValueAsync(string flagKey, string defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default) =>
-        Unsupported(flagKey, defaultValue, "string");
-
-    /// <inheritdoc />
-    public override Task<ResolutionDetails<int>> ResolveIntegerValueAsync(string flagKey, int defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default) =>
-        Unsupported(flagKey, defaultValue, "integer");
-
-    /// <inheritdoc />
-    public override Task<ResolutionDetails<double>> ResolveDoubleValueAsync(string flagKey, double defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default) =>
-        Unsupported(flagKey, defaultValue, "double");
-
-    /// <inheritdoc />
-    public override Task<ResolutionDetails<Value>> ResolveStructureValueAsync(string flagKey, Value defaultValue, OfEvaluationContext? context = null, CancellationToken cancellationToken = default) =>
-        Unsupported(flagKey, defaultValue, "structure");
-
-    private static Task<ResolutionDetails<T>> Unsupported<T>(string flagKey, T defaultValue, string type) =>
-        Task.FromResult(new ResolutionDetails<T>(
-            flagKey,
-            defaultValue,
-            ErrorType.TypeMismatch,
-            Reason.Error,
-            errorMessage: $"Flagon supports only boolean flags; '{flagKey}' cannot be resolved as a {type}."));
 
     private static Flagon.EvaluationContext? ToFlagonContext(OfEvaluationContext? context)
     {

@@ -19,9 +19,10 @@ internal static class OfrepEndpoints
             return Json(Failure(key, ErrorCode.InvalidContext.ToWireName(), contextError), StatusCodes.Status400BadRequest);
         }
 
-        // OFREP has no caller default: "false" never reaches the client because every outcome that would return the
-        // caller's default (missing, disabled, error) is reported without a value.
-        var details = flagon.GetRemoteBooleanDetails(key, context);
+        // OFREP has no caller default or requested type: the served variant's JSON goes back as is (client SDKs
+        // type-check), and every outcome that would return the caller's default (missing, disabled, no variant, error) is
+        // reported without a value.
+        var details = flagon.GetRemoteDetails(key, context);
         return details.ErrorCode switch
         {
             ErrorCode.None => Json(Success(details), StatusCodes.Status200OK),
@@ -38,7 +39,7 @@ internal static class OfrepEndpoints
             return Json(new JsonObject { ["errorCode"] = ErrorCode.InvalidContext.ToWireName(), ["errorDetails"] = contextError }, StatusCodes.Status400BadRequest);
         }
 
-        var evaluation = flagon.GetAllRemoteBooleanDetails(context);
+        var evaluation = flagon.GetAllRemoteDetails(context);
 
         // The ETag is the snapshot version: any flag change (in this app or, after a refresh, another app) moves it.
         // The context is not part of the ETag: an OFREP client caches the response for the context it sends, and a client
@@ -102,7 +103,7 @@ internal static class OfrepEndpoints
         }
     }
 
-    private static JsonObject Success(FlagEvaluationDetails<bool> details)
+    private static JsonObject Success(FlagEvaluationDetails<JsonElement> details)
     {
         var result = new JsonObject
         {
@@ -116,7 +117,7 @@ internal static class OfrepEndpoints
         if (details.Variant is not null)
         {
             result["variant"] = details.Variant;
-            result["value"] = details.Value;
+            result["value"] = JsonNode.Parse(details.Value.GetRawText());
         }
 
         return result;
