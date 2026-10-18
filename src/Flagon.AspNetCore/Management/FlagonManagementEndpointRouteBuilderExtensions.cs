@@ -27,7 +27,9 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// (at least one variant; names non-empty, at most 128 characters and unique; values all of one type, no arrays or
     /// <c>null</c>; <c>defaultVariant</c> one of them or <c>null</c>; <c>enabled</c> must not be <c>true</c>).</item>
     /// <item><c>PATCH {path}/flags/{key}</c>: updates <c>{ description?, tags? }</c> (omitted fields are unchanged).</item>
-    /// <item><c>PUT {path}/flags/{key}/enabled</c>: toggles the flag from <c>{ enabled }</c>.</item>
+    /// <item><c>PUT {path}/flags/{key}/enabled</c>: toggles a boolean flag from <c>{ enabled }</c> (400 for other types).</item>
+    /// <item><c>PUT {path}/flags/{key}/state</c>: switches a flag of any type from <c>{ state }</c> (<c>enabled</c> or
+    /// <c>disabled</c>; a disabled flag serves each app's own code default).</item>
     /// <item><c>PUT {path}/flags/{key}/targeting</c>: replaces the flag's flagd targeting rule from <c>{ targeting }</c>
     /// (<c>null</c> removes it); <c>DELETE {path}/flags/{key}/targeting</c> removes it. Archived flags are refused (<c>400</c>).</item>
     /// <item><c>POST {path}/flags/{key}/evaluate</c>: previews the flag against <c>{ context?, document? }</c> and returns
@@ -65,6 +67,7 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
         group.MapGet("/flags/{key}", ManagementEndpoints.GetAsync);
         group.MapPatch("/flags/{key}", ManagementEndpoints.UpdateMetadataAsync);
         group.MapPut("/flags/{key}/enabled", ManagementEndpoints.SetEnabledAsync);
+        group.MapPut("/flags/{key}/state", ManagementEndpoints.SetStateAsync);
         group.MapPut("/flags/{key}/targeting", ManagementEndpoints.SetTargetingAsync);
         group.MapDelete("/flags/{key}/targeting", ManagementEndpoints.ClearTargetingAsync);
         group.MapPost("/flags/{key}/evaluate", ManagementEndpoints.EvaluateAsync);
