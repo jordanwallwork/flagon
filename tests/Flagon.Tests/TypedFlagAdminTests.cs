@@ -64,6 +64,20 @@ public class TypedFlagAdminTests
     }
 
     [Fact]
+    public async Task A_boolean_flag_may_be_created_with_no_default_variant_and_serves_the_callers_default()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest(
+            "beta", Variants: Variants("""{ "on": true, "off": false }"""), DefaultVariant: null));
+
+        Assert.Equal(FlagType.Boolean, created.Document.Type);
+        Assert.Null(created.Document.DefaultVariant);
+        Assert.Equal(new FlagEvaluationDetails<bool>("beta", true, null, EvaluationReason.Default), host.Flagon.GetBooleanDetails("beta", true));
+        Assert.Equal(new FlagEvaluationDetails<bool>("beta", false, null, EvaluationReason.Default), host.Flagon.GetBooleanDetails("beta", false));
+    }
+
+    [Fact]
     public async Task Creating_a_typed_flag_is_audited_with_the_created_document()
     {
         await using var host = await FlagonTestHost.StartAsync();
@@ -90,7 +104,6 @@ public class TypedFlagAdminTests
     [InlineData("""{ "on": false, "off": true }""", "on", "\"on\": true")]
     [InlineData("""{ "on": true }""", "on", "\"on\": true")]
     [InlineData("""{ "on": true, "off": false, "maybe": true }""", "on", "\"on\": true")]
-    [InlineData("""{ "on": true, "off": false }""", null, "default variant")]
     public async Task Invalid_variants_are_rejected_and_nothing_is_written(string variants, string? defaultVariant, string message)
     {
         await using var host = await FlagonTestHost.StartAsync();

@@ -83,6 +83,7 @@ public class TypedDefineTests
             .Define("size", new Dictionary<string, string> { ["small"] = "S", ["medium"] = "M", ["large"] = "L" }, "medium", "T-shirt size")
             .Define("limit", new Dictionary<string, int> { ["low"] = 10, ["high"] = 100 }, defaultVariant: null)
             .Define("mode", new Dictionary<string, bool> { ["on"] = true, ["off"] = false }, "off")
+            .Define("unset", new Dictionary<string, bool> { ["on"] = true, ["off"] = false }, defaultVariant: null)
             .Define("layouts", new Dictionary<string, JsonElement>
             {
                 ["one"] = JsonSerializer.SerializeToElement(new { columns = 1 }),
@@ -104,6 +105,11 @@ public class TypedDefineTests
         Assert.Equal(new FlagEvaluationDetails<bool>("mode", false, "off", EvaluationReason.Static),
             host.Flagon.GetBooleanDetails("mode", true));
         Assert.Equal(2, host.Flagon.GetObject("layouts", default(JsonElement)).GetProperty("columns").GetInt32());
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("unset", true, null, EvaluationReason.Default), host.Flagon.GetBooleanDetails("unset", true));
+        var unset = (await host.Admin.GetAsync("unset"))!.Document;
+        Assert.Equal(FlagType.Boolean, unset.Type);
+        Assert.Null(unset.DefaultVariant);
     }
 
     [Fact]
@@ -125,7 +131,6 @@ public class TypedDefineTests
         Assert.Throws<FlagValidationException>(() => options.Define("null-string", new Dictionary<string, string> { ["x"] = null! }, null));
         Assert.Throws<FlagValidationException>(() => options.Define("yes-no", new Dictionary<string, bool> { ["yes"] = true, ["no"] = false }, "no"));
         Assert.Throws<FlagValidationException>(() => options.Define("inverted", new Dictionary<string, bool> { ["on"] = false, ["off"] = true }, "on"));
-        Assert.Throws<FlagValidationException>(() => options.Define("no-default", new Dictionary<string, bool> { ["on"] = true, ["off"] = false }, null));
         Assert.Throws<ArgumentException>(() => options.Define("unsupported", new Dictionary<string, long> { ["x"] = 1 }, null));
         Assert.Throws<FlagValidationException>(() => options.Define("inf", double.PositiveInfinity));
 

@@ -113,7 +113,7 @@ public sealed partial class FlagonOptions
     /// default variant and targeting, and only has its metadata synced.
     /// </summary>
     /// <typeparam name="T">
-    /// The variant value type: <see cref="bool"/>, <see cref="string"/>, <see cref="int"/>, <see cref="double"/> or
+    /// The flag type of the variants: <see cref="bool"/>, <see cref="string"/>, <see cref="int"/>, <see cref="double"/> or
     /// <see cref="JsonElement"/> (for objects).
     /// </typeparam>
     /// <param name="key">The flag key (see <see cref="FlagKey"/>).</param>
@@ -128,7 +128,7 @@ public sealed partial class FlagonOptions
     /// The key, a tag or the targeting JSON is invalid; there are no variants; a variant name is empty, longer than 128
     /// characters or repeated; a value is null, a non-finite number, an array, or of a different type from the others;
     /// or <paramref name="defaultVariant"/> is not one of the variants. Boolean variants must be exactly
-    /// <c>{ "on": true, "off": false }</c>, with <c>on</c> or <c>off</c> as <paramref name="defaultVariant"/>.
+    /// <c>{ "on": true, "off": false }</c>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// <typeparamref name="T"/> is not a supported variant type, or the key has already been defined.

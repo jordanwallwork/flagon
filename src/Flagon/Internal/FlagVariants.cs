@@ -42,8 +42,8 @@ internal static class FlagVariants
     /// <exception cref="FlagValidationException">
     /// There are no variants; a name is empty, longer than <see cref="MaxNameLength"/> or repeated (ordinal); a value is
     /// an array or <c>null</c>; the values are of more than one flag type; or <paramref name="defaultVariant"/> is not
-    /// one of the variants; or the values are booleans other than exactly <c>{ "on": true, "off": false }</c> with
-    /// <c>on</c> or <c>off</c> as the default variant; or they are not of <paramref name="requiredType"/>.
+    /// one of the variants; or the values are booleans other than exactly <c>{ "on": true, "off": false }</c>; or they
+    /// are not of <paramref name="requiredType"/>.
     /// </exception>
     /// <param name="key">The flag key, for messages.</param>
     /// <param name="variants">The variants to validate.</param>
@@ -102,17 +102,17 @@ internal static class FlagVariants
 
         if (type == FlagType.Boolean)
         {
-            ValidateBoolean(key, copy, defaultVariant);
+            ValidateBoolean(key, copy);
         }
 
         return (copy.ToFrozenDictionary(StringComparer.Ordinal), type.Value);
     }
 
     /// <summary>
-    /// Boolean flags have fixed variants: exactly <c>{ "on": true, "off": false }</c>, with <c>on</c> or <c>off</c> as the
-    /// default variant (so the on/off toggle always describes them).
+    /// Boolean flags have fixed variants: exactly <c>{ "on": true, "off": false }</c>. Like any flag, the default variant
+    /// may be null (none), in which case the caller's default is served.
     /// </summary>
-    private static void ValidateBoolean(string key, Dictionary<string, JsonElement> variants, string? defaultVariant)
+    private static void ValidateBoolean(string key, Dictionary<string, JsonElement> variants)
     {
         if (variants.Count != 2
             || !variants.TryGetValue(FlagDocument.OnVariant, out var on) || on.ValueKind != JsonValueKind.True
@@ -120,12 +120,6 @@ internal static class FlagVariants
         {
             throw new FlagValidationException(
                 $"Flag '{key}' is a boolean flag; its variants must be exactly {{ \"on\": true, \"off\": false }}.");
-        }
-
-        if (defaultVariant is null)
-        {
-            throw new FlagValidationException(
-                $"Flag '{key}' is a boolean flag; its default variant must be 'on' or 'off'.");
         }
     }
 
