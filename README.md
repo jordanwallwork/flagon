@@ -147,7 +147,8 @@ logged once per snapshot version.
 
 **Validated on write.** `IFlagonAdmin`, the management API and `Define` compile the rule with the same engine before
 anything is stored. A rule that does not compile throws `FlagTargetingException` (a `FlagValidationException`) naming
-the failing operator and a JSON Pointer to it; the management API answers `400` problem details titled
+the failing operator and a JSON Pointer to it. `Define` checks only the JSON when called; its rule is compiled when the
+host starts, and one that does not compile fails startup with `FlagTargetingException`. The management API answers `400` problem details titled
 `Invalid targeting rule` with `key`, `operator` and `path` (e.g. `/if/0`) extensions.
 
 **`$ref` and `$evaluators`.** In flagd, `$evaluators` belong to a flag-set file and `{"$ref": "name"}` is replaced with
