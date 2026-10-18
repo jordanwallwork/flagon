@@ -92,6 +92,13 @@ internal static class ManagementEndpoints
         return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
 
+    public static async Task<IResult> ClearTargetingAsync(string key, HttpContext http, IFlagonAdmin admin)
+    {
+        var version = await VersionFromRequestAsync(http).ConfigureAwait(false);
+        var record = await admin.SetTargetingAsync(key, null, version, http.RequestAborted).ConfigureAwait(false);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
+    }
+
     public static async Task<IResult> ArchiveAsync(string key, HttpContext http, IFlagonAdmin admin)
     {
         var version = await VersionFromRequestAsync(http).ConfigureAwait(false);

@@ -16,12 +16,14 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// <list type="bullet">
     /// <item><c>GET {path}/flags</c>: lists flags; optional filters <c>q</c> (key/description contains, case-insensitive),
     /// <c>tag</c>, <c>source</c> (<c>manual</c>|<c>auto</c>|<c>code</c>), <c>enabled</c> and <c>archived</c> (<c>true</c>|<c>false</c>).</item>
-    /// <item><c>GET {path}/flags/{key}</c>: one flag (with an <c>ETag</c> of its version).</item>
+    /// <item><c>GET {path}/flags/{key}</c>: one flag (with an <c>ETag</c> of its version). Flags carry their raw
+    /// <c>targeting</c> (or <c>null</c>) and a <c>rollout</c> summary, <c>{ percentage }</c>, when the rule is exactly
+    /// <c>{"fractional": [["on", N], ["off", 100 - N]]}</c> with default bucketing (otherwise <c>null</c>).</item>
     /// <item><c>POST {path}/flags</c>: creates a flag from <c>{ key, enabled?, description?, tags?, targeting? }</c>.</item>
     /// <item><c>PATCH {path}/flags/{key}</c>: updates <c>{ description?, tags? }</c> (omitted fields are unchanged).</item>
     /// <item><c>PUT {path}/flags/{key}/enabled</c>: toggles the flag from <c>{ enabled }</c>.</item>
     /// <item><c>PUT {path}/flags/{key}/targeting</c>: replaces the flag's flagd targeting rule from <c>{ targeting }</c>
-    /// (<c>null</c> removes it).</item>
+    /// (<c>null</c> removes it); <c>DELETE {path}/flags/{key}/targeting</c> removes it. Archived flags are refused (<c>400</c>).</item>
     /// <item><c>POST {path}/flags/{key}/archive</c>, <c>POST {path}/flags/{key}/restore</c>, <c>DELETE {path}/flags/{key}</c> (purge).</item>
     /// <item><c>GET {path}/flags/{key}/audit</c>: audit history, newest first.</item>
     /// </list>
@@ -53,6 +55,7 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
         group.MapPatch("/flags/{key}", ManagementEndpoints.UpdateMetadataAsync);
         group.MapPut("/flags/{key}/enabled", ManagementEndpoints.SetEnabledAsync);
         group.MapPut("/flags/{key}/targeting", ManagementEndpoints.SetTargetingAsync);
+        group.MapDelete("/flags/{key}/targeting", ManagementEndpoints.ClearTargetingAsync);
         group.MapPost("/flags/{key}/archive", ManagementEndpoints.ArchiveAsync);
         group.MapPost("/flags/{key}/restore", ManagementEndpoints.RestoreAsync);
         group.MapDelete("/flags/{key}", ManagementEndpoints.PurgeAsync);

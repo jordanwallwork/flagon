@@ -127,6 +127,23 @@ public sealed class TracingTests : IDisposable
     }
 
     [Fact]
+    public async Task Setting_targeting_is_traced_and_a_rejected_rule_marks_the_activity_as_an_error()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("targeted"));
+        var rule = System.Text.Json.JsonDocument.Parse("""{ "if": [ true, "on", null ] }""").RootElement.Clone();
+        var invalid = System.Text.Json.JsonDocument.Parse("""{ "nope": [] }""").RootElement.Clone();
+
+        await host.Admin.SetTargetingAsync("targeted", rule, flag.Version);
+        await Assert.ThrowsAsync<FlagTargetingException>(() => host.Admin.SetTargetingAsync("targeted", invalid, flag.Version + 1));
+
+        var activities = Named("flagon.set_targeting");
+        Assert.Equal(2, activities.Length);
+        Assert.All(activities, a => Assert.Equal("targeted", a.GetTagItem("feature_flag.key")));
+        Assert.Equal([ActivityStatusCode.Unset, ActivityStatusCode.Error], activities.Select(a => a.Status));
+    }
+
+    [Fact]
     public async Task Seeding_flags_defined_in_code_is_traced()
     {
         await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.Define("seeded", true));

@@ -130,7 +130,10 @@ flags.IsEnabled("new-checkout", context: new EvaluationContext("user-123", new D
 }));
 ```
 
-The management API takes the rule on `POST /flags` (`targeting`) and `PUT /flags/{key}/targeting` (`{ "targeting": ... }`).
+The management API takes the rule on `POST /flags` (`targeting`) and `PUT /flags/{key}/targeting` (`{ "targeting": ... }`),
+and `DELETE /flags/{key}/targeting` removes it; an archived flag's targeting can't be changed until it is restored. Flags
+it returns carry the raw `targeting` and, when the rule is exactly `{"fractional": [["on", N], ["off", 100 - N]]}` (default
+bucketing, integer N), a `rollout: { "percentage": N }` summary; any other rule has `rollout: null`.
 OFREP and the OpenFeature provider pass the caller's context through, so all three agree with in-process `IFlagon`.
 
 | The rule... | Result |
@@ -225,7 +228,7 @@ app.MapHealthChecks("/health");
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
 - **Management API** (`MapFlagonApi(path)`, default `/flagon/api`): map it for your own tooling, with or without the UI
-  (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT /flags/{key}/targeting`,
+  (`GET/POST /flags`, `GET/PATCH/DELETE /flags/{key}`, `PUT /flags/{key}/enabled`, `PUT/DELETE /flags/{key}/targeting`,
   `POST /flags/{key}/archive|restore`, `GET /flags/{key}/audit`). Writes need the flag's current version (`If-Match` header or `version` field); a stale
   version gets `409 Conflict`.
 - **Safe by default:** the UI and the management API answer `404` outside the `Development` environment unless you add
