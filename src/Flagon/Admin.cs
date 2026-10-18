@@ -3,22 +3,42 @@ using Flagon.Storage;
 
 namespace Flagon;
 
-/// <summary>A request to create a boolean flag.</summary>
+/// <summary>
+/// A request to create a flag: a boolean flag from <paramref name="Enabled"/>, or, when <paramref name="Variants"/> is
+/// given, a flag of the variants' type (string, number or object) serving <paramref name="DefaultVariant"/>.
+/// </summary>
 /// <param name="Key">The flag key; must satisfy <see cref="FlagKey.Pattern"/>.</param>
-/// <param name="Enabled">Initial value served by the flag.</param>
+/// <param name="Enabled">
+/// Initial value served by a boolean flag (<c>{ "on": true, "off": false }</c>). Must be false when
+/// <paramref name="Variants"/> is given.
+/// </param>
 /// <param name="Description">Optional description.</param>
 /// <param name="Tags">Optional tags (no commas).</param>
 /// <param name="Targeting">
 /// Optional flagd targeting rule (JsonLogic plus flagd's operators). A rule that matches serves the variant it names
-/// (<c>"on"</c> or <c>"off"</c>); otherwise the flag serves <paramref name="Enabled"/>. Validated with Flagon's
+/// (<c>"on"</c> or <c>"off"</c> for a boolean flag); otherwise the flag serves <paramref name="Enabled"/> (or
+/// <paramref name="DefaultVariant"/>). Validated with Flagon's
 /// targeting engine before anything is written; <c>$ref</c> is not supported (inline the evaluator instead).
+/// </param>
+/// <param name="Variants">
+/// Optional named variants (name to JSON value): at least one; names non-empty, at most 128 characters and unique
+/// (ordinal); values all of one flag type (boolean, string, number or object; arrays and <c>null</c> are rejected).
+/// The flag's type is derived from them and never changes. Boolean variants must be exactly
+/// <c>{ "on": true, "off": false }</c>, with <paramref name="DefaultVariant"/> <c>on</c> or <c>off</c>. Null creates a
+/// boolean flag from <paramref name="Enabled"/>.
+/// </param>
+/// <param name="DefaultVariant">
+/// The variant served when no targeting rule applies: one of <paramref name="Variants"/>, or null for no default variant
+/// (callers then get their own default). Only used with <paramref name="Variants"/>.
 /// </param>
 public sealed record CreateFlagRequest(
     string Key,
     bool Enabled = false,
     string? Description = null,
     IReadOnlyList<string>? Tags = null,
-    JsonElement? Targeting = null);
+    JsonElement? Targeting = null,
+    IReadOnlyDictionary<string, JsonElement>? Variants = null,
+    string? DefaultVariant = null);
 
 /// <summary>
 /// A request to change a flag's descriptive metadata. Null fields are left unchanged; an empty description clears it
@@ -41,16 +61,33 @@ public interface IFlagonAdmin
     /// <summary>Gets a flag, or null if none exists with <paramref name="key"/>.</summary>
     Task<FlagRecord?> GetAsync(string key, CancellationToken cancellationToken = default);
 
-    /// <summary>Creates a boolean flag with source <see cref="FlagSource.Manual"/>.</summary>
+    /// <summary>
+    /// Creates a flag with source <see cref="FlagSource.Manual"/>: a boolean flag, or one with the request's variants
+    /// (see <see cref="CreateFlagRequest"/>).
+    /// </summary>
     /// <exception cref="FlagValidationException">The request is invalid.</exception>
     /// <exception cref="FlagTargetingException">The request's targeting rule does not compile.</exception>
     /// <exception cref="FlagAlreadyExistsException">A flag with the key already exists.</exception>
     Task<FlagRecord> CreateAsync(CreateFlagRequest request, CancellationToken cancellationToken = default);
 
-    /// <summary>Toggles a boolean flag on or off (switches its default variant).</summary>
+    /// <summary>
+    /// Toggles a boolean flag on or off (switches its default variant). For any type's kill switch, use
+    /// <see cref="SetStateAsync"/>.
+    /// </summary>
+    /// <exception cref="FlagValidationException">The flag is not a boolean flag; the flag is unchanged.</exception>
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Switches a flag of any type between <see cref="FlagState.Enabled"/> and <see cref="FlagState.Disabled"/>. A
+    /// disabled flag serves each caller's own code default with reason <see cref="EvaluationReason.Disabled"/>; its
+    /// variants, default variant and targeting are kept for when it is enabled again.
+    /// </summary>
+    /// <exception cref="FlagValidationException">The flag is archived (restore it first); the flag is unchanged.</exception>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    Task<FlagRecord> SetStateAsync(string key, FlagState state, long expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Replaces a flag's flagd targeting rule, or removes it when <paramref name="targeting"/> is null (or JSON
@@ -68,6 +105,41 @@ public interface IFlagonAdmin
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces the variants and default variant of a string, number or object flag in one write. Boolean flags keep
+    /// their fixed <c>on</c>/<c>off</c> variants (use <see cref="SetEnabledAsync"/>). The variants follow the create-time
+    /// rules (see <see cref="CreateFlagRequest.Variants"/>) and must keep the flag's type; the current default variant
+    /// can only be removed by choosing another (or none) in the same edit, and a bucket of a canonical percentage split
+    /// (<c>{"fractional": [[v1, w1], …]}</c>, see the management API's <c>rollout</c>) can't be removed until the split
+    /// changes. Targeting and metadata are untouched, and custom targeting rules are not checked for the names removed.
+    /// </summary>
+    /// <param name="key">The flag key.</param>
+    /// <param name="variants">The complete new set of variants (name to JSON value).</param>
+    /// <param name="defaultVariant">The variant served when no targeting rule applies, or null for none.</param>
+    /// <param name="expectedVersion">The version the caller last saw.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <exception cref="FlagValidationException">
+    /// The variants are invalid, change the flag's type, or remove its default variant or a bucket of its percentage
+    /// split; the flag is boolean; or it is archived. The flag is unchanged.
+    /// </exception>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    Task<FlagRecord> SetVariantsAsync(
+        string key, IReadOnlyDictionary<string, JsonElement> variants, string? defaultVariant, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Changes which variant a flag of any type serves when no targeting rule applies, or sets none when
+    /// <paramref name="variant"/> is null (callers then get their own default). A boolean flag takes only <c>on</c> or
+    /// <c>off</c> (not null), so this is the same as <see cref="SetEnabledAsync"/>.
+    /// </summary>
+    /// <exception cref="FlagValidationException">
+    /// The variant is not one of the flag's, the flag is boolean and the variant is not <c>on</c> or <c>off</c>, or the
+    /// flag is archived; the flag is unchanged.
+    /// </exception>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    Task<FlagRecord> SetDefaultVariantAsync(string key, string? variant, long expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The audit history of <paramref name="key"/>, newest first (empty if none). Entries survive purges.

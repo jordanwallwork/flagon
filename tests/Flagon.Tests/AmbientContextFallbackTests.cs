@@ -29,7 +29,7 @@ public class AmbientContextFallbackTests
         await host.Admin.CreateAsync(new CreateFlagRequest("new-checkout", Enabled: true));
 
         host.Flagon.IsEnabled("new-checkout", context: new EvaluationContext("bob"));
-        host.Flagon.GetAllBooleanDetails(new EvaluationContext("bob"));
+        host.Flagon.GetAllDetails(new EvaluationContext("bob"));
 
         Assert.Equal(0, accessor.Reads);
     }
@@ -40,7 +40,7 @@ public class AmbientContextFallbackTests
         var accessor = new RecordingEvaluationContextAccessor(new EvaluationContext("alice"));
         await using var host = await StartAsync(accessor);
 
-        host.Flagon.GetAllBooleanDetails();
+        host.Flagon.GetAllDetails();
 
         Assert.Equal(1, accessor.Reads);
     }

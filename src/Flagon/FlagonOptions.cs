@@ -66,8 +66,9 @@ public sealed partial class FlagonOptions
 
     /// <summary>
     /// When true (the default), evaluating a key that does not exist creates it in the background (off the evaluation path)
-    /// as an enabled boolean flag serving the caller's default, with source <see cref="FlagSource.Auto"/>, so it appears for
-    /// management without changing behaviour. Archived keys are never re-created. Skipped when the store is read-only.
+    /// as an enabled flag of the getter's type serving the caller's default (on/off for booleans, a single <c>default</c>
+    /// variant otherwise), with source <see cref="FlagSource.Auto"/>, so it appears for management without changing
+    /// behaviour. Archived keys are never re-created. Skipped when the store is read-only.
     /// </summary>
     public bool AutoCreate { get; set; } = true;
 

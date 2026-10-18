@@ -57,6 +57,21 @@ public class OpenFeatureProviderTests
     }
 
     [Fact]
+    public async Task A_flag_disabled_through_flagon_resolves_to_the_callers_default_with_reason_disabled()
+    {
+        await using var host = await StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("new-checkout", Enabled: true));
+        await host.Admin.SetStateAsync("new-checkout", FlagState.Disabled, flag.Version);
+
+        var details = await Client(host).GetBooleanDetailsAsync("new-checkout", false);
+
+        Assert.False(details.Value);
+        Assert.Null(details.Variant);
+        Assert.Equal(Reason.Disabled, details.Reason);
+        Assert.Equal(ErrorType.None, details.ErrorType);
+    }
+
+    [Fact]
     public async Task A_toggle_made_through_flagon_is_seen_by_the_OpenFeature_client()
     {
         await using var host = await StartAsync();
@@ -160,21 +175,21 @@ public class OpenFeatureProviderTests
     }
 
     [Fact]
-    public async Task Non_boolean_resolution_returns_the_callers_default_with_OpenFeatures_type_mismatch()
+    public async Task Non_boolean_resolution_of_a_boolean_flag_returns_the_callers_default_with_OpenFeatures_type_mismatch()
     {
         await using var host = await StartAsync();
         await host.Admin.CreateAsync(new CreateFlagRequest("new-checkout", Enabled: true));
         var client = Client(host);
 
-        var asString = await client.GetStringDetailsAsync("new-checkout", "fallback");
+        var asString = await client.GetStringDetailsAsync("new-checkout", "caller-default");
         var asInteger = await client.GetIntegerDetailsAsync("new-checkout", 7);
         var asDouble = await client.GetDoubleDetailsAsync("new-checkout", 1.5);
-        var asObject = await client.GetObjectDetailsAsync("new-checkout", new Value("fallback"));
+        var asObject = await client.GetObjectDetailsAsync("new-checkout", new Value("caller-default"));
 
-        Assert.Equal("fallback", asString.Value);
+        Assert.Equal("caller-default", asString.Value);
         Assert.Equal(7, asInteger.Value);
         Assert.Equal(1.5, asDouble.Value);
-        Assert.Equal("fallback", asObject.Value.AsString);
+        Assert.Equal("caller-default", asObject.Value.AsString);
         Assert.All(
             [asString.ErrorType, asInteger.ErrorType, asDouble.ErrorType, asObject.ErrorType],
             e => Assert.Equal(ErrorType.TypeMismatch, e));

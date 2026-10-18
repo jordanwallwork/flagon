@@ -12,7 +12,7 @@ internal sealed record FlagdSuite(string Name, IReadOnlyList<string> FlagFiles, 
 
 /// <summary>
 /// The vendored flagd-testbed fixtures, interpreted into runnable cases. See <c>testbed/PROVENANCE.md</c> for what is
-/// vendored and for the boolean-subset rules applied here.
+/// vendored and for how cases are interpreted.
 /// </summary>
 internal static partial class FlagdTestbed
 {
@@ -36,24 +36,24 @@ internal static partial class FlagdTestbed
 
     private static readonly Lazy<Catalogue> Loaded = new(Load);
 
-    /// <summary>Cases in the boolean subset, in file order.</summary>
+    /// <summary>Runnable cases, in file order.</summary>
     public static IReadOnlyList<RunnableCase> Runnable => Loaded.Value.Runnable;
 
-    /// <summary>Cases outside the boolean subset, with why.</summary>
+    /// <summary>Cases that are not run, with why.</summary>
     public static IReadOnlyList<(GherkinCase Case, string Reason)> Excluded => Loaded.Value.Excluded;
 
     public static RunnableCase Get(string id) => Loaded.Value.ById[id];
 
     /// <summary>
-    /// A fresh InMemory store holding the suite's flags as Flagon stores them: <c>$ref</c>s resolved and each flag
-    /// projected to booleans (see <see cref="FixtureFlag"/>). Flags Flagon cannot represent are left out.
+    /// A fresh InMemory store holding the suite's flags as Flagon stores them, <c>$ref</c>s resolved (see
+    /// <see cref="FixtureFlag"/>). Flags Flagon cannot represent are left out.
     /// </summary>
     public static InMemoryFlagStore SeedStore(FlagdSuite suite)
     {
         var store = new InMemoryFlagStore();
         foreach (var flag in Loaded.Value.Flags[suite.Name].Values)
         {
-            if (flag.Projected is { } document)
+            if (flag.Document is { } document)
             {
                 store.TryCreateAsync(flag.Key, document).GetAwaiter().GetResult();
             }
@@ -185,14 +185,9 @@ internal static partial class FlagdTestbed
             return (null, $"flag '{flagKey}' is not in the suite's flag files (FLAG_NOT_FOUND is type-agnostic and covered by Flagon's own tests)");
         }
 
-        if (!flag.IsBoolean && !flag.HasTargeting)
-        {
-            return (null, $"{flagType} flag without targeting: resolves a typed value with no rule, outside the boolean subset");
-        }
-
         var context = new EvaluationContext(targetingKey, attributes);
         var expectation = flag.Expect(flagType, callerDefault, expectedValue, expectedReason, expectedError);
-        return (new RunnableCase(c, suite, flagKey, expectation.CallerDefault, context, expectation, flag.UnstorableReason), null);
+        return (new RunnableCase(c, suite, flagKey, flagType, callerDefault, context, expectation, flag.UnstorableReason), null);
     }
 
     private static object? TypedValue(string type, string value) => type switch
@@ -254,19 +249,16 @@ internal static partial class FlagdTestbed
 }
 
 /// <summary>
-/// A fixture flag as the testbed defines it, plus the boolean projection Flagon stores. The projection keeps the
-/// state, variant names, <c>defaultVariant</c> and (with <c>$ref</c>s resolved) the targeting rule, so variant
-/// selection is untouched; it only maps values to booleans so <see cref="IFlagon"/> can serve them. A boolean flag
-/// keeps its values; any other flag maps every variant to <c>true</c> and is evaluated with a caller default of
-/// <c>false</c>, so <c>(variant, true)</c> means "rule picked a variant" and <c>(null, false)</c> "caller default served".
+/// A fixture flag as the testbed defines it (<c>$ref</c>s resolved), and the document Flagon stores for it: the same
+/// flag, typed values and all, so every case is evaluated through the typed getter its Gherkin names.
 /// </summary>
 internal sealed class FixtureFlag
 {
-    private FixtureFlag(string key, JsonObject original, FlagDocument? projected, string? unstorableReason)
+    private FixtureFlag(string key, JsonObject original, FlagDocument? document, string? unstorableReason)
     {
         Key = key;
         Original = original;
-        Projected = projected;
+        Document = document;
         UnstorableReason = unstorableReason;
     }
 
@@ -275,14 +267,10 @@ internal sealed class FixtureFlag
     /// <summary>The flag as the testbed defines it, <c>$ref</c>s resolved.</summary>
     public JsonObject Original { get; }
 
-    /// <summary>The boolean projection, or null if Flagon cannot store this flag (see <see cref="UnstorableReason"/>).</summary>
-    public FlagDocument? Projected { get; }
+    /// <summary>The stored document, or null if Flagon cannot store this flag (see <see cref="UnstorableReason"/>).</summary>
+    public FlagDocument? Document { get; }
 
     public string? UnstorableReason { get; }
-
-    public bool IsBoolean => Variants.All(v => v.Value?.GetValueKind() is JsonValueKind.True or JsonValueKind.False);
-
-    public bool HasTargeting => Original["targeting"] is not null;
 
     private JsonObject Variants => Original["variants"]!.AsObject();
 
@@ -294,19 +282,9 @@ internal sealed class FixtureFlag
             original["targeting"] = ResolveRefs(targeting, evaluators);
         }
 
-        var projection = original.DeepClone().AsObject();
-        var isBoolean = original["variants"]!.AsObject().All(v => v.Value?.GetValueKind() is JsonValueKind.True or JsonValueKind.False);
-        if (!isBoolean)
-        {
-            foreach (var name in projection["variants"]!.AsObject().Select(v => v.Key).ToList())
-            {
-                projection["variants"]![name] = true;
-            }
-        }
-
         try
         {
-            return new FixtureFlag(key, original, FlagdJson.Deserialize(projection.ToJsonString()), null);
+            return new FixtureFlag(key, original, FlagdJson.Deserialize(original.ToJsonString()), null);
         }
         catch (FlagValidationException ex)
         {
@@ -343,28 +321,27 @@ internal sealed class FixtureFlag
         }
     }
 
-    /// <summary>Turns a case's Gherkin expectations into what <see cref="IFlagon"/> must return for the projection.</summary>
+    /// <summary>Turns a case's Gherkin expectations into the (variant, value) results <see cref="IFlagon"/> may return.</summary>
     public CaseExpectation Expect(string flagType, string callerDefault, string? value, string? reason, string? errorCode)
     {
-        var projectedDefault = IsBoolean && bool.TryParse(callerDefault, out var b) && b;
-        List<(string? Variant, bool Value)>? outcomes = null;
+        List<(string? Variant, string Value)>? outcomes = null;
 
         if (!string.IsNullOrEmpty(errorCode))
         {
             // On error flagd returns the caller's default and no variant.
-            outcomes = [(null, projectedDefault)];
+            outcomes = [(null, callerDefault)];
         }
         else if (value is not null)
         {
             outcomes = Variants
-                .Where(v => ValueEquals(flagType, v.Value, value))
-                .Select(v => ((string?)v.Key, ProjectedValue(v.Key)))
+                .Where(v => GherkinValue.Matches(flagType, v.Value, value))
+                .Select(v => ((string?)v.Key, value))
                 .ToList();
             if (value == callerDefault)
             {
                 // The caller default can also be the answer (disabled, error, no default variant). When it equals a
                 // variant's value too, the Gherkin cannot tell the two apart, so either is accepted.
-                outcomes.Add((null, projectedDefault));
+                outcomes.Add((null, callerDefault));
             }
 
             if (outcomes.Count == 0)
@@ -373,48 +350,84 @@ internal sealed class FixtureFlag
             }
         }
 
-        return new CaseExpectation(projectedDefault, outcomes, reason, errorCode);
+        return new CaseExpectation(outcomes, reason, errorCode);
     }
+}
 
-    private bool ProjectedValue(string variant) => !IsBoolean || Variants[variant]!.GetValue<bool>();
+/// <summary>A Gherkin value (<c>"10"</c>, <c>"{\"a\": 1}"</c>) as the type a case's <c>&lt;type&gt;-flag</c> step names.</summary>
+internal static class GherkinValue
+{
+    public static bool Parse(string text) => bool.Parse(text);
 
-    private static bool ValueEquals(string flagType, JsonNode? variantValue, string expected)
+    public static int ParseInt(string text) => int.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+
+    public static double ParseDouble(string text) => double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture);
+
+    public static JsonElement ParseObject(string text) => JsonDocument.Parse(Unescape(text)).RootElement.Clone();
+
+    /// <summary>Whether a JSON value (a variant's, or a served one) equals <paramref name="expected"/> as <paramref name="flagType"/>.</summary>
+    public static bool Matches(string flagType, JsonNode? actual, string expected)
     {
-        if (variantValue is null)
+        if (actual is null)
         {
             return false;
         }
 
-        var kind = variantValue.GetValueKind();
+        var kind = actual.GetValueKind();
         return flagType switch
         {
-            "String" => kind == JsonValueKind.String && variantValue.GetValue<string>() == expected,
-            "Boolean" => kind is JsonValueKind.True or JsonValueKind.False && bool.TryParse(expected, out var b) && variantValue.GetValue<bool>() == b,
+            "String" => kind == JsonValueKind.String && actual.GetValue<string>() == expected,
+            "Boolean" => kind is JsonValueKind.True or JsonValueKind.False && bool.TryParse(expected, out var b) && actual.GetValue<bool>() == b,
             "Integer" or "Float" => kind == JsonValueKind.Number
                                     && decimal.TryParse(expected, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
-                                    && variantValue.GetValue<decimal>() == d,
-            "Object" => JsonNode.DeepEquals(variantValue, JsonNode.Parse(expected.Replace("\\\"", "\""))),
+                                    && actual.GetValue<decimal>() == d,
+            "Object" => JsonNode.DeepEquals(actual, JsonNode.Parse(Unescape(expected))),
             _ => false,
         };
     }
+
+    // Gherkin tables escape quotes inside a cell.
+    private static string Unescape(string text) => text.Replace("\\\"", "\"");
 }
 
 /// <summary>What a case requires of the evaluation result; null members are not asserted.</summary>
-/// <param name="CallerDefault">The (projected) default passed to <see cref="IFlagon.GetBooleanDetails"/>.</param>
-/// <param name="Outcomes">Acceptable (variant, value) results.</param>
+/// <param name="Outcomes">Acceptable (variant, value) results, the value in Gherkin text form.</param>
 /// <param name="Reason">Expected OpenFeature reason wire name.</param>
 /// <param name="ErrorCode">Expected OpenFeature error code wire name; empty means no error.</param>
-internal sealed record CaseExpectation(bool CallerDefault, IReadOnlyList<(string? Variant, bool Value)>? Outcomes, string? Reason, string? ErrorCode);
+internal sealed record CaseExpectation(IReadOnlyList<(string? Variant, string Value)>? Outcomes, string? Reason, string? ErrorCode);
 
-/// <summary>A boolean-subset case ready to run.</summary>
+/// <summary>A typed result, its value as JSON so that every getter's result compares alike.</summary>
+internal sealed record CaseResult(string? Variant, JsonNode? Value, EvaluationReason Reason, ErrorCode ErrorCode)
+{
+    public static CaseResult From<T>(FlagEvaluationDetails<T> d) =>
+        new(d.Variant, JsonNode.Parse(JsonSerializer.Serialize(d.Value)), d.Reason, d.ErrorCode);
+
+    public override string ToString() => $"({Variant ?? "null"}, {Value?.ToJsonString() ?? "null"}, {Reason}, {ErrorCode})";
+}
+
+/// <summary>A runnable case.</summary>
+/// <param name="FlagType">The Gherkin's flag type (<c>Boolean</c>, <c>String</c>, <c>Integer</c>, <c>Float</c>, <c>Object</c>): the getter used.</param>
+/// <param name="CallerDefault">The caller's default, in Gherkin text form.</param>
 /// <param name="UnstorableReason">Why Flagon cannot store the case's flag (it is then missing from the store), or null.</param>
 internal sealed record RunnableCase(
-    GherkinCase Source, FlagdSuite Suite, string FlagKey, bool CallerDefault, EvaluationContext Context, CaseExpectation Expected, string? UnstorableReason)
+    GherkinCase Source, FlagdSuite Suite, string FlagKey, string FlagType, string CallerDefault, EvaluationContext Context,
+    CaseExpectation Expected, string? UnstorableReason)
 {
     public string Id => Source.Id;
 
+    /// <summary>Evaluates the case through the typed getter its flag type names, with its caller default.</summary>
+    public CaseResult Evaluate(IFlagon flagon) => FlagType switch
+    {
+        "Boolean" => CaseResult.From(flagon.GetBooleanDetails(FlagKey, GherkinValue.Parse(CallerDefault), Context)),
+        "String" => CaseResult.From(flagon.GetStringDetails(FlagKey, CallerDefault, Context)),
+        "Integer" => CaseResult.From(flagon.GetIntDetails(FlagKey, GherkinValue.ParseInt(CallerDefault), Context)),
+        "Float" => CaseResult.From(flagon.GetDoubleDetails(FlagKey, GherkinValue.ParseDouble(CallerDefault), Context)),
+        "Object" => CaseResult.From(flagon.GetObjectDetails(FlagKey, GherkinValue.ParseObject(CallerDefault), Context)),
+        _ => throw new InvalidOperationException($"Unknown flag type '{FlagType}'."),
+    };
+
     /// <summary>Compares a result with the expectation; returns the mismatches (empty when the case passes).</summary>
-    public IReadOnlyList<string> Check(FlagEvaluationDetails<bool> details)
+    public IReadOnlyList<string> Check(CaseResult details)
     {
         var mismatches = new List<string>();
         if (UnstorableReason is not null)
@@ -422,9 +435,10 @@ internal sealed record RunnableCase(
             mismatches.Add($"the fixture flag cannot be stored in Flagon ({UnstorableReason})");
         }
 
-        if (Expected.Outcomes is { } outcomes && !outcomes.Contains((details.Variant, details.Value)))
+        if (Expected.Outcomes is { } outcomes
+            && !outcomes.Any(o => o.Variant == details.Variant && GherkinValue.Matches(FlagType, details.Value, o.Value)))
         {
-            mismatches.Add($"expected (variant, value) in [{string.Join(", ", outcomes.Select(o => $"({o.Variant ?? "null"}, {o.Value})"))}], got ({details.Variant ?? "null"}, {details.Value})");
+            mismatches.Add($"expected (variant, value) in [{string.Join(", ", outcomes.Select(o => $"({o.Variant ?? "null"}, {o.Value})"))}], got {details}");
         }
 
         if (Expected.Reason is { } reason && details.Reason.ToWireName() != reason)

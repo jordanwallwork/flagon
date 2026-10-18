@@ -11,7 +11,7 @@ using Microsoft.Net.Http.Headers;
 namespace Flagon.AspNetCore.Management;
 
 /// <summary>Management API handlers: thin translations between HTTP and <see cref="IFlagonAdmin"/>.</summary>
-internal static class ManagementEndpoints
+internal static partial class ManagementEndpoints
 {
     public static async Task<IResult> ListAsync(HttpContext http, IFlagonAdmin admin)
     {
@@ -19,6 +19,7 @@ internal static class ManagementEndpoints
         var text = NonEmpty(query["q"]);
         var tag = NonEmpty(query["tag"]);
         var source = ParseSource(NonEmpty(query["source"]));
+        var type = ParseType(NonEmpty(query["type"]));
         var enabled = ParseBool(query, "enabled");
         var archived = ParseBool(query, "archived");
 
@@ -33,6 +34,7 @@ internal static class ManagementEndpoints
                 || (f.Description?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false))
             .Where(f => tag is null || f.Tags.Contains(tag, StringComparer.Ordinal))
             .Where(f => source is null || f.Source == source)
+            .Where(f => type is null || f.Type == type)
             .Where(f => enabled is null || f.Enabled == enabled)
             .Where(f => archived is null || f.Archived == archived)
             .OrderBy(f => f.Key, StringComparer.Ordinal)
@@ -56,8 +58,12 @@ internal static class ManagementEndpoints
             throw new FlagValidationException("'key' is required.");
         }
 
+        var variants = body.Variants.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+            ? null
+            : FlagVariants.FromJson(body.Key, body.Variants);
         var record = await admin.CreateAsync(
-            new CreateFlagRequest(body.Key, body.Enabled, body.Description, body.Tags, body.Targeting), http.RequestAborted).ConfigureAwait(false);
+            new CreateFlagRequest(body.Key, body.Enabled, body.Description, body.Tags, body.Targeting, variants, body.DefaultVariant),
+            http.RequestAborted).ConfigureAwait(false);
 
         var location = $"{http.Request.PathBase}{http.Request.Path.Value?.TrimEnd('/')}/{Uri.EscapeDataString(record.Key)}";
         return Results.Created(location, await ResponseAsync(http, admin, record).ConfigureAwait(false));
@@ -80,6 +86,23 @@ internal static class ManagementEndpoints
         var record = await admin.SetEnabledAsync(key, enabled, version, http.RequestAborted).ConfigureAwait(false);
         return await FlagAsync(http, admin, record).ConfigureAwait(false);
     }
+
+    public static async Task<IResult> SetStateAsync(string key, HttpContext http, IFlagonAdmin admin)
+    {
+        var body = await ReadBodyAsync<SetStateBody>(http, required: true).ConfigureAwait(false);
+        var state = ParseState(body!.State);
+        var version = ExpectedVersion(http, body.Version);
+        var record = await admin.SetStateAsync(key, state, version, http.RequestAborted).ConfigureAwait(false);
+        return await FlagAsync(http, admin, record).ConfigureAwait(false);
+    }
+
+    private static FlagState ParseState(string? state) => state?.ToLowerInvariant() switch
+    {
+        null => throw new FlagValidationException("'state' is required: enabled or disabled."),
+        "enabled" => FlagState.Enabled,
+        "disabled" => FlagState.Disabled,
+        _ => throw new FlagValidationException($"'{state}' is not a flag state; use enabled or disabled."),
+    };
 
     public static async Task<IResult> SetTargetingAsync(string key, HttpContext http, IFlagonAdmin admin)
     {
@@ -114,10 +137,10 @@ internal static class ManagementEndpoints
             throw new FlagValidationException(contextError);
         }
 
-        FlagEvaluationDetails<bool> details;
+        FlagEvaluationDetails<JsonElement> details;
         if (body.Document.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
         {
-            details = evaluator.PreviewBooleanDetails(key, context);
+            details = evaluator.PreviewDetails(key, context);
             if (details.ErrorCode == ErrorCode.FlagNotFound)
             {
                 throw new FlagNotFoundException(key);
@@ -130,7 +153,7 @@ internal static class ManagementEndpoints
                 throw new FlagValidationException("'document' must be a flagd flag definition (a JSON object).");
             }
 
-            details = evaluator.PreviewDraftBooleanDetails(key, FlagdJson.Deserialize(body.Document.GetRawText()), context);
+            details = evaluator.PreviewDraftDetails(key, FlagdJson.Deserialize(body.Document.GetRawText()), context);
         }
 
         return Results.Ok(EvaluateResponse.From(details));
@@ -246,6 +269,18 @@ internal static class ManagementEndpoints
         return Enum.TryParse<FlagSource>(value, ignoreCase: true, out var source) && Enum.IsDefined(source)
             ? SourceName(source)
             : throw new FlagValidationException($"'{value}' is not a flag source (expected manual, auto or code).");
+    }
+
+    private static string? ParseType(string? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        return Enum.TryParse<FlagType>(value, ignoreCase: true, out var type) && Enum.IsDefined(type)
+            ? FlagVariants.Name(type)
+            : throw new FlagValidationException($"'{value}' is not a flag type (expected boolean, string, number or object).");
     }
 
     private static bool? ParseBool(IQueryCollection query, string name)

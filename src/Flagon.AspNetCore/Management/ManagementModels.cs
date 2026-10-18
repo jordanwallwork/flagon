@@ -1,17 +1,25 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Flagon.Internal;
 using Flagon.Internal.Targeting;
 using Flagon.Storage;
 
 namespace Flagon.AspNetCore.Management;
 
-/// <summary>A flag as returned by the management API.</summary>
+/// <summary>
+/// A flag as returned by the management API. <c>type</c> is derived from the variants (null when they are empty or
+/// mixed); <c>value</c> is the default variant's value (null when there is no default variant); <c>enabled</c> is the
+/// boolean on/off toggle, null for non-boolean flags.
+/// </summary>
 internal sealed record FlagResponse(
     string Key,
     long Version,
-    bool Enabled,
+    string? Type,
+    bool? Enabled,
     string State,
     string? DefaultVariant,
+    IReadOnlyDictionary<string, JsonElement> Variants,
+    JsonElement? Value,
     bool Archived,
     string? Description,
     IReadOnlyList<string> Tags,
@@ -28,14 +36,19 @@ internal sealed record FlagResponse(
     {
         var document = record.Document;
         var metadata = document.Metadata;
-        var enabled = document.DefaultVariant is { } defaultVariant
-            && document.Variants.TryGetValue(defaultVariant, out var value) && value.ValueKind == JsonValueKind.True;
+        var type = document.Type;
+        JsonElement? value = document.DefaultVariant is { } defaultVariant && document.Variants.TryGetValue(defaultVariant, out var served)
+            ? served
+            : null;
         return new FlagResponse(
             record.Key,
             record.Version,
-            enabled,
+            type is { } t ? FlagVariants.Name(t) : null,
+            type == FlagType.Boolean ? value?.ValueKind == JsonValueKind.True : null,
             document.State == FlagState.Enabled ? "enabled" : "disabled",
             document.DefaultVariant,
+            document.Variants,
+            value,
             record.Archived,
             metadata.Description,
             metadata.Tags,
@@ -45,16 +58,25 @@ internal sealed record FlagResponse(
             metadata.UpdatedAt,
             metadata.UpdatedBy,
             document.Targeting,
-            RolloutShape.Percentage(document.Targeting) is { } percentage ? new RolloutResponse(percentage) : null,
+            RolloutResponse.From(RolloutShape.Split(document.Targeting, document.Variants)),
             FlagUsageResponse.From(usage));
     }
 }
 
 /// <summary>
-/// Present when the flag's targeting is exactly a simple percentage rollout (see <see cref="RolloutShape"/>), so tooling
-/// can show and edit it as a percentage instead of a rule.
+/// Present when the flag's targeting is exactly a canonical percentage split (see <see cref="RolloutShape"/>), so tooling
+/// can show and edit it as weights instead of a rule. <c>percentage</c> is present only for the boolean on/off shape.
 /// </summary>
-internal sealed record RolloutResponse(int Percentage);
+internal sealed record RolloutResponse(
+    IReadOnlyList<RolloutBucketResponse> Buckets,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Percentage)
+{
+    public static RolloutResponse? From(RolloutSplit? split) => split is null
+        ? null
+        : new RolloutResponse(split.Buckets.Select(b => new RolloutBucketResponse(b.Variant, b.Percentage)).ToArray(), split.Percentage);
+}
+
+internal sealed record RolloutBucketResponse(string Variant, int Percentage);
 
 /// <summary>Where a flag is being evaluated: per application, the last evaluation and the code default supplied.</summary>
 internal sealed record FlagUsageResponse(DateTimeOffset? LastEvaluatedAt, bool HasDefaultMismatch, IReadOnlyList<FlagApplicationUsageResponse> Applications)
@@ -96,7 +118,15 @@ internal sealed record FlagAuditEntryResponse(
         document is null ? null : JsonDocument.Parse(FlagdJson.Serialize(document)).RootElement.Clone();
 }
 
-internal sealed record CreateFlagBody(string? Key, bool Enabled = false, string? Description = null, IReadOnlyList<string>? Tags = null, JsonElement? Targeting = null);
+/// <summary><c>variants</c> (absent or <c>null</c> for a boolean flag) is read as JSON so repeated names can be rejected.</summary>
+internal sealed record CreateFlagBody(
+    string? Key,
+    bool Enabled = false,
+    string? Description = null,
+    IReadOnlyList<string>? Tags = null,
+    JsonElement? Targeting = null,
+    JsonElement Variants = default,
+    string? DefaultVariant = null);
 
 /// <summary><c>targeting</c> is required: a rule, or JSON <c>null</c> to remove it (an absent field is Undefined).</summary>
 internal sealed record SetTargetingBody(JsonElement Targeting = default, long? Version = null);
@@ -104,6 +134,9 @@ internal sealed record SetTargetingBody(JsonElement Targeting = default, long? V
 internal sealed record UpdateMetadataBody(string? Description = null, IReadOnlyList<string>? Tags = null, long? Version = null);
 
 internal sealed record SetEnabledBody(bool? Enabled = null, long? Version = null);
+
+/// <summary><c>state</c> is <c>enabled</c> or <c>disabled</c> (case-insensitive).</summary>
+internal sealed record SetStateBody(string? State = null, long? Version = null);
 
 internal sealed record VersionBody(long? Version = null);
 
@@ -113,16 +146,20 @@ internal sealed record VersionBody(long? Version = null);
 /// </summary>
 internal sealed record EvaluateBody(JsonElement Context = default, JsonElement Document = default);
 
-/// <summary>A preview evaluation result, using the same wire names as OFREP and the evaluation API.</summary>
+/// <summary>
+/// A preview evaluation result, using the same wire names as OFREP and the evaluation API. Untyped: <c>value</c> is the
+/// served variant's JSON value of any type, or null when no variant was served (callers would get their own default),
+/// so it never reports <c>TYPE_MISMATCH</c>.
+/// </summary>
 internal sealed record EvaluateResponse(
-    bool Value,
+    JsonElement? Value,
     string? Variant,
     string Reason,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ErrorCode,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ErrorMessage)
 {
-    public static EvaluateResponse From(FlagEvaluationDetails<bool> details) => new(
-        details.Value,
+    public static EvaluateResponse From(FlagEvaluationDetails<JsonElement> details) => new(
+        details.Variant is null ? null : details.Value,
         details.Variant,
         details.Reason.ToWireName(),
         details.ErrorCode == Flagon.ErrorCode.None ? null : details.ErrorCode.ToWireName(),

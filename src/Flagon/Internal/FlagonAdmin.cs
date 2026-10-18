@@ -30,6 +30,7 @@ internal sealed partial class FlagonAdmin(
     {
         FlagKey.Validate(request.Key);
         FlagTags.Validate(request.Tags);
+        var variants = ValidateVariants(request);
         var targeting = TargetingRules.Validate(compiler, request.Key, request.Targeting);
 
         var change = changes.Begin();
@@ -38,12 +39,33 @@ internal sealed partial class FlagonAdmin(
             Tags: request.Tags,
             Source: FlagSource.Manual).StampCreated(change);
 
-        var document = FlagDocument.Boolean(request.Enabled, metadata) with { Targeting = targeting };
+        var document = variants is null
+            ? FlagDocument.Boolean(request.Enabled, metadata) with { Targeting = targeting }
+            : new FlagDocument(FlagState.Enabled, variants, request.DefaultVariant, metadata, targeting);
         var record = await store.TryCreateAsync(request.Key, document, change, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagAlreadyExistsException(request.Key);
 
         await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
         return record;
+    }
+
+    /// <summary>The request's validated variants, or null for a boolean flag created from <see cref="CreateFlagRequest.Enabled"/>.</summary>
+    private static IReadOnlyDictionary<string, JsonElement>? ValidateVariants(CreateFlagRequest request)
+    {
+        if (request.Variants is null)
+        {
+            return request.DefaultVariant is null
+                ? null
+                : throw new FlagValidationException($"Flag '{request.Key}' has a default variant but no variants; send variants with it, or use enabled for a boolean flag.");
+        }
+
+        if (request.Enabled)
+        {
+            throw new FlagValidationException(
+                $"Flag '{request.Key}' sets both variants and enabled; a flag with variants serves its default variant, so leave enabled unset.");
+        }
+
+        return FlagVariants.Validate(request.Key, request.Variants, request.DefaultVariant).Variants;
     }
 
     public Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default) =>
@@ -52,7 +74,13 @@ internal sealed partial class FlagonAdmin(
     private Task<FlagRecord> SetEnabledCoreAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken) =>
         UpdateDocumentAsync(key, expectedVersion, current =>
         {
-            var document = current.Document;
+            var document = Unarchived(current, expectedVersion);
+            if (document.Type != FlagType.Boolean)
+            {
+                throw new FlagValidationException(
+                    $"Flag '{key}' is not a boolean flag; set its state (enabled/disabled) or default variant instead.");
+            }
+
             var variant = enabled ? FlagDocument.OnVariant : FlagDocument.OffVariant;
             if (!document.Variants.ContainsKey(variant))
             {
@@ -61,6 +89,21 @@ internal sealed partial class FlagonAdmin(
 
             return document with { DefaultVariant = variant };
         }, cancellationToken);
+
+    public Task<FlagRecord> SetStateAsync(string key, FlagState state, long expectedVersion, CancellationToken cancellationToken = default) =>
+        WriteAsync("set_state", key, () => SetStateCoreAsync(key, state, expectedVersion, cancellationToken));
+
+    private Task<FlagRecord> SetStateCoreAsync(string key, FlagState state, long expectedVersion, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (!Enum.IsDefined(state))
+        {
+            throw new FlagValidationException($"'{state}' is not a flag state; use enabled or disabled.");
+        }
+
+        return UpdateDocumentAsync(
+            key, expectedVersion, current => Unarchived(current, expectedVersion) with { State = state }, cancellationToken);
+    }
 
     public Task<FlagRecord> SetTargetingAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken = default) =>
         WriteAsync("set_targeting", key, () => SetTargetingCoreAsync(key, targeting, expectedVersion, cancellationToken));
@@ -114,13 +157,22 @@ internal sealed partial class FlagonAdmin(
     /// <summary>
     /// Reads <paramref name="key"/>, builds its new document from the current record with <paramref name="update"/>
     /// (which may refuse the write by throwing), stamps and stores it at <paramref name="expectedVersion"/>, then
-    /// refreshes the snapshot.
+    /// refreshes the snapshot. A record already past <paramref name="expectedVersion"/> is a conflict before
+    /// <paramref name="update"/> runs.
     /// </summary>
+    /// <exception cref="FlagVersionConflictException">The flag is not at <paramref name="expectedVersion"/>.</exception>
     private async Task<FlagRecord> UpdateDocumentAsync(
         string key, long expectedVersion, Func<FlagRecord, FlagDocument> update, CancellationToken cancellationToken)
     {
         var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagNotFoundException(key);
+
+        // A stale edit is a conflict before anything else, so the caller gets currentVersion to reload from rather than
+        // a validation error about a document it has not seen.
+        if (current.Version != expectedVersion)
+        {
+            throw new FlagVersionConflictException(key, expectedVersion, current.Version);
+        }
 
         var change = changes.Begin();
         var document = update(current).StampUpdated(change);

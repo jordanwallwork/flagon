@@ -54,11 +54,20 @@ const flag = (key) => `flags/${encodeURIComponent(key)}`;
 export const api = {
   listFlags: () => request("GET", "flags"),
   getFlag: (key) => request("GET", flag(key)),
-  createFlag: ({ key, enabled, description, tags }) => request("POST", "flags", { body: { key, enabled, description, tags } }),
+  /** A boolean flag from `enabled`, or (with `variants`, name → JSON value) a string, number or object flag. */
+  createFlag: ({ key, enabled, description, tags, variants, defaultVariant }) =>
+    request("POST", "flags", { body: { key, enabled, description, tags, variants, defaultVariant } }),
   updateMetadata: (key, version, { description, tags }) => request("PATCH", flag(key), { body: { description, tags }, version }),
   setEnabled: (key, version, enabled) => request("PUT", `${flag(key)}/enabled`, { body: { enabled }, version }),
+  /** Switches any flag between "enabled" and "disabled" (a disabled flag serves each app its code default). */
+  setState: (key, version, state) => request("PUT", `${flag(key)}/state`, { body: { state }, version }),
   setTargeting: (key, version, targeting) => request("PUT", `${flag(key)}/targeting`, { body: { targeting }, version }),
   clearTargeting: (key, version) => request("DELETE", `${flag(key)}/targeting`, { version }),
+  /** Replaces a string, number or object flag's variants (name → JSON value) and default variant (null for none). */
+  setVariants: (key, version, variants, defaultVariant) =>
+    request("PUT", `${flag(key)}/variants`, { body: { variants, defaultVariant }, version }),
+  /** Sets the variant served by default (any type), or none when `variant` is null. */
+  setDefaultVariant: (key, version, variant) => request("PUT", `${flag(key)}/default-variant`, { body: { variant }, version }),
   /** Previews the stored flag, or the unsaved flagd `document` when given, for `context`. No side effects. */
   evaluate: (key, context = {}, document) =>
     request("POST", `${flag(key)}/evaluate`, { body: document === undefined ? { context } : { context, document } }),

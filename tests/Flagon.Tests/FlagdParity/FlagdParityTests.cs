@@ -6,8 +6,9 @@ using Xunit.Abstractions;
 namespace Flagon.Tests.FlagdParity;
 
 /// <summary>
-/// Runs the vendored flagd-testbed evaluation fixtures (boolean subset, see <c>testbed/PROVENANCE.md</c>) through the
-/// host seam: <c>AddFlagon</c> with an InMemory store seeded with the fixture flags, evaluated via <see cref="IFlagon"/>.
+/// Runs the vendored flagd-testbed evaluation fixtures (see <c>testbed/PROVENANCE.md</c>) through the host seam:
+/// <c>AddFlagon</c> with an InMemory store seeded with the fixture flags as they are, each case evaluated via the
+/// <see cref="IFlagon"/> typed getter its Gherkin flag type names.
 /// </summary>
 /// <remarks>
 /// One concrete subclass per targeting compiler. A subclass selects its compiler by overriding <see cref="Compiler"/>
@@ -37,7 +38,7 @@ public abstract class FlagdParityTests(ITestOutputHelper output)
         }
     }
 
-    /// <summary>Every runnable boolean-subset case, one theory row each.</summary>
+    /// <summary>Every runnable case, one theory row each.</summary>
     public static TheoryData<FlagdCase> Cases
     {
         get
@@ -63,7 +64,7 @@ public abstract class FlagdParityTests(ITestOutputHelper output)
             o.Services = ConfigureServices;
         });
 
-        var details = host.Flagon.GetBooleanDetails(@case.FlagKey, @case.CallerDefault, @case.Context);
+        var details = @case.Evaluate(host.Flagon);
         var mismatches = @case.Check(details);
         var expectedToFail = ExpectedFailures.For(CompilerName).Contains(@case.Id);
 
@@ -102,7 +103,7 @@ public abstract class FlagdParityTests(ITestOutputHelper output)
         var runnable = FlagdTestbed.Runnable;
         output.WriteLine($"flagd-testbed parity [{CompilerName}]: {runnable.Count} runnable cases, " +
                          $"{runnable.Count - expected.Count} expected to pass, {expected.Count} expected to fail, " +
-                         $"{FlagdTestbed.Excluded.Count} excluded from the boolean subset.");
+                         $"{FlagdTestbed.Excluded.Count} excluded.");
         foreach (var (c, reason) in FlagdTestbed.Excluded)
         {
             output.WriteLine($"  excluded {FlagdCase.Describe(c)}: {reason}");

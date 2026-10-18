@@ -193,6 +193,100 @@ public class UsageTrackingTests
         Assert.Equal(FlagonTestHost.Epoch.AddSeconds(5000), store.Written[^1].LastEvaluatedAt);
     }
 
+    /// <summary>Runs <paramref name="evaluate"/> in a fresh app, stops it (flushing usage), and returns the last default written.</summary>
+    private static async Task<string> LastWrittenDefaultAsync(Action<FlagonTestHost> evaluate)
+    {
+        var store = UsageRecordingStore.Wrap(new InMemoryFlagStore());
+        await using var host = await FlagonTestHost.StartAsync(o => o.Store = store.Store);
+        evaluate(host);
+        await host.StopAsync();
+        return store.Written[^1].ObservedDefault!.Value.GetRawText();
+    }
+
+    [Theory]
+    [InlineData(new[] { "on", "off" }, "false")]
+    [InlineData(new[] { "off", "on" }, "true")]
+    [InlineData(new[] { "on", "off", "on" }, "true")]
+    public async Task Evaluations_at_the_same_instant_keep_the_last_supplied_default(string[] defaults, string expected)
+    {
+        // The clock does not move between evaluations, as within the system clock's resolution.
+        var written = await LastWrittenDefaultAsync(host =>
+        {
+            foreach (var d in defaults)
+            {
+                host.Flagon.IsEnabled("same-instant", defaultValue: d == "on");
+            }
+        });
+
+        Assert.Equal(expected, written);
+    }
+
+    [Fact]
+    public async Task The_latest_default_survives_when_more_defaults_are_seen_than_are_kept()
+    {
+        var written = await LastWrittenDefaultAsync(host =>
+        {
+            foreach (var d in new[] { "a", "b", "c", "d" })
+            {
+                host.Time.Advance(TimeSpan.FromSeconds(1));
+                host.Flagon.GetString("many", d);
+            }
+
+            // a is now the latest; e and then b (evicted by e) arrive in the same instant, so b must win the tie.
+            host.Time.Advance(TimeSpan.FromSeconds(1));
+            host.Flagon.GetString("many", "a");
+            host.Time.Advance(TimeSpan.FromSeconds(1));
+            host.Flagon.GetString("many", "e");
+            host.Flagon.GetString("many", "b");
+        });
+
+        Assert.Equal("\"b\"", written);
+    }
+
+    [Fact]
+    public async Task Six_defaults_in_one_instant_keep_the_last()
+    {
+        var written = await LastWrittenDefaultAsync(host =>
+        {
+            foreach (var d in new[] { "a", "b", "c", "d", "e", "f" })
+            {
+                host.Flagon.GetString("many", d);
+            }
+        });
+
+        Assert.Equal("\"f\"", written);
+    }
+
+    [Fact]
+    public async Task Concurrent_evaluations_churning_through_more_defaults_than_are_kept_lose_nothing_written_after()
+    {
+        var store = UsageRecordingStore.Wrap(new InMemoryFlagStore());
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store.Store;
+            o.Flagon = f => f.UsageFlushInterval = TimeSpan.FromSeconds(1);
+        });
+
+        // Eight threads race through eight defaults (forcing evictions) while flushes run.
+        var threads = Enumerable.Range(0, 8).Select(t => Task.Run(() =>
+        {
+            for (var i = 0; i < 20_000; i++)
+            {
+                host.Flagon.GetString("churn", $"d{(i + t) % 8}");
+                if (t == 0 && i % 1000 == 0)
+                {
+                    host.Time.Advance(TimeSpan.FromSeconds(1));
+                }
+            }
+        })).ToArray();
+        await Task.WhenAll(threads);
+        host.Time.Advance(TimeSpan.FromSeconds(1));
+        host.Flagon.GetString("churn", "final");
+        await host.StopAsync();
+
+        Assert.Equal("\"final\"", store.Written[^1].ObservedDefault!.Value.GetRawText());
+    }
+
     /// <summary>A store that forwards everything and keeps every usage row written, in order.</summary>
     public class UsageRecordingStore : System.Reflection.DispatchProxy
     {

@@ -25,6 +25,9 @@ public class OutageFlagStore : DispatchProxy
     /// </summary>
     public Task? Hang { get; set; }
 
+    /// <summary>When set, <see cref="IFlagStore.TryCreateAsync"/> does not start until this task completes.</summary>
+    public Task? HangCreate { get; set; }
+
     /// <summary>When true, the store reports <see cref="IFlagStore.IsReadOnly"/> as true (like a remote, read-only store).</summary>
     public bool ReportsReadOnly { get; set; }
 
@@ -66,6 +69,11 @@ public class OutageFlagStore : DispatchProxy
             return new ValueTask<long>(HangThenGetChangeVersionAsync(hang, cancellationToken));
         }
 
+        if (HangCreate is { } hangCreate && targetMethod.Name == nameof(IFlagStore.TryCreateAsync))
+        {
+            return HangThenCreateAsync(hangCreate, targetMethod, args);
+        }
+
         try
         {
             return targetMethod.Invoke(_inner, args);
@@ -75,6 +83,12 @@ public class OutageFlagStore : DispatchProxy
             ExceptionDispatchInfo.Throw(e.InnerException);
             throw;
         }
+    }
+
+    private async Task<FlagRecord?> HangThenCreateAsync(Task hang, MethodInfo targetMethod, object?[]? args)
+    {
+        await hang;
+        return await (Task<FlagRecord?>)targetMethod.Invoke(_inner, args)!;
     }
 
     private async Task<long> HangThenGetChangeVersionAsync(Task hang, CancellationToken cancellationToken)

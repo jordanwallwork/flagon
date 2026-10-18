@@ -64,10 +64,38 @@ function parseTags(text) {
   return [...new Set(text.split(",").map((t) => t.trim()).filter(Boolean))];
 }
 
+/** True for a boolean flag, the only type with the on/off toggle and percentage rollout slider. */
+const isBoolean = (flag) => flag.type === "boolean";
+
+/** A variant value as text: JSON (strings quoted), pretty-printed over several lines for objects when `pretty`. */
+const formatValue = (value, pretty = false) => JSON.stringify(value, null, pretty && typeof value === "object" ? 2 : undefined);
+
+const truncate = (text, max = 40) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/**
+ * A value as typed JSON (strings quoted, objects pretty-printed), or `placeholder` (muted) when there is none. The default
+ * placeholder suits a served value: no variant is served, so each app gets its code default.
+ */
+function valueView(value, placeholder = "none (each app gets its code default)") {
+  if (value === null || value === undefined) return h("span", { class: "muted" }, placeholder);
+  return typeof value === "object" ? h("pre", { class: "value" }, formatValue(value, true)) : h("code", {}, formatValue(value));
+}
+
+/** The list's value cell for a non-boolean flag: its default variant and (truncated) value, or that it has none. */
+function valueSummary(flag) {
+  if (flag.defaultVariant === null || flag.defaultVariant === undefined) {
+    return h("span", { class: "muted small", title: "No default variant: each app gets its code default unless a rule matches" }, "no default");
+  }
+  const text = formatValue(flag.value);
+  return h("span", { class: "value-summary", title: text },
+    h("span", { class: "variant" }, flag.defaultVariant), " ", h("code", {}, truncate(text)));
+}
+
 function badges(flag) {
   return h("span", { class: "badges" },
+    flag.type && h("span", { class: `badge type type-${flag.type}`, title: `A ${flag.type} flag` }, flag.type),
     flag.archived && h("span", { class: "badge archived", title: "Archived: evaluates to the code default" }, "archived"),
-    flag.state === "disabled" && h("span", { class: "badge warn", title: "flagd state DISABLED: evaluates to the code default" }, "disabled"),
+    flag.state === "disabled" && h("span", { class: "badge warn", title: "Disabled: each app gets its code default" }, "disabled"),
     flag.source === "auto" && h("span", { class: "badge auto", title: "Created automatically on first evaluation" }, "auto"),
     flag.source === "code" && h("span", { class: "badge code", title: "Defined in code" }, "code"),
     !flag.archived && isStale(flag) && h("span", { class: "badge stale", title: `Not evaluated in the last ${staleDays()} days` }, "stale"),
@@ -76,9 +104,13 @@ function badges(flag) {
   );
 }
 
-/** "rollout N%" for a simple percentage rollout, "targeted" for any other rule, nothing without one. */
+/** "rollout N%" for a boolean percentage rollout, "split 34/33/33" for any other split, "targeted" for any other rule, nothing without one. */
 function targetingBadge(flag) {
-  if (flag.rollout) return h("span", { class: "badge targeting", title: "Percentage rollout: this share of users gets on" }, `rollout ${flag.rollout.percentage}%`);
+  if (flag.rollout?.percentage !== undefined) return h("span", { class: "badge targeting", title: "Percentage rollout: this share of users gets on" }, `rollout ${flag.rollout.percentage}%`);
+  if (flag.rollout) {
+    const title = `Percentage split: ${flag.rollout.buckets.map((b) => `${b.variant} ${b.percentage}%`).join(", ")}`;
+    return h("span", { class: "badge targeting", title }, `split ${splitWeights(flag.rollout.buckets)}`);
+  }
   if (hasTargeting(flag)) return h("span", { class: "badge targeting", title: "Has a targeting rule" }, "targeted");
   return null;
 }
@@ -188,7 +220,7 @@ function errorView(e) {
 
 // ---------------------------------------------------------------- list
 
-const listState = { q: "", tag: "", state: "", source: "", archived: "active", hygiene: "", targeting: "" };
+const listState = { q: "", tag: "", type: "", state: "", source: "", archived: "active", hygiene: "", targeting: "" };
 
 async function renderList() {
   let flags;
@@ -211,8 +243,11 @@ async function renderList() {
     const q = listState.q.trim().toLowerCase();
     if (q && !f.key.toLowerCase().includes(q) && !(f.description ?? "").toLowerCase().includes(q)) return false;
     if (listState.tag && !f.tags.includes(listState.tag)) return false;
-    if (listState.state === "on" && !f.enabled) return false;
-    if (listState.state === "off" && f.enabled) return false;
+    if (listState.type && f.type !== listState.type) return false;
+    // On/off is the boolean toggle: non-boolean flags (enabled null) match neither. Disabled is the state, any type.
+    if (listState.state === "on" && f.enabled !== true) return false;
+    if (listState.state === "off" && f.enabled !== false) return false;
+    if (listState.state === "disabled" && f.state !== "disabled") return false;
     if (listState.source && f.source !== listState.source) return false;
     if (listState.archived === "active" && f.archived) return false;
     if (listState.archived === "archived" && !f.archived) return false;
@@ -227,12 +262,14 @@ async function renderList() {
   function row(f) {
     const apps = f.usage?.applications ?? [];
     return h("tr", { class: f.archived ? "is-archived" : undefined },
-      h("td", {}, toggle(f, (enabled) => write(async () => {
-        await api.setEnabled(f.key, f.version, enabled);
-        showNotice(`${f.key} ${enabled ? "enabled" : "disabled"}.`, "success");
-        await refresh();
-        return true;
-      }, refresh))),
+      h("td", {}, isBoolean(f)
+        ? toggle(f, (enabled) => write(async () => {
+          await api.setEnabled(f.key, f.version, enabled);
+          showNotice(`${f.key} ${enabled ? "enabled" : "disabled"}.`, "success");
+          await refresh();
+          return true;
+        }, refresh))
+        : valueSummary(f)),
       h("td", {}, h("a", { href: flagHref(f.key), class: "key" }, f.key), " ", badges(f),
         f.description && h("div", { class: "muted small" }, f.description)),
       h("td", {}, f.tags.map((t) => h("span", { class: "tag" }, t))),
@@ -267,11 +304,12 @@ async function renderList() {
   const filters = h("div", { class: "filters" },
     search,
     select("tag", "Tag", [["", "Any"], ...tags.map((t) => [t, t])]),
-    select("state", "State", [["", "Any"], ["on", "On"], ["off", "Off"]]),
+    select("type", "Type", [["", "Any"], ["boolean", "Boolean"], ["string", "String"], ["number", "Number"], ["object", "Object"]]),
+    select("state", "State", [["", "Any"], ["on", "On"], ["off", "Off"], ["disabled", "Disabled"]]),
     select("source", "Source", [["", "Any"], ["manual", "Manual"], ["auto", "Auto"], ["code", "Code"]]),
     select("archived", "Show", [["active", "Active"], ["archived", "Archived"], ["all", "All"]]),
     select("hygiene", "Hygiene", [["", "Any"], ["stale", "Stale"], ["mismatch", "Default mismatch"]]),
-    select("targeting", "Targeting", [["", "Any"], ["targeted", "Targeted"], ["rollout", "Rollout"], ["none", "None"]]),
+    select("targeting", "Targeting", [["", "Any"], ["targeted", "Targeted"], ["rollout", "Rollout or split"], ["none", "None"]]),
     h("label", {}, "Stale after",
       h("select", {
         onchange: (e) => { try { localStorage.setItem(STALE_DAYS_KEY, e.target.value); } catch { /* ignore */ } draw(); },
@@ -284,7 +322,7 @@ async function renderList() {
     h("div", { class: "title-row" }, h("h1", {}, "Flags"), count),
     filters,
     h("table", { class: "flags" },
-      h("thead", {}, h("tr", {}, h("th", { class: "narrow" }, "On"), h("th", {}, "Flag"), h("th", {}, "Tags"), h("th", {}, "Last evaluated"))),
+      h("thead", {}, h("tr", {}, h("th", {}, "Value"), h("th", {}, "Flag"), h("th", {}, "Tags"), h("th", {}, "Last evaluated"))),
       tbody),
   ];
 }
@@ -303,11 +341,11 @@ function parseRule(text) {
 }
 
 /**
- * The flagd document the server evaluates for an unsaved rule: the stored flag's state and default variant with the
- * console's boolean variants. Used by Validate and by draft evaluation elsewhere on the detail view.
+ * The flagd document the server evaluates for an unsaved rule: the stored flag's state, variants and default variant.
+ * Used by Validate and by draft evaluation elsewhere on the detail view.
  */
 function draftDocument(flag, rule) {
-  const document = { state: flag.state === "enabled" ? "ENABLED" : "DISABLED", variants: { on: true, off: false }, defaultVariant: flag.defaultVariant };
+  const document = { state: flag.state === "enabled" ? "ENABLED" : "DISABLED", variants: flag.variants, defaultVariant: flag.defaultVariant };
   if (rule !== null) document.targeting = rule;
   return document;
 }
@@ -348,14 +386,19 @@ function targetingCard(flag, reload) {
 
   function show() {
     editor = null;
-    // Only the server's recogniser (flag.rollout) decides what is a rollout; any other rule is never rewritten by the slider.
+    // Only the server's recogniser (flag.rollout) decides what is a split; any other rule is never rewritten by the
+    // slider or the split editor.
     const custom = hasTargeting(flag) && !flag.rollout;
+    // The on/off slider is the boolean two-bucket special case; any other split (or a non-boolean flag) gets the split editor.
+    const slider = isBoolean(flag) && (!flag.rollout || flag.rollout?.percentage !== undefined);
+    const splittable = Object.keys(flag.variants ?? {}).length >= 2;
     // replaceChildren doesn't flatten like h() does, so flatten and drop the conditional falsy children here.
     card.replaceChildren(...[
       h("h2", {}, "Targeting"),
       custom
         ? [h("p", { class: "small muted" }, "Custom rule: edit as JSON."), h("pre", { class: "rule" }, saved)]
-        : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."), rolloutControl()],
+        : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."),
+          slider ? rolloutControl() : splittable && splitControl()],
       h("div", { class: "actions" },
         h("button", { disabled: flag.archived, title: locked, onclick: () => edit(saved) }, hasTargeting(flag) ? "Edit JSON" : "Add rule"),
         custom && h("button", { class: "danger", disabled: flag.archived, title: locked, onclick: clear }, "Clear…")),
@@ -399,7 +442,8 @@ function targetingCard(flag, reload) {
       button.disabled = true;
       try {
         const result = await api.evaluate(flag.key, {}, draftDocument(flag, p.rule));
-        if (current()) status(["Valid rule. With an empty context it returns ", h("code", {}, result.variant ?? JSON.stringify(result.value)), ` (${result.reason}).`], "ok");
+        const served = result.variant ?? "no variant (each app gets its code default)";
+        if (current()) status(["Valid rule. With an empty context it returns ", h("code", {}, served), ` (${result.reason}).`], "ok");
       } catch (err) {
         if (current()) status(ruleError(err));
       } finally {
@@ -420,7 +464,8 @@ function targetingCard(flag, reload) {
 
     card.replaceChildren(h("form", { class: "stack", onsubmit: save },
       h("h2", {}, "Targeting"),
-      h("p", { class: "small muted" }, "A JSON Logic rule returning a variant name (", h("code", {}, "on"), " or ", h("code", {}, "off"),
+      h("p", { class: "small muted" }, "A JSON Logic rule returning a variant name (",
+        Object.keys(flag.variants ?? {}).flatMap((name, i, all) => [i ? (i === all.length - 1 ? " or " : ", ") : "", h("code", {}, name)]),
         "); when it matches nothing, the default variant applies. Leave it empty for no targeting."),
       editor,
       message,
@@ -485,6 +530,77 @@ function targetingCard(flag, reload) {
       h("div", { class: "actions" },
         saveButton,
         current !== undefined && h("button", { type: "button", class: "danger", disabled: flag.archived, title: locked, onclick: remove }, "Remove rollout…")));
+  }
+
+  /**
+   * The percentage split form: one weight per variant (the current split's buckets first, in rule order, so saving
+   * keeps users in their buckets), summing to 100. Writes the canonical `fractional` shape the server reports back as
+   * `flag.rollout`, with a bucket for every variant (0% ones included).
+   */
+  function splitControl() {
+    const current = flag.rollout?.buckets ?? [];
+    const names = [...current.map((b) => b.variant), ...Object.keys(flag.variants).filter((v) => !current.some((b) => b.variant === v))];
+    const initial = names.map((v) => current.find((b) => b.variant === v)?.percentage ?? 0);
+    const message = h("p", { role: "status", class: "small error-text", hidden: true });
+    const sum = h("p", { class: "small", role: "status" });
+    const saveButton = h("button", { type: "submit", class: "primary", disabled: true, title: locked }, current.length ? "Save split" : "Start split");
+    const inputs = names.map((name, i) => h("input", {
+      type: "number", class: "percent", min: "0", max: "100", step: "1", value: initial[i], disabled: flag.archived, title: locked,
+      "aria-label": `Percentage of users who get ${name}`, oninput: update,
+    }));
+
+    /** The weights as entered (NaN for an empty or non-integral box). */
+    const weights = () => inputs.map((input) => input.value === "" ? NaN : Number(input.value));
+
+    function update() {
+      const w = weights();
+      const valid = w.every((n) => Number.isInteger(n) && n >= 0 && n <= 100);
+      const total = valid ? w.reduce((a, n) => a + n, 0) : NaN;
+      sum.textContent = valid ? `Total: ${total}%${total === 100 ? "" : " (the weights must add up to 100%)"}` : "Each weight must be a whole number from 0 to 100.";
+      sum.className = `small ${total === 100 ? "muted" : "error-text"}`;
+      saveButton.disabled = flag.archived || total !== 100 || w.every((n, i) => n === initial[i]);
+      message.hidden = true;
+    }
+
+    /** 100 shared as evenly as whole numbers allow, the remainder going to the first variants (34/33/33). */
+    function even() {
+      const share = Math.floor(100 / inputs.length), extra = 100 % inputs.length;
+      inputs.forEach((input, i) => { input.value = share + (i < extra ? 1 : 0); });
+      update();
+    }
+
+    async function save(e) {
+      e.preventDefault();
+      const w = weights();
+      // Every weight as entered, 0% included: a zero-width bucket serves nobody, but keeping it means the split reads
+      // back as the admin left it and its variant stays guarded against removal.
+      const buckets = names.map((variant, i) => ({ variant, percentage: w[i] }));
+      const showError = (content) => { message.replaceChildren(...content); message.hidden = false; };
+      const saved = await saveInline(() => api.setTargeting(flag.key, flag.version, { fractional: buckets.map((b) => [b.variant, b.percentage]) }),
+        { button: saveButton, showError, reload });
+      if (!saved) return;
+      showNotice(`Split saved: ${buckets.map((b) => `${b.variant} ${b.percentage}%`).join(", ")}.`, "success");
+      await reload();
+    }
+
+    const remove = () => confirmClearTargeting(flag, reload, {
+      title: `Remove the split for ${flag.key}?`,
+      detail: "Targeting is cleared and everyone gets the default variant. The audit history keeps a copy.",
+      ok: "Remove",
+    }, "Split removed.");
+
+    update();
+    return h("form", { class: "stack rollout", onsubmit: save },
+      h("h3", {}, "Percentage split"),
+      h("div", { class: "split-weights" },
+        names.map((name, i) => h("label", {}, h("code", {}, name), h("span", { class: "rollout-inputs" }, inputs[i], h("span", {}, "%"))))),
+      sum,
+      h("p", { class: "small muted" }, "Users are bucketed by their targeting key, so each user consistently gets the same variant."),
+      message,
+      h("div", { class: "actions" },
+        saveButton,
+        h("button", { type: "button", disabled: flag.archived, title: locked, onclick: even }, "Even split"),
+        current.length > 0 && h("button", { type: "button", class: "danger", disabled: flag.archived, title: locked, onclick: remove }, "Remove split…")));
   }
 
   const clear = () => confirmClearTargeting(flag, reload, {
@@ -578,7 +694,7 @@ function tryItCard(flag, draft) {
 
   function describeResult(r) {
     return h("dl", {},
-      h("dt", {}, "Value"), h("dd", {}, h("code", {}, JSON.stringify(r.value))),
+      h("dt", {}, "Value"), h("dd", {}, valueView(r.value)),
       h("dt", {}, "Variant"), h("dd", {}, r.variant != null ? h("code", {}, r.variant) : h("span", { class: "muted" }, "none")),
       h("dt", {}, "Reason"), h("dd", {}, r.reason),
       r.errorCode && [h("dt", {}, "Error"), h("dd", { class: "error-text" }, r.errorCode, r.errorMessage ? `: ${r.errorMessage}` : "")]);
@@ -722,7 +838,7 @@ async function renderDetail(key) {
         h("tbody", {}, apps.map((a) => h("tr", {},
           h("td", {}, a.applicationName),
           h("td", {}, time(a.lastEvaluatedAt)),
-          h("td", {}, h("code", {}, a.observedDefault === null || a.observedDefault === undefined ? "—" : JSON.stringify(a.observedDefault))))))),
+          h("td", {}, valueView(a.observedDefault, "—")))))),
     flag.usage?.hasDefaultMismatch && h("p", { class: "warning" }, "Applications pass different code defaults for this flag, so they disagree whenever it is archived, disabled or unavailable."));
 
   const history = h("section", { class: "card" }, h("h2", {}, "Audit history"),
@@ -741,7 +857,7 @@ async function renderDetail(key) {
   return [
     h("p", {}, h("a", { href: "#/" }, "← Flags")),
     h("div", { class: "title-row" },
-      toggle(flag, async (enabled) => {
+      isBoolean(flag) && toggle(flag, async (enabled) => {
         if (await write(() => api.setEnabled(flag.key, flag.version, enabled), reload)) {
           showNotice(`${flag.key} ${enabled ? "enabled" : "disabled"}.`, "success");
           await reload();
@@ -754,6 +870,8 @@ async function renderDetail(key) {
       `Version ${flag.version} · source ${flag.source} · created `, time(flag.createdAt), flag.createdBy ? ` by ${flag.createdBy}` : "",
       " · updated ", time(flag.updatedAt), flag.updatedBy ? ` by ${flag.updatedBy}` : ""),
     h("div", { class: "grid" }, metadata, lifecycle),
+    stateCard(flag, reload),
+    !isBoolean(flag) && variantsCard(flag, reload),
     targeting.card,
     tryItCard(flag, targeting.draft),
     usage,
@@ -761,18 +879,175 @@ async function renderDetail(key) {
   ];
 }
 
+/**
+ * The Enabled/Disabled state switch, for a flag of any type. Disabling is a kill switch: each app gets its code
+ * default (reason DISABLED); the variants, default variant and targeting are kept for when it is enabled again.
+ */
+function stateCard(flag, reload) {
+  const enabled = flag.state === "enabled";
+  const served = isBoolean(flag) ? "its on/off value and targeting" : "its default variant and targeting";
+  const confirmation = (enable) => enable
+    ? {
+      title: `Enable ${flag.key}?`,
+      detail: `Applications stop getting their code default and get this flag's value again (${served}).`,
+      ok: "Enable",
+    }
+    : {
+      title: `Disable ${flag.key}?`,
+      detail: "Every application evaluating this flag will get its own code default (reason DISABLED), whatever its variants and targeting say. You can enable it again at any time.",
+      ok: "Disable",
+    };
+  const stateSwitch = toggle({ ...flag, enabled }, async (enable) => {
+    if (!await confirmDialog(confirmation(enable))) return false;
+    if (await write(() => api.setState(flag.key, flag.version, enable ? "enabled" : "disabled"), reload)) {
+      showNotice(`${flag.key} ${enable ? "enabled" : "disabled"}.`, "success");
+      await reload();
+      return true;
+    }
+    return false;
+  });
+  stateSwitch.querySelector("input").setAttribute("aria-label", `${enabled ? "Disable" : "Enable"} ${flag.key} (state)`);
+  return h("section", { class: "card stack state" },
+    h("h2", {}, "State"),
+    h("div", { class: "title-row" }, stateSwitch, h("strong", {}, enabled ? "Enabled" : "Disabled")),
+    h("p", { class: "small muted" }, enabled
+      ? `Serving ${served}. Disable it and each app gets its code default.`
+      : "Disabled: each app gets its code default. Enable it to serve its value again."));
+}
+
+/** "enabled" / "disabled" for a flagd document state (ENABLED / DISABLED). */
+function stateName(state) {
+  return typeof state === "string" ? state.toLowerCase() : String(state);
+}
+
+/**
+ * The variants of a non-boolean flag, with the default variant marked and a default-variant picker; "Edit variants"
+ * turns it into an editor that adds, removes and changes variants (renaming is a remove plus an add) and saves them
+ * with the default variant in one write. The editor warns when the saved targeting rule mentions a removed name.
+ */
+function variantsCard(flag, reload) {
+  const card = h("section", { class: "card stack variants" });
+  const locked = flag.archived ? ARCHIVED_LOCKED : undefined;
+  const saved = flag.variants ?? {};
+  const noDefault = flag.defaultVariant === null || flag.defaultVariant === undefined;
+
+  function show() {
+    const names = Object.keys(saved);
+    const picker = h("select", { "aria-label": "Default variant", disabled: flag.archived, title: locked },
+      ...names.map((n) => h("option", { value: n, selected: n === flag.defaultVariant }, n)),
+      h("option", { value: "", selected: noDefault }, "(none: each app gets its code default)"));
+    const setDefault = h("button", { type: "submit", disabled: true, title: locked }, "Set default");
+    picker.addEventListener("change", () => { setDefault.disabled = flag.archived || (picker.value || null) === (flag.defaultVariant ?? null); });
+
+    async function saveDefault(e) {
+      e.preventDefault();
+      const variant = picker.value || null;
+      if (await write(() => api.setDefaultVariant(flag.key, flag.version, variant), reload)) {
+        showNotice(variant === null ? "Default variant cleared." : `Default variant set to ${variant}.`, "success");
+        await reload();
+      }
+    }
+
+    card.replaceChildren(...[
+      h("h2", {}, "Variants"),
+      h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Value"))),
+        h("tbody", {}, names.map((name) => h("tr", {},
+          h("td", {}, h("code", {}, name), name === flag.defaultVariant && [" ", h("span", { class: "badge targeting", title: "Served when no targeting rule matches" }, "default")]),
+          h("td", {}, valueView(saved[name])))))),
+      noDefault && h("p", { class: "small muted" }, "No default variant: when no rule matches, each app gets its code default."),
+      h("form", { class: "inline-form", onsubmit: saveDefault }, h("label", { class: "inline" }, "Default variant", picker), setDefault),
+      // A flag with mixed or no variants (written by another tool) has no type to edit its values as.
+      h("div", { class: "actions" }, h("button", { disabled: flag.archived || !flag.type, title: locked, onclick: edit }, "Edit variants")),
+    ].filter(Boolean));
+  }
+
+  function edit() {
+    const message = h("p", { role: "status", class: "small error-text", hidden: true });
+    const warning = h("p", { class: "warning", hidden: true });
+    const literals = stringLiterals(flag.targeting);
+    const rows = variantRows(() => flag.type, { initialDefault: flag.defaultVariant ?? null, onChange: warn });
+    const showError = (content) => { message.replaceChildren(...content); message.hidden = false; };
+
+    /** Warns about removed names the saved rule still mentions: it would serve an unknown variant (an error) for them. */
+    function warn() {
+      message.hidden = true;
+      const kept = new Set(rows.names());
+      const stale = Object.keys(saved).filter((name) => !kept.has(name) && literals.has(name));
+      warning.hidden = stale.length === 0;
+      warning.replaceChildren("The targeting rule mentions ",
+        ...stale.flatMap((name, i) => [i ? ", " : "", h("code", {}, name)]),
+        `, which ${stale.length === 1 ? "is" : "are"} removed here: wherever the rule returns ${stale.length === 1 ? "it" : "them"}, evaluation fails and each app gets its code default until the rule is updated. Renaming a variant is a remove plus an add.`);
+    }
+
+    async function save(e) {
+      e.preventDefault();
+      let variants;
+      try { variants = rows.value(); } catch (err) { showError([err.message]); return; }
+      const defaultVariant = rows.defaultVariant();
+      const ok = await saveInline(() => api.setVariants(flag.key, flag.version, variants, defaultVariant),
+        { button: e.submitter, showError, reload });
+      if (!ok) return;
+      showNotice("Variants saved.", "success");
+      await reload();
+    }
+
+    for (const [name, value] of Object.entries(saved)) rows.add(name, value);
+    card.replaceChildren(h("form", { class: "stack variants-editor", onsubmit: save },
+      h("h2", {}, "Variants"),
+      h("p", { class: "small muted" }, `Every value must be a ${flag.type}: a flag's type can't change. Renaming a variant is a remove plus an add.`),
+      rows.list,
+      h("div", {}, h("button", { type: "button", onclick: () => rows.add().name.focus() }, "Add variant")),
+      h("label", {}, "Default variant", rows.picker),
+      warning,
+      message,
+      h("div", { class: "actions" },
+        h("button", { type: "submit", class: "primary" }, "Save variants"),
+        h("button", { type: "button", onclick: show }, "Cancel"))));
+    warn();
+  }
+
+  show();
+  return card;
+}
+
+/** Every string literal in a JSON value (a targeting rule), for spotting variant names it mentions. */
+function stringLiterals(value, found = new Set()) {
+  if (typeof value === "string") found.add(value);
+  else if (Array.isArray(value)) value.forEach((v) => stringLiterals(v, found));
+  else if (value && typeof value === "object") Object.values(value).forEach((v) => stringLiterals(v, found));
+  return found;
+}
+
+/** Summaries of the variants added, removed and changed between two audited documents. */
+function describeVariantChanges(before, after) {
+  const was = before.variants ?? {}, now = after.variants ?? {};
+  const changes = [];
+  for (const name of Object.keys(now)) {
+    if (!Object.hasOwn(was, name)) changes.push(`variant ${name} added`);
+    else if (JSON.stringify(was[name]) !== JSON.stringify(now[name])) {
+      changes.push(`variant ${name} ${truncate(formatValue(was[name]), 24)} → ${truncate(formatValue(now[name]), 24)}`);
+    }
+  }
+  for (const name of Object.keys(was)) {
+    if (!Object.hasOwn(now, name)) changes.push(`variant ${name} removed`);
+  }
+  return changes;
+}
+
 /** A short human summary of an audit entry, with the raw documents behind a disclosure. */
 function describeChange(entry) {
   const before = entry.before, after = entry.after;
   const changes = [];
   if (before && after) {
-    if (before.defaultVariant !== after.defaultVariant) changes.push(`default ${before.defaultVariant} → ${after.defaultVariant}`);
-    if (before.state !== after.state) changes.push(`state ${before.state} → ${after.state}`);
+    changes.push(...describeVariantChanges(before, after));
+    if (before.defaultVariant !== after.defaultVariant) changes.push(`default ${before.defaultVariant ?? "none"} → ${after.defaultVariant ?? "none"}`);
+    if (before.state !== after.state) changes.push(`state ${stateName(before.state)} → ${stateName(after.state)}`);
     const bm = before.metadata ?? {}, am = after.metadata ?? {};
     if ((bm.description ?? "") !== (am.description ?? "")) changes.push("description");
     if ((bm.tags ?? "") !== (am.tags ?? "")) changes.push(`tags → ${am.tags || "none"}`);
   } else if (after) {
-    changes.push(`default ${after.defaultVariant}`);
+    changes.push(`default ${after.defaultVariant ?? "none"}`);
   }
   // A purge has no "after"; that is not a targeting removal.
   const targetingChange = after && describeTargetingChange(before, after);
@@ -804,12 +1079,13 @@ function restoreRuleActions(flag, entry, reload) {
 function restoreRuleButton(flag, entry, label, rule, reload) {
   const side = `${label.toLowerCase()} the change to version ${entry.version}`;
   async function restore() {
-    const percentage = rolloutPercentage(rule);
+    const buckets = splitBuckets(rule, flag.variants), percentage = onPercentage(buckets, flag.variants);
+    const shape = buckets === null ? "" : percentage === null ? ` (split ${splitWeights(buckets)})` : ` (rollout ${percentage}%)`;
     const ok = await confirmDialog({
       title: `Restore this rule on ${flag.key}?`,
       detail: rule === null
         ? `The flag had no targeting ${side}, so the current rule is removed and everyone gets the default variant.`
-        : `The current rule is replaced by the one in place ${side}${percentage === null ? "" : ` (rollout ${percentage}%)`}. The audit history keeps a copy of the current rule.`,
+        : `The current rule is replaced by the one in place ${side}${shape}. The audit history keeps a copy of the current rule.`,
       ok: "Restore",
     });
     if (!ok) return;
@@ -841,30 +1117,142 @@ function sameRule(a, b) {
 }
 
 /**
- * The percentage N of a simple rollout, exactly {"fractional": [["on", N], ["off", 100 - N]]} with an
- * integral N (JSON 25.0 parses to 25, so it counts, as on the server), else null. Mirrors the server's
- * RolloutShape (which fills `flag.rollout`); audit documents carry no `rollout`, so the history needs this
- * client-side copy. The shapes both must agree on: tests/Flagon.Tests.Support/RolloutShapes.cs.
+ * The buckets ([{ variant, percentage }], in rule order) of a canonical split, exactly
+ * {"fractional": [[v1, w1], …, [vn, wn]]} with n ≥ 2, literal distinct names defined in `variants`, and integral
+ * weights from 0 to 100 summing to 100 (JSON 25.0 parses to 25, so it counts, as on the server), else null. Mirrors
+ * the server's RolloutShape (which fills `flag.rollout`); audit documents carry no `rollout`, so the history needs
+ * this client-side copy. The shapes both must agree on: tests/Flagon.Tests.Support/RolloutShapes.cs.
  */
-function rolloutPercentage(rule) {
+function splitBuckets(rule, variants) {
   if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
   const keys = Object.keys(rule);
-  const buckets = rule.fractional;
-  if (keys.length !== 1 || keys[0] !== "fractional" || !Array.isArray(buckets) || buckets.length !== 2) return null;
-  const [on, off] = buckets;
-  if (!Array.isArray(on) || !Array.isArray(off) || on.length !== 2 || off.length !== 2) return null;
-  if (on[0] !== "on" || off[0] !== "off" || !Number.isInteger(on[1]) || !Number.isInteger(off[1])) return null;
-  return on[1] >= 0 && on[1] <= 100 && on[1] + off[1] === 100 ? on[1] : null;
+  const raw = rule.fractional;
+  if (keys.length !== 1 || keys[0] !== "fractional" || !Array.isArray(raw) || raw.length < 2) return null;
+  const defined = variants ?? {};
+  const buckets = [];
+  for (const bucket of raw) {
+    if (!Array.isArray(bucket) || bucket.length !== 2) return null;
+    const [variant, percentage] = bucket;
+    if (typeof variant !== "string" || !Object.hasOwn(defined, variant) || buckets.some((b) => b.variant === variant)) return null;
+    if (!Number.isInteger(percentage) || percentage < 0 || percentage > 100) return null;
+    buckets.push({ variant, percentage });
+  }
+  return buckets.reduce((sum, b) => sum + b.percentage, 0) === 100 ? buckets : null;
 }
 
-/** "targeting added/removed/changed", or "rollout N% → M%" between two simple rollouts; null when unchanged. */
+/**
+ * The boolean rollout percentage N when `variants` are a boolean flag's (every value true or false) and `buckets` are
+ * exactly [on N, off 100 - N], else null (the server's `rollout.percentage`): a string flag's on/off split is a split.
+ */
+function onPercentage(buckets, variants) {
+  const values = Object.values(variants ?? {});
+  const booleanFlag = values.length > 0 && values.every((v) => typeof v === "boolean");
+  return booleanFlag && buckets?.length === 2 && buckets[0].variant === "on" && buckets[1].variant === "off" ? buckets[0].percentage : null;
+}
+
+/** "34/33/33": a split's weights in rule order. */
+function splitWeights(buckets) {
+  return buckets.map((b) => b.percentage).join("/");
+}
+
+/**
+ * "targeting added/removed/changed", "rollout N% → M%" between two boolean rollouts, or "split 50/50 → 34/33/33"
+ * between two other splits; null when unchanged.
+ */
 function describeTargetingChange(before, after) {
   const was = ruleOf(before), now = ruleOf(after);
   if (sameRule(was, now)) return null;
   if (was === null) return "targeting added";
   if (now === null) return "targeting removed";
-  const from = rolloutPercentage(was), to = rolloutPercentage(now);
-  return from !== null && to !== null ? `rollout ${from}% → ${to}%` : "targeting changed";
+  const from = splitBuckets(was, before.variants), to = splitBuckets(now, after.variants);
+  if (from === null || to === null) return "targeting changed";
+  const fromOn = onPercentage(from, before.variants), toOn = onPercentage(to, after.variants);
+  if (fromOn !== null && toOn !== null) return `rollout ${fromOn}% → ${toOn}%`;
+  return `split ${splitWeights(from)} → ${splitWeights(to)}`;
+}
+
+// ---------------------------------------------------------------- variant rows
+
+/**
+ * Editable variant rows (a name and a typed value input each, removable) with a default-variant picker, shared by the
+ * create form and the flag page's variants card. Values are read as `typeOf()`: text for strings, a number box for
+ * numbers, a JSON textarea for objects. The picker keeps the admin's pick while it still exists; until they pick (or once
+ * it is gone) the first variant is the default. An `initialDefault` (null for none) counts as picked.
+ * Returns `list` and `picker` to place, `add(name, value)` (returns the row), `retype()` after the type changes, `count`,
+ * `names()`, `value()` (`{ name: value }`; throws Error naming the variant whose value can't be read) and
+ * `defaultVariant()` (null for none); `onChange` is called after every edit.
+ */
+function variantRows(typeOf, { initialDefault, onChange } = {}) {
+  const rows = [];
+  const list = h("div", { class: "stack variant-rows" });
+  const picker = h("select", { "aria-label": "Default variant" });
+  let choice = initialDefault === undefined ? undefined : (initialDefault ?? ""); // undefined until picked; "" is "none"
+  const changed = () => { drawDefaults(); onChange?.(); };
+  picker.addEventListener("change", () => { choice = picker.value; onChange?.(); });
+
+  /** A value as input text: strings as they are, numbers as digits, objects as indented JSON. */
+  function valueText(value) {
+    if (value === undefined) return "";
+    return typeof value === "string" ? value : JSON.stringify(value, null, typeof value === "object" ? 2 : undefined);
+  }
+
+  function valueInput(text = "") {
+    const common = { "aria-label": "Variant value", spellcheck: "false", autocomplete: "off", oninput: () => onChange?.() };
+    if (typeOf() === "number") return h("input", { ...common, type: "number", step: "any", required: true, value: text });
+    if (typeOf() === "object") return h("textarea", { ...common, class: "code", rows: 3, placeholder: '{ "rows": 3 }' }, text || "{}");
+    return h("input", { ...common, value: text, placeholder: "value" });
+  }
+
+  function add(name = "", value = undefined) {
+    const row = { name: h("input", { value: name, placeholder: "name", "aria-label": "Variant name", maxlength: 128, required: true,
+      spellcheck: "false", autocomplete: "off", oninput: changed }) };
+    row.value = valueInput(valueText(value));
+    row.el = h("div", { class: "variant-row" }, row.name, row.value,
+      h("button", { type: "button", title: "Remove variant", "aria-label": "Remove variant", onclick: () => {
+        rows.splice(rows.indexOf(row), 1);
+        row.el.remove();
+        changed();
+      } }, "×"));
+    rows.push(row);
+    list.append(row.el);
+    changed();
+    return row;
+  }
+
+  function retype() {
+    for (const row of rows) { const next = valueInput(); row.value.replaceWith(next); row.value = next; }
+  }
+
+  const names = () => [...new Set(rows.map((r) => r.name.value).filter(Boolean))];
+
+  function drawDefaults() {
+    const all = names();
+    const selected = choice === "" || all.includes(choice) ? choice : (all[0] ?? "");
+    picker.replaceChildren(
+      ...all.map((n) => h("option", { value: n, selected: n === selected }, n)),
+      h("option", { value: "", selected: selected === "" }, "(none: each app gets its code default)"));
+  }
+
+  function value() {
+    const variants = {};
+    for (const r of rows) {
+      const name = r.name.value;
+      if (Object.hasOwn(variants, name)) throw new Error(`Variant '${name}' is defined more than once.`);
+      if (typeOf() === "number") {
+        const n = Number(r.value.value);
+        if (r.value.value.trim() === "" || !Number.isFinite(n)) throw new Error(`Variant '${name}' needs a number.`);
+        variants[name] = n;
+      } else if (typeOf() === "object") {
+        try { variants[name] = JSON.parse(r.value.value); } catch (e) { throw new Error(`Variant '${name}' is not valid JSON: ${e.message}`); }
+      } else {
+        variants[name] = r.value.value;
+      }
+    }
+    return variants;
+  }
+
+  drawDefaults();
+  return { list, picker, add, retype, names, value, defaultVariant: () => picker.value || null, get count() { return rows.length; } };
 }
 
 // ---------------------------------------------------------------- create
@@ -884,6 +1272,30 @@ async function renderCreate() {
   const description = h("textarea", { rows: 2, maxlength: 2000 });
   const tags = h("input", { placeholder: "comma, separated, tags", spellcheck: "false" });
   const submit = h("button", { type: "submit", class: "primary" }, "Create flag");
+
+  // Type: boolean flags are on/off (the Enabled box); other types get named variants and a default-variant picker.
+  const type = h("select", { onchange: () => { rows.retype(); drawType(); } },
+    [["boolean", "Boolean (on/off)"], ["string", "String"], ["number", "Number"], ["object", "Object (JSON)"]]
+      .map(([value, label]) => h("option", { value }, label)));
+  const enabledLabel = h("label", { class: "inline" }, enabled, "Enabled");
+  // Values are read as the selected type; until the admin picks a default variant, the first one is it.
+  const rows = variantRows(() => type.value);
+
+  const variantsSection = h("fieldset", { class: "stack variants-editor" },
+    h("legend", {}, "Variants"),
+    h("p", { class: "small muted" }, "Named values the flag can serve. All share the flag's type, which can't change after creation."),
+    rows.list,
+    h("div", {}, h("button", { type: "button", onclick: () => rows.add().name.focus() }, "Add variant")),
+    h("label", {}, "Default variant", rows.picker),
+    h("p", { class: "small muted" }, "Served when no targeting rule matches."));
+
+  function drawType() {
+    const typed = type.value !== "boolean";
+    enabledLabel.hidden = typed;
+    variantsSection.hidden = !typed;
+    variantsSection.disabled = !typed; // hidden rows must not block submitting a boolean flag
+    if (typed && rows.count === 0) rows.add("default");
+  }
 
   function check() {
     const problem = key.value ? keyProblem(key.value) : null;
@@ -910,13 +1322,19 @@ async function renderCreate() {
       e.preventDefault();
       const problem = keyProblem(key.value);
       if (problem) { showNotice(problem); return; }
+      const typed = type.value !== "boolean";
+      let variants;
+      try { variants = typed ? rows.value() : undefined; } catch (err) { showNotice(err.message); return; }
       submit.disabled = true;
       try {
         const created = await api.createFlag({
           key: key.value,
-          enabled: enabled.checked,
+          enabled: typed ? undefined : enabled.checked,
           description: description.value.trim() || undefined,
           tags: parseTags(tags.value),
+          // Object values are checked server-side (they must be JSON objects); its problem details show as the notice.
+          variants: typed ? variants : undefined,
+          defaultVariant: typed ? rows.defaultVariant() : undefined,
         });
         showNotice(`${created.key} created.`, "success");
         location.hash = flagHref(created.key);
@@ -927,11 +1345,14 @@ async function renderCreate() {
     },
   },
   h("label", {}, "Key", key), keyHelp, duplicateWarning,
-  h("label", { class: "inline" }, enabled, "Enabled"),
+  h("label", {}, "Type", type),
+  enabledLabel,
+  variantsSection,
   h("label", {}, "Description", description),
   h("label", {}, "Tags", tags),
   h("div", { class: "actions" }, submit, h("a", { href: "#/", class: "button" }, "Cancel")));
 
+  drawType();
   setTimeout(() => key.focus());
   return [h("p", {}, h("a", { href: "#/" }, "← Flags")), h("h1", {}, "New flag"), form];
 }

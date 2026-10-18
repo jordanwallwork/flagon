@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Flagon.Storage;
 using Flagon.Tests.Support;
 using Microsoft.AspNetCore.Builder;
 
@@ -213,9 +214,17 @@ public class ManagementApiTargetingTests
         Assert.Equal(archived, await host.Admin.GetAsync("retired"));
     }
 
+    private static string[] Buckets(JsonElement rollout) => rollout.GetProperty("buckets").EnumerateArray()
+        .Select(b => $"{b.GetProperty("variant").GetString()}={b.GetProperty("percentage").GetInt32()}").ToArray();
+
+    private static Task<FlagRecord> CreateAsync(FlagonTestHost host, string key, string? variants, string targeting) =>
+        host.Admin.CreateAsync(new CreateFlagRequest(key, Targeting: Json(targeting),
+            Variants: variants is null ? null : Json(variants).EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal),
+            DefaultVariant: variants is null ? null : Json(variants).EnumerateObject().First().Name));
+
     [Theory]
     [MemberData(nameof(RolloutShapes.Rollouts), MemberType = typeof(RolloutShapes))]
-    public async Task A_simple_percentage_rollout_is_summarised_as_its_percentage(string targeting, int percentage)
+    public async Task A_simple_percentage_rollout_is_summarised_as_its_percentage_and_on_off_buckets(string targeting, int percentage)
     {
         await using var host = await StartAsync();
         await host.Admin.CreateAsync(new CreateFlagRequest("rollout", Targeting: Json(targeting)));
@@ -225,14 +234,30 @@ public class ManagementApiTargetingTests
 
         Assert.Equal(percentage, flag.GetProperty("rollout").GetProperty("percentage").GetInt32());
         Assert.Equal(percentage, listed.GetProperty("rollout").GetProperty("percentage").GetInt32());
+        Assert.Equal([$"on={percentage}", $"off={100 - percentage}"], Buckets(flag.GetProperty("rollout")));
     }
 
     [Theory]
-    [MemberData(nameof(RolloutShapes.NotRollouts), MemberType = typeof(RolloutShapes))]
-    public async Task Targeting_that_is_not_exactly_a_simple_rollout_has_no_rollout_summary(string targeting)
+    [MemberData(nameof(RolloutShapes.Splits), MemberType = typeof(RolloutShapes))]
+    public async Task A_canonical_split_is_summarised_as_its_buckets_without_a_percentage(string? variants, string targeting, string[] buckets)
     {
         await using var host = await StartAsync();
-        await host.Admin.CreateAsync(new CreateFlagRequest("targeted", Targeting: Json(targeting)));
+        await CreateAsync(host, "split", variants, targeting);
+
+        var flag = await host.CreateClient().GetFromJsonAsync<JsonElement>("/flagon/api/flags/split");
+        var listed = Assert.Single(await host.CreateClient().GetFromJsonAsync<JsonElement[]>("/flagon/api/flags") ?? []);
+
+        Assert.Equal(buckets, Buckets(flag.GetProperty("rollout")));
+        Assert.Equal(buckets, Buckets(listed.GetProperty("rollout")));
+        Assert.False(flag.GetProperty("rollout").TryGetProperty("percentage", out _));
+    }
+
+    [Theory]
+    [MemberData(nameof(RolloutShapes.NotSplits), MemberType = typeof(RolloutShapes))]
+    public async Task Targeting_that_is_not_exactly_a_canonical_split_has_no_rollout_summary(string? variants, string targeting)
+    {
+        await using var host = await StartAsync();
+        await CreateAsync(host, "targeted", variants, targeting);
 
         var flag = await host.CreateClient().GetFromJsonAsync<JsonElement>("/flagon/api/flags/targeted");
 

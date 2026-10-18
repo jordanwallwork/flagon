@@ -16,6 +16,25 @@ public enum FlagState
     Disabled,
 }
 
+/// <summary>
+/// The type of a flag's values, derived from its variants as flagd does (<c>booleanFlag</c>, <c>stringFlag</c>,
+/// <c>numberFlag</c>, <c>objectFlag</c>). It is not stored: see <see cref="FlagDocument.Type"/>.
+/// </summary>
+public enum FlagType
+{
+    /// <summary>Every variant is <c>true</c> or <c>false</c>.</summary>
+    Boolean,
+
+    /// <summary>Every variant is a JSON string.</summary>
+    String,
+
+    /// <summary>Every variant is a JSON number, integral or fractional (flagd has one number type).</summary>
+    Number,
+
+    /// <summary>Every variant is a JSON object.</summary>
+    Object,
+}
+
 /// <summary>How a flag came to exist.</summary>
 public enum FlagSource
 {
@@ -86,9 +105,29 @@ public sealed record FlagDocument(
         [OffVariant] = JsonSerializer.SerializeToElement(false),
     }.ToFrozenDictionary(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The flag's type, derived from its variant values. Null when it has no variants, or when they do not share one
+    /// flagd type (mixed types, arrays or nulls), which only documents written by other tools can have.
+    /// </summary>
+    public FlagType? Type => Internal.FlagVariants.CommonType(Variants);
+
     /// <summary>Creates an <see cref="FlagState.Enabled"/> boolean flag serving <paramref name="enabled"/>.</summary>
     public static FlagDocument Boolean(bool enabled, FlagMetadata? metadata = null) =>
         new(FlagState.Enabled, BooleanVariants, enabled ? OnVariant : OffVariant, metadata ?? new FlagMetadata());
+
+    /// <summary>
+    /// An <see cref="FlagState.Enabled"/> flag serving the single value <paramref name="value"/>: a boolean is the usual
+    /// on/off flag (see <see cref="Boolean"/>); any other value is the one variant <c>default</c>, its default variant.
+    /// Used for a flag auto-created from a caller's default or defined in code with one value; the value is not checked.
+    /// </summary>
+    internal static FlagDocument SingleValue(JsonElement value, FlagMetadata? metadata = null) =>
+        value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? Boolean(value.GetBoolean(), metadata)
+            : new(
+                FlagState.Enabled,
+                new Dictionary<string, JsonElement>(StringComparer.Ordinal) { [Internal.FlagVariants.SingleVariant] = value }.ToFrozenDictionary(StringComparer.Ordinal),
+                Internal.FlagVariants.SingleVariant,
+                metadata ?? new FlagMetadata());
 }
 
 /// <summary>A flag as held by a store: its key, document and the store-wide change version of its last write.</summary>

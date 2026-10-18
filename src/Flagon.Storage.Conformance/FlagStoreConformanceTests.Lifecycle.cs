@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace Flagon.Storage.Conformance;
@@ -274,7 +276,38 @@ public abstract partial class FlagStoreConformanceTests
         Assert.Equal("second life", (await store.GetAsync("old"))!.Document.Metadata.Description);
     });
 
-    /// <summary>Asserts two documents have the same flagd JSON.</summary>
+    /// <summary>Conformance: a flag document of any flag type round-trips with the same variants and targeting.</summary>
+    [Theory]
+    [InlineData("""{"light":"light","dark":"dark"}""", "dark")]
+    [InlineData("""{"small":10,"large":250}""", "small")]
+    [InlineData("""{"half":0.5,"tenth":0.1}""", "half")]
+    [InlineData("""{"grid":{"columns":3,"title":"Pics","tags":["a","b"],"nested":{"z":1,"a":true}},"list":{"columns":1}}""", "grid")]
+    public Task Typed_flag_documents_round_trip(string variants, string defaultVariant) => WithStoreAsync(async store =>
+    {
+        using var parsed = JsonDocument.Parse(variants);
+        var document = new FlagDocument(
+            FlagState.Disabled,
+            parsed.RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal),
+            defaultVariant,
+            new FlagMetadata(Description: "typed", Tags: ["conformance"], Source: FlagSource.Code, CreatedAt: Epoch, UpdatedAt: Epoch));
+
+        var created = await CreateAsync(store, "typed", document);
+        AssertSameDocument(document, created.Document);
+
+        var read = (await store.GetAsync("typed"))!.Document;
+        AssertSameDocument(document, read);
+        Assert.Equal(document.Type, read.Type);
+        AssertSameDocument(document, Assert.Single(await store.LoadAllAsync()).Document);
+    });
+
+    /// <summary>
+    /// Asserts two documents have the same flagd JSON, compared semantically: a store may reorder object keys (as
+    /// Postgres <c>jsonb</c> does) or reformat whitespace.
+    /// </summary>
     protected static void AssertSameDocument(FlagDocument expected, FlagDocument actual) =>
-        Assert.Equal(FlagdJson.Serialize(expected), FlagdJson.Serialize(actual));
+        AssertSameJson(FlagdJson.Serialize(expected), FlagdJson.Serialize(actual));
+
+    /// <summary>Asserts two JSON texts are semantically equal (object key order and whitespace are ignored).</summary>
+    protected static void AssertSameJson(string expected, string actual) =>
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(expected), JsonNode.Parse(actual)), $"Expected JSON {expected} but got {actual}.");
 }

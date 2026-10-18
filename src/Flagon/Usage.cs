@@ -17,12 +17,13 @@ public sealed record FlagUsageReport(string Key, IReadOnlyList<FlagUsage> Applic
 
     /// <summary>
     /// True when applications have supplied different code defaults for this key, meaning they would behave differently
-    /// if the flag were missing, archived or disabled. Applications with no observed default are ignored.
+    /// if the flag were missing, archived or disabled. Defaults are compared by JSON content (so a different type is a
+    /// mismatch, while object key order and number formatting are not). Applications with no observed default are ignored.
     /// </summary>
     public bool HasDefaultMismatch =>
         Applications
             .Where(a => a.ObservedDefault is { } d && d.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
-            .Select(a => a.ObservedDefault!.Value.GetRawText())
+            .Select(a => Internal.CanonicalJson.ToText(a.ObservedDefault!.Value))
             .Distinct(StringComparer.Ordinal)
             .Skip(1)
             .Any();
