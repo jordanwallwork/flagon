@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Flagon;
 
 /// <summary>Why an evaluation returned its value. Aligned with OpenFeature's resolution reasons.</summary>
@@ -138,6 +140,86 @@ public interface IFlagon
 
     /// <summary>Async counterpart of <see cref="GetBooleanDetails"/>. Completes synchronously.</summary>
     ValueTask<FlagEvaluationDetails<bool>> GetBooleanDetailsAsync(string key, bool defaultValue = false, EvaluationContext? context = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the string flag <paramref name="key"/>'s value, or <paramref name="defaultValue"/> if it cannot be evaluated
+    /// (missing, archived, disabled, no variant served, an error, or a served value that is not a string).
+    /// </summary>
+    string GetString(string key, string defaultValue, EvaluationContext? context = null);
+
+    /// <summary>Async counterpart of <see cref="GetString"/>. Completes synchronously.</summary>
+    ValueTask<string> GetStringAsync(string key, string defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates the string flag <paramref name="key"/> and explains the result. A served variant that is not a string
+    /// returns <paramref name="defaultValue"/> with <see cref="EvaluationReason.Error"/> and <see cref="ErrorCode.TypeMismatch"/>.
+    /// </summary>
+    FlagEvaluationDetails<string> GetStringDetails(string key, string defaultValue, EvaluationContext? context = null);
+
+    /// <summary>Async counterpart of <see cref="GetStringDetails"/>. Completes synchronously.</summary>
+    ValueTask<FlagEvaluationDetails<string>> GetStringDetailsAsync(string key, string defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the number flag <paramref name="key"/>'s value as an <see cref="int"/>, or <paramref name="defaultValue"/>
+    /// if it cannot be evaluated. Only an integral value within <see cref="int"/> range is served: a fractional or
+    /// out-of-range number is a type mismatch, never truncated.
+    /// </summary>
+    int GetInt(string key, int defaultValue, EvaluationContext? context = null);
+
+    /// <summary>Async counterpart of <see cref="GetInt"/>. Completes synchronously.</summary>
+    ValueTask<int> GetIntAsync(string key, int defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates the number flag <paramref name="key"/> as an <see cref="int"/> and explains the result. A served variant
+    /// that is not an integral number within <see cref="int"/> range returns <paramref name="defaultValue"/> with
+    /// <see cref="EvaluationReason.Error"/> and <see cref="ErrorCode.TypeMismatch"/>.
+    /// </summary>
+    FlagEvaluationDetails<int> GetIntDetails(string key, int defaultValue, EvaluationContext? context = null);
+
+    /// <summary>Async counterpart of <see cref="GetIntDetails"/>. Completes synchronously.</summary>
+    ValueTask<FlagEvaluationDetails<int>> GetIntDetailsAsync(string key, int defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the number flag <paramref name="key"/>'s value as a <see cref="double"/> (integral or fractional), or
+    /// <paramref name="defaultValue"/> if it cannot be evaluated.
+    /// </summary>
+    double GetDouble(string key, double defaultValue, EvaluationContext? context = null);
+
+    /// <summary>Async counterpart of <see cref="GetDouble"/>. Completes synchronously.</summary>
+    ValueTask<double> GetDoubleAsync(string key, double defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates the number flag <paramref name="key"/> as a <see cref="double"/> and explains the result. A served
+    /// variant that is not a number returns <paramref name="defaultValue"/> with <see cref="EvaluationReason.Error"/> and
+    /// <see cref="ErrorCode.TypeMismatch"/>.
+    /// </summary>
+    FlagEvaluationDetails<double> GetDoubleDetails(string key, double defaultValue, EvaluationContext? context = null);
+
+    /// <summary>Async counterpart of <see cref="GetDoubleDetails"/>. Completes synchronously.</summary>
+    ValueTask<FlagEvaluationDetails<double>> GetDoubleDetailsAsync(string key, double defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the object flag <paramref name="key"/>'s value deserialised as <typeparamref name="T"/> with
+    /// <paramref name="options"/> (<see cref="JsonSerializer"/>'s defaults when null), or <paramref name="defaultValue"/>
+    /// if it cannot be evaluated or deserialised. With <typeparamref name="T"/> <see cref="JsonElement"/> (inferred from a
+    /// <see cref="JsonElement"/> default, e.g. <c>GetObject("layout", fallbackJson)</c>) the served JSON object is
+    /// returned as is.
+    /// </summary>
+    T GetObject<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null);
+
+    /// <summary>Async counterpart of <see cref="GetObject{T}"/>. Completes synchronously.</summary>
+    ValueTask<T> GetObjectAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates the object flag <paramref name="key"/>, deserialises it as <typeparamref name="T"/> (as
+    /// <see cref="GetObject{T}"/> does) and explains the result. A served variant that is not a JSON object, or that fails
+    /// to deserialise, returns
+    /// <paramref name="defaultValue"/> with <see cref="EvaluationReason.Error"/> and <see cref="ErrorCode.TypeMismatch"/>.
+    /// </summary>
+    FlagEvaluationDetails<T> GetObjectDetails<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null);
+
+    /// <summary>Async counterpart of <see cref="GetObjectDetails{T}"/>. Completes synchronously.</summary>
+    ValueTask<FlagEvaluationDetails<T>> GetObjectDetailsAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Evaluates every flag in the current snapshot (bulk evaluation, e.g. for OFREP clients), ordered by key.

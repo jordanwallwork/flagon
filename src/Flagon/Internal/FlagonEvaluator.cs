@@ -39,6 +39,69 @@ internal sealed partial class FlagonEvaluator(
         return details;
     }
 
+    public string GetString(string key, string defaultValue, EvaluationContext? context = null) =>
+        GetStringDetails(key, defaultValue, context).Value;
+
+    public ValueTask<string> GetStringAsync(string key, string defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(GetString(key, defaultValue, context));
+
+    public FlagEvaluationDetails<string> GetStringDetails(string key, string defaultValue, EvaluationContext? context = null) =>
+        Typed(Evaluate(key, context ?? ambientContext.Current).AsString(defaultValue));
+
+    public ValueTask<FlagEvaluationDetails<string>> GetStringDetailsAsync(string key, string defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(GetStringDetails(key, defaultValue, context));
+
+    public int GetInt(string key, int defaultValue, EvaluationContext? context = null) =>
+        GetIntDetails(key, defaultValue, context).Value;
+
+    public ValueTask<int> GetIntAsync(string key, int defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(GetInt(key, defaultValue, context));
+
+    public FlagEvaluationDetails<int> GetIntDetails(string key, int defaultValue, EvaluationContext? context = null) =>
+        Typed(Evaluate(key, context ?? ambientContext.Current).AsInt(defaultValue));
+
+    public ValueTask<FlagEvaluationDetails<int>> GetIntDetailsAsync(string key, int defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(GetIntDetails(key, defaultValue, context));
+
+    public double GetDouble(string key, double defaultValue, EvaluationContext? context = null) =>
+        GetDoubleDetails(key, defaultValue, context).Value;
+
+    public ValueTask<double> GetDoubleAsync(string key, double defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(GetDouble(key, defaultValue, context));
+
+    public FlagEvaluationDetails<double> GetDoubleDetails(string key, double defaultValue, EvaluationContext? context = null) =>
+        Typed(Evaluate(key, context ?? ambientContext.Current).AsDouble(defaultValue));
+
+    public ValueTask<FlagEvaluationDetails<double>> GetDoubleDetailsAsync(string key, double defaultValue, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(GetDoubleDetails(key, defaultValue, context));
+
+    public T GetObject<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null) =>
+        GetObjectDetails(key, defaultValue, context, options).Value;
+
+    public ValueTask<T> GetObjectAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(GetObject(key, defaultValue, context, options));
+
+    public FlagEvaluationDetails<T> GetObjectDetails<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null) =>
+        Typed(Evaluate(key, context ?? ambientContext.Current).AsObject(defaultValue, options));
+
+    public ValueTask<FlagEvaluationDetails<T>> GetObjectDetailsAsync<T>(string key, T defaultValue, EvaluationContext? context = null, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(GetObjectDetails(key, defaultValue, context, options));
+
+    /// <summary>
+    /// The side effects of a typed (non-boolean) getter: the missing-key warning and the evaluation metric. Usage tracking
+    /// and auto-create stay boolean-only for now.
+    /// </summary>
+    private FlagEvaluationDetails<T> Typed<T>(FlagEvaluationDetails<T> details)
+    {
+        if (details.ErrorCode == ErrorCode.FlagNotFound)
+        {
+            WarnMissingOnce(details.FlagKey);
+        }
+
+        instrumentation.RecordEvaluation(details);
+        return details;
+    }
+
     /// <summary>
     /// Evaluates <paramref name="key"/> as a boolean for a remote caller (OFREP). Unlike <see cref="GetBooleanDetails"/>, a
     /// remote evaluation is not this app's code using a flag, so it records no usage, never auto-creates or logs a missing
