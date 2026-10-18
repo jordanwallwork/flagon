@@ -49,6 +49,12 @@ Each suite runs against its own flag files, in its own store.
   bucketing generations. Flagon targets `@fractional-v3`, the generation flagd 0.18
   implements; `@fractional-v1` and `@fractional-v2` examples expect different buckets for the same inputs. The
   `Summary` test prints every excluded case and why.
+- **Excluded flag-not-found case**: `evaluator/gherkin/errors.feature:10` ("Flag not found", a String-flag
+  `missing-flag` expecting `FLAG_NOT_FOUND`) is excluded, not an expected failure. The harness stores only the suite's
+  flag files, so a key outside them has no flag to run against, and the outcome does not depend on the flag type or the
+  targeting compiler. Flagon covers it in its own tests for every typed getter
+  (`TypedEvaluationTests.Each_getter_returns_the_callers_default_for_a_missing_flag`: the caller's default, reason
+  `ERROR`, `FLAG_NOT_FOUND`). The expected-failure lists stay empty.
 - **No `defaultVariant`**: flagd allows a null or absent `defaultVariant`, and so does Flagon: when no rule applies the
   caller's default is served with reason `DEFAULT`, as the `no-default-variant` scenarios assert.
 - **Not storable**: a fixture flag that `FlagdJson` rejects is left out of the store, and its cases fail whatever the
