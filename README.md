@@ -24,6 +24,7 @@ other apps (including non-.NET ones, over [OFREP](https://openfeature.dev/specif
 | `Flagon.Ui` | Embeddable management console: `MapFlagonUi(path)` |
 | `Flagon.OpenFeature` | OpenFeature provider for the standard `IFeatureClient` API |
 | `Flagon.Storage.Conformance` | xUnit conformance suite for writing your own `IFlagStore` provider |
+| `Flagon.Testing` | `TestFlagon`: a real `IFlagon` over an in-memory store for unit tests, with one-line flag setup |
 
 ## Install
 
@@ -469,6 +470,39 @@ should drop its ETag.
   `flagon.evaluations` counter tagged by flag key, variant and reason (never by targeting key or attribute, so its
   cardinality does not grow with your users).
 - Structured logs for refresh failures, migrations, auto-creation and version conflicts.
+
+## Testing
+
+`Flagon.Testing` gives tests a real `IFlagon`: the same snapshot, targeting and evaluation as production, over an
+in-memory store. It works with any test framework and needs no host or DI.
+
+```sh
+dotnet add package Flagon.Testing
+```
+
+```csharp
+using Flagon.Testing;
+
+[Fact]
+public void Checkout_uses_the_new_flow_when_the_flag_is_on()
+{
+    using var flags = TestFlagon.Create();
+    flags.Flags.SetFlag("new-checkout", true);
+
+    var checkout = new CheckoutService(flags); // TestFlagon is an IFlagon
+
+    Assert.Equal("v2", checkout.Flow());
+}
+```
+
+- Every `Flags` write is visible to the very next evaluation (no refresh delay) and leaves no audit entry. Writes are
+  synchronous and safe inside test frameworks' synchronization contexts.
+- A key you never set returns the caller's default with reason `ERROR` and `FLAG_NOT_FOUND`, as in production.
+- Pass your app's own configure delegate (`TestFlagon.Create(MyApp.ConfigureFlagon)`) to seed the flags it `Define`s
+  and use its `ApplicationName`. Any storage choice in it (`UseSqlServerStorage`, ...) is ignored: no database is touched.
+- Test-safe defaults: auto-create and usage tracking are off, and startup fails fast. Change them with the second
+  argument, e.g. `TestFlagon.Create(testing: t => t.SeedDefinitions = false)` to start empty.
+- `flags.Admin` is the `IFlagonAdmin` over the same store, for code under test that manages flags.
 
 ## Roadmap
 
