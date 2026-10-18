@@ -214,6 +214,46 @@ public class TargetingSeamTests
     }
 
     [Fact]
+    public async Task A_compiler_that_runs_out_of_memory_is_not_swallowed_as_a_compile_failure()
+    {
+        var compiler = new FakeTargetingCompiler(new Func<JsonElement, TargetingCompilation>(_ => throw new OutOfMemoryException()));
+        await using var host = await HostAsync(compiler);
+
+        await Assert.ThrowsAsync<OutOfMemoryException>(() => host.Admin.CreateAsync(new CreateFlagRequest(
+            "targeted", Targeting: JsonDocument.Parse("""{ "fake": "rule" }""").RootElement.Clone())));
+    }
+
+    [Fact]
+    public async Task A_rule_failure_on_a_superseded_snapshot_is_not_warned_about_again()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        CompiledRule rule = (in TargetingContext context) =>
+        {
+            if (context.TryGetValue("block", out _))
+            {
+                entered.Set();
+                release.Wait();
+            }
+
+            throw new InvalidOperationException("boom");
+        };
+        var compiler = new FakeTargetingCompiler(_ => rule);
+        await using var host = await HostAsync(compiler, ("targeted", TargetedFlag));
+        var late = Task.Run(() => host.Flagon.GetBooleanDetails("targeted", false,
+            new EvaluationContext(null, new Dictionary<string, object?> { ["block"] = true })));
+        entered.Wait();
+
+        await host.Admin.CreateAsync(new CreateFlagRequest("another")); // new snapshot version
+        host.Flagon.GetBooleanDetails("targeted"); // warns for the new version
+        release.Set();
+        Assert.Equal(ErrorCode.ParseError, (await late).ErrorCode); // evaluated on the old snapshot, finished late
+        host.Flagon.GetBooleanDetails("targeted");
+
+        Assert.Single(RuleFailureWarnings(host));
+    }
+
+    [Fact]
     public async Task Empty_targeting_is_no_targeting_and_serves_the_default_variant_with_reason_static()
     {
         var compiler = new FakeTargetingCompiler(_ => (in TargetingContext context) => "on");

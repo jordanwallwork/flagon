@@ -156,7 +156,7 @@ internal sealed partial class FlagonEvaluator(
         {
             matched = rule(new TargetingContext(key, context, time.GetUtcNow().ToUnixTimeSeconds()));
         }
-        catch (Exception ex) when (!IsFatal(ex))
+        catch (Exception ex) when (!TargetingRules.IsFatal(ex))
         {
             // flagd reports a JsonLogic failure while applying the rule (e.g. cat on a bool) as PARSE_ERROR.
             WarnRuleFailedOnce(key, snapshotVersion, ex);
@@ -181,12 +181,18 @@ internal sealed partial class FlagonEvaluator(
         return null;
     }
 
-    /// <summary>Failures that leave the process in no state to keep evaluating: these propagate rather than become PARSE_ERROR.</summary>
-    private static bool IsFatal(Exception ex) => ex is OutOfMemoryException or StackOverflowException or AccessViolationException;
-
-    /// <summary>Warns that <paramref name="key"/>'s rule threw, once per flag per snapshot version (as compile failures are).</summary>
+    /// <summary>
+    /// Warns that <paramref name="key"/>'s rule threw, once per flag per snapshot version (as compile failures are). An
+    /// evaluation that finishes after its snapshot was replaced is not warned about: the current snapshot's own
+    /// evaluations report it, and a late one could otherwise move the claim back to an old version and re-log.
+    /// </summary>
     private void WarnRuleFailedOnce(string key, long snapshotVersion, Exception exception)
     {
+        if (snapshots.Current.Version != snapshotVersion)
+        {
+            return;
+        }
+
         // Lock-free claim of (key, version): exactly one concurrent caller wins and logs.
         while (true)
         {

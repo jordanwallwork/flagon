@@ -25,11 +25,17 @@ internal static class TargetingRules
         {
             return compiler.Compile(key, targeting) ?? TargetingCompilation.Failure("the targeting compiler returned no result");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsFatal(ex))
         {
             return TargetingCompilation.Failure(ex.Message);
         }
     }
+
+    /// <summary>
+    /// Failures that leave the process in no state to carry on: these propagate rather than becoming a broken rule or a
+    /// PARSE_ERROR, whether a rule is being compiled or run.
+    /// </summary>
+    public static bool IsFatal(Exception ex) => ex is OutOfMemoryException or StackOverflowException or AccessViolationException;
 
     /// <summary>
     /// Validates <paramref name="targeting"/> for a write with <paramref name="compiler"/> and returns what to store:
