@@ -123,3 +123,8 @@ dialog label { display: flex; flex-direction: column; gap: .3rem; }
   max-width: none; max-height: 24rem; overflow: auto; }
 textarea.code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; tab-size: 2; }
 .restore-rule { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .3rem; }
+.targeting form.rollout { padding: .75rem; border: 1px solid var(--border); border-radius: 6px; }
+.targeting form.rollout h3 { margin: 0; font-size: 1rem; }
+.rollout-inputs { display: flex; align-items: center; gap: .5rem; }
+.rollout-inputs input[type="range"] { flex: 1; accent-color: var(--accent); }
+.rollout-inputs input.percent { width: 4.5rem; }
