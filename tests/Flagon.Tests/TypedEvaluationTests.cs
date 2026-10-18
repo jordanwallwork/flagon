@@ -21,6 +21,45 @@ public class TypedEvaluationTests
     private static string Static(string variantsJson, string defaultVariant) =>
         $$"""{ "state": "ENABLED", "variants": {{variantsJson}}, "defaultVariant": "{{defaultVariant}}" }""";
 
+    /// <summary>One <see cref="FlagEvaluationDetails{T}"/> of a bool or int on 64-bit: the static flag's 56 B in ADR-0001.</summary>
+    private const long OneDetailsRecord = 56;
+
+    [Theory]
+    [InlineData("IsEnabled", "checkout")]
+    [InlineData("GetBooleanDetails", "checkout")]
+    [InlineData("GetIntDetails", "page-size")]
+    [InlineData("GetInt", "page-size")]
+    [InlineData("IsEnabled", "gold-checkout")]
+    [InlineData("GetBooleanDetails", "gold-checkout")]
+    [InlineData("GetIntDetails", "gold-page-size")]
+    public async Task An_evaluation_allocates_at_most_its_details_record_with_or_without_a_rule(string getter, string key)
+    {
+        const string Gold = """{ "if": [{ "==": [{ "var": "tier" }, "gold"] }, "large", "small"] }""";
+        await using var host = await HostAsync(
+            ("checkout", Static("""{ "on": true, "off": false }""", "on")),
+            ("gold-checkout", """{ "state": "ENABLED", "variants": { "on": true, "off": false }, "defaultVariant": "off", "targeting": { "if": [{ "==": [{ "var": "tier" }, "gold"] }, "on", "off"] } }"""),
+            ("page-size", Static("""{ "small": 10, "large": 100 }""", "large")),
+            ("gold-page-size", $$"""{ "state": "ENABLED", "variants": { "small": 10, "large": 100 }, "defaultVariant": "small", "targeting": {{Gold}} }"""));
+        var context = new EvaluationContext("user-1", new Dictionary<string, object?> { ["tier"] = "gold" });
+        Action evaluate = getter switch
+        {
+            "IsEnabled" => () => host.Flagon.IsEnabled(key, false, context),
+            "GetBooleanDetails" => () => host.Flagon.GetBooleanDetails(key, false, context),
+            "GetInt" => () => host.Flagon.GetInt(key, 1, context),
+            _ => () => host.Flagon.GetIntDetails(key, 1, context),
+        };
+
+        evaluate();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 100; i++)
+        {
+            evaluate();
+        }
+
+        var perCall = (GC.GetAllocatedBytesForCurrentThread() - before) / 100.0;
+        Assert.True(perCall <= OneDetailsRecord, $"{getter}('{key}') allocated {perCall} B per call");
+    }
+
     [Fact]
     public async Task A_string_flag_serves_its_default_variant_statically()
     {

@@ -11,22 +11,22 @@ namespace Flagon.Internal;
 internal static class FlagEvaluationDetailsExtensions
 {
     /// <summary>Views an untyped result as a boolean one.</summary>
-    public static FlagEvaluationDetails<bool> AsBoolean(this FlagEvaluationDetails<JsonElement> details, bool defaultValue) =>
+    public static FlagEvaluationDetails<bool> AsBoolean(this in Resolution details, bool defaultValue) =>
         details.As(defaultValue, "a boolean", TryGetBoolean);
 
     /// <summary>Views an untyped result as a string one.</summary>
-    public static FlagEvaluationDetails<string> AsString(this FlagEvaluationDetails<JsonElement> details, string defaultValue) =>
+    public static FlagEvaluationDetails<string> AsString(this in Resolution details, string defaultValue) =>
         details.As(defaultValue, "a string", TryGetString);
 
     /// <summary>
     /// Views an untyped result as an int one. Only an integral number within <see cref="int"/> range converts (e.g.
     /// <c>10</c> or <c>1e2</c>); a fractional or out-of-range number is a type mismatch, never truncated.
     /// </summary>
-    public static FlagEvaluationDetails<int> AsInt(this FlagEvaluationDetails<JsonElement> details, int defaultValue) =>
+    public static FlagEvaluationDetails<int> AsInt(this in Resolution details, int defaultValue) =>
         details.As(defaultValue, "an integer within Int32 range", TryGetInt);
 
     /// <summary>Views an untyped result as a double one. Any (finite) number converts.</summary>
-    public static FlagEvaluationDetails<double> AsDouble(this FlagEvaluationDetails<JsonElement> details, double defaultValue) =>
+    public static FlagEvaluationDetails<double> AsDouble(this in Resolution details, double defaultValue) =>
         details.As(defaultValue, "a number", TryGetDouble);
 
     /// <summary>
@@ -34,7 +34,7 @@ internal static class FlagEvaluationDetailsExtensions
     /// <paramref name="options"/> (a <see cref="JsonElement"/> is served as is). A variant that is not an object, or
     /// fails to deserialise, is a type mismatch.
     /// </summary>
-    public static FlagEvaluationDetails<T> AsObject<T>(this FlagEvaluationDetails<JsonElement> details, T defaultValue, JsonSerializerOptions? options)
+    public static FlagEvaluationDetails<T> AsObject<T>(this in Resolution details, T defaultValue, JsonSerializerOptions? options)
     {
         if (typeof(T) == typeof(JsonElement))
         {
@@ -50,7 +50,7 @@ internal static class FlagEvaluationDetailsExtensions
     /// <summary>Converts a served variant's JSON to the requested type; false is a type mismatch.</summary>
     private delegate bool TryConvert<T>(JsonElement value, out T result);
 
-    private static FlagEvaluationDetails<T> As<T>(this FlagEvaluationDetails<JsonElement> details, T defaultValue, string typeName, TryConvert<T> convert)
+    private static FlagEvaluationDetails<T> As<T>(this in Resolution details, T defaultValue, string typeName, TryConvert<T> convert)
     {
         if (details.Variant is null)
         {

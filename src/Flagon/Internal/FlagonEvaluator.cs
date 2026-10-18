@@ -107,7 +107,7 @@ internal sealed partial class FlagonEvaluator(
     /// </summary>
     internal FlagEvaluationDetails<JsonElement> GetRemoteDetails(string key, EvaluationContext context)
     {
-        var details = Evaluate(key, context);
+        var details = Evaluate(key, context).ToDetails();
         if (details.ErrorCode != ErrorCode.FlagNotFound)
         {
             instrumentation.RecordEvaluation(details);
@@ -128,7 +128,7 @@ internal sealed partial class FlagonEvaluator(
     /// auto-create, missing-key warning, ambient context or evaluation metric): previewing is not using the flag.
     /// </summary>
     internal FlagEvaluationDetails<JsonElement> PreviewDetails(string key, EvaluationContext context) =>
-        Evaluate(key, context);
+        Evaluate(key, context).ToDetails();
 
     /// <summary>
     /// Previews an unsaved <paramref name="draft"/> of <paramref name="key"/> as if it were stored (and not archived),
@@ -145,14 +145,14 @@ internal sealed partial class FlagonEvaluator(
         }
 
         // A version no snapshot has suppresses the once-per-snapshot rule-failure warning: a draft is not live.
-        return Evaluate(key, flag, snapshotVersion: -1, context);
+        return Evaluate(key, flag, snapshotVersion: -1, context).ToDetails();
     }
 
     /// <summary>
     /// Untyped evaluation against the current snapshot: no usage, auto-create or metrics. The only logging is a warning,
     /// once per snapshot version, for a rule that throws.
     /// </summary>
-    private FlagEvaluationDetails<JsonElement> Evaluate(string key, EvaluationContext? context)
+    private Resolution Evaluate(string key, EvaluationContext? context)
     {
         var snapshot = snapshots.Current;
         if (key is null || !snapshot.Flags.TryGetValue(key, out var flag))
@@ -171,7 +171,7 @@ internal sealed partial class FlagonEvaluator(
         var snapshot = snapshots.Current;
         var results = snapshot.Flags.Values
             .OrderBy(f => f.Record.Key, StringComparer.Ordinal)
-            .Select(f => Evaluate(f.Record.Key, f, snapshot.Version, context))
+            .Select(f => Evaluate(f.Record.Key, f, snapshot.Version, context).ToDetails())
             .ToList();
         return new FlagEvaluationSet<JsonElement>(snapshot.Version, results);
     }
@@ -182,7 +182,7 @@ internal sealed partial class FlagonEvaluator(
     /// <see cref="FlagEvaluationDetailsExtensions.AsBoolean"/>) type-checks a served variant only, and otherwise
     /// substitutes its own default.
     /// </summary>
-    private FlagEvaluationDetails<JsonElement> Evaluate(string key, SnapshotFlag flag, long snapshotVersion, EvaluationContext? context)
+    private Resolution Evaluate(string key, SnapshotFlag flag, long snapshotVersion, EvaluationContext? context)
     {
         // An archived flag fails safe to the caller's default whatever its document says.
         if (flag.Record.Archived)
@@ -223,7 +223,7 @@ internal sealed partial class FlagonEvaluator(
     /// names (TARGETING_MATCH) or, when it matches nothing, the default variant (DEFAULT). Returns the error result when
     /// the rule is broken, throws, or names a variant the flag does not define; otherwise null.
     /// </summary>
-    private FlagEvaluationDetails<JsonElement>? ResolveTargeting(
+    private Resolution? ResolveTargeting(
         string key, SnapshotFlag flag, long snapshotVersion, EvaluationContext? context,
         out string? variant, out EvaluationReason reason)
     {
