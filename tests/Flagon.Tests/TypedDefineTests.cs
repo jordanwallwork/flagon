@@ -75,4 +75,57 @@ public class TypedDefineTests
     {
         Assert.Throws<FlagValidationException>(() => new FlagonOptions().DefineObject("layout", json));
     }
+
+    [Fact]
+    public async Task A_flag_defined_with_named_variants_serves_its_default_variant_and_keeps_every_variant()
+    {
+        await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f
+            .Define("size", new Dictionary<string, string> { ["small"] = "S", ["medium"] = "M", ["large"] = "L" }, "medium", "T-shirt size")
+            .Define("limit", new Dictionary<string, int> { ["low"] = 10, ["high"] = 100 }, defaultVariant: null)
+            .Define("mode", new Dictionary<string, bool> { ["yes"] = true, ["no"] = false }, "no")
+            .Define("layouts", new Dictionary<string, JsonElement>
+            {
+                ["one"] = JsonSerializer.SerializeToElement(new { columns = 1 }),
+                ["two"] = JsonSerializer.SerializeToElement(new { columns = 2 }),
+            }, "two"));
+
+        Assert.Equal(new FlagEvaluationDetails<string>("size", "M", "medium", EvaluationReason.Static),
+            host.Flagon.GetStringDetails("size", "fallback"));
+        var size = (await host.Admin.GetAsync("size"))!.Document;
+        Assert.Equal(FlagType.String, size.Type);
+        Assert.Equal(["large", "medium", "small"], size.Variants.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal("T-shirt size", size.Metadata.Description);
+
+        Assert.Equal(7, host.Flagon.GetInt("limit", 7));
+        var limit = (await host.Admin.GetAsync("limit"))!.Document;
+        Assert.Equal(FlagType.Number, limit.Type);
+        Assert.Null(limit.DefaultVariant);
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("mode", false, "no", EvaluationReason.Static),
+            host.Flagon.GetBooleanDetails("mode", true));
+        Assert.Equal(2, host.Flagon.GetObject("layouts", default(JsonElement)).GetProperty("columns").GetInt32());
+    }
+
+    [Fact]
+    public void Invalid_named_variant_definitions_are_rejected_when_Define_is_called()
+    {
+        var options = new FlagonOptions();
+
+        Assert.Throws<FlagValidationException>(() => options.Define("empty", new Dictionary<string, string>(), null));
+        Assert.Throws<FlagValidationException>(() => options.Define("unknown-default", new Dictionary<string, string> { ["a"] = "A" }, "b"));
+        Assert.Throws<FlagValidationException>(() => options.Define("blank-name", new Dictionary<string, string> { [""] = "A" }, null));
+        Assert.Throws<FlagValidationException>(() => options.Define("long-name", new Dictionary<string, string> { [new string('n', 129)] = "A" }, null));
+        Assert.Throws<FlagValidationException>(() => options.Define("nan", new Dictionary<string, double> { ["x"] = double.NaN }, null));
+        Assert.Throws<FlagValidationException>(() => options.Define("array", new Dictionary<string, JsonElement> { ["x"] = JsonSerializer.SerializeToElement(new[] { 1 }) }, null));
+        Assert.Throws<FlagValidationException>(() => options.Define("mixed", new Dictionary<string, JsonElement>
+        {
+            ["a"] = JsonSerializer.SerializeToElement("text"),
+            ["b"] = JsonSerializer.SerializeToElement(1),
+        }, null));
+        Assert.Throws<FlagValidationException>(() => options.Define("null-string", new Dictionary<string, string> { ["x"] = null! }, null));
+        Assert.Throws<ArgumentException>(() => options.Define("unsupported", new Dictionary<string, long> { ["x"] = 1 }, null));
+        Assert.Throws<FlagValidationException>(() => options.Define("inf", double.PositiveInfinity));
+
+        Assert.Empty(options.Definitions);
+    }
 }

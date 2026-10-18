@@ -109,6 +109,57 @@ public sealed partial class FlagonOptions
         return Single(key, value, description, tags, targeting);
     }
 
+    /// <summary>
+    /// Declares a flag with named variants in code: a missing flag is created with <paramref name="variants"/>, serving
+    /// <paramref name="defaultVariant"/> when no targeting rule applies. Otherwise as
+    /// <see cref="Define(string, bool, string?, IEnumerable{string}?, string?)"/>: an existing flag keeps its variants,
+    /// default variant and targeting, and only has its metadata synced.
+    /// </summary>
+    /// <typeparam name="T">
+    /// The variant value type: <see cref="bool"/>, <see cref="string"/>, <see cref="int"/>, <see cref="double"/> or
+    /// <see cref="JsonElement"/> (for objects).
+    /// </typeparam>
+    /// <param name="key">The flag key (see <see cref="FlagKey"/>).</param>
+    /// <param name="variants">Variant name to value, e.g. <c>small</c>/<c>medium</c>/<c>large</c>.</param>
+    /// <param name="defaultVariant">
+    /// The variant served when no targeting rule applies, or null for none (the caller's default is served).
+    /// </param>
+    /// <param name="description">Human-readable description.</param>
+    /// <param name="tags">Tags, as for the boolean overload.</param>
+    /// <param name="targeting">Optional flagd targeting rule as JSON text; a rule names the variant it serves.</param>
+    /// <exception cref="FlagValidationException">
+    /// The key, a tag or the targeting JSON is invalid; there are no variants; a variant name is empty, longer than 128
+    /// characters or repeated; a value is null, a non-finite number, an array, or of a different type from the others;
+    /// or <paramref name="defaultVariant"/> is not one of the variants.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <typeparamref name="T"/> is not a supported variant type, or the key has already been defined.
+    /// </exception>
+    public FlagonOptions Define<T>(
+        string key,
+        IReadOnlyDictionary<string, T> variants,
+        string? defaultVariant,
+        string? description = null,
+        IEnumerable<string>? tags = null,
+        string? targeting = null)
+    {
+        ArgumentNullException.ThrowIfNull(variants);
+        if (typeof(T) != typeof(bool) && typeof(T) != typeof(string) && typeof(T) != typeof(int)
+            && typeof(T) != typeof(double) && typeof(T) != typeof(JsonElement))
+        {
+            throw new ArgumentException(
+                $"Flag '{key}' variants are of type {typeof(T).Name}; use bool, string, int, double or JsonElement.", nameof(variants));
+        }
+
+        var values = variants.Select(v => KeyValuePair.Create(v.Key, v.Value switch
+        {
+            double number => Number(key, v.Key, number),
+            JsonElement json => json,
+            var other => JsonSerializer.SerializeToElement(other),
+        }));
+        return Add(key, values, defaultVariant, description, tags, targeting);
+    }
+
     private static JsonElement Number(string key, string variant, double value) => double.IsFinite(value)
         ? JsonSerializer.SerializeToElement(value)
         : throw new FlagValidationException($"Flag '{key}' variant '{variant}' is {value}; number variants must be finite.");
