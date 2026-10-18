@@ -30,14 +30,24 @@ internal sealed class FlagSnapshot
     {
         var flags = records.ToFrozenDictionary(
             r => r.Key,
-            r => new SnapshotFlag(r, TargetingRules.IsRule(r.Document.Targeting) ? TargetingRules.Compile(compiler, r.Key, r.Document.Targeting!.Value) : null),
+            r => SnapshotFlag.Create(r, compiler),
             StringComparer.Ordinal);
         return new FlagSnapshot(version, flags);
     }
 }
 
 /// <summary>A flag in a <see cref="FlagSnapshot"/>: its record plus its compiled targeting (null when it has none).</summary>
-internal sealed record SnapshotFlag(FlagRecord Record, TargetingCompilation? Targeting);
+internal sealed record SnapshotFlag(FlagRecord Record, TargetingCompilation? Targeting)
+{
+    /// <summary>
+    /// <paramref name="record"/> with its targeting compiled by <paramref name="compiler"/> (never throws: a rule that
+    /// fails to compile is a failed <see cref="TargetingCompilation"/>). No rule, including <c>{}</c>, compiles to null.
+    /// </summary>
+    public static SnapshotFlag Create(FlagRecord record, ITargetingCompiler compiler) =>
+        new(record, TargetingRules.IsRule(record.Document.Targeting)
+            ? TargetingRules.Compile(compiler, record.Key, record.Document.Targeting!.Value)
+            : null);
+}
 
 /// <summary>
 /// Owns the current <see cref="FlagSnapshot"/>, reloads it from the store and tracks its freshness.

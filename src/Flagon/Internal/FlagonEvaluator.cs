@@ -74,10 +74,12 @@ internal sealed partial class FlagonEvaluator(
     /// <exception cref="FlagTargetingException">The draft's targeting rule does not compile.</exception>
     internal FlagEvaluationDetails<bool> PreviewDraftBooleanDetails(string key, FlagDocument draft, EvaluationContext context)
     {
-        var targeting = TargetingRules.Validate(compiler, key, draft.Targeting);
-        var flag = new SnapshotFlag(
-            new FlagRecord(key, draft, Version: 0),
-            TargetingRules.IsRule(targeting) && targeting is { } rule ? TargetingRules.Compile(compiler, key, rule) : null);
+        // Compiled once, as a snapshot would; a rule that fails to compile is rejected as on write.
+        var flag = SnapshotFlag.Create(new FlagRecord(key, draft, Version: 0), compiler);
+        if (flag.Targeting?.Error is { } error)
+        {
+            throw new FlagTargetingException(key, error);
+        }
 
         // A version no snapshot has suppresses the once-per-snapshot rule-failure warning: a draft is not live.
         return Evaluate(key, flag, snapshotVersion: -1, defaultValue: false, context);

@@ -50,8 +50,9 @@ internal sealed partial class FlagonAdmin(
         WriteAsync("set_enabled", key, () => SetEnabledCoreAsync(key, enabled, expectedVersion, cancellationToken));
 
     private Task<FlagRecord> SetEnabledCoreAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken) =>
-        UpdateDocumentAsync(key, expectedVersion, document =>
+        UpdateDocumentAsync(key, expectedVersion, current =>
         {
+            var document = current.Document;
             var variant = enabled ? FlagDocument.OnVariant : FlagDocument.OffVariant;
             if (!document.Variants.ContainsKey(variant))
             {
@@ -68,8 +69,20 @@ internal sealed partial class FlagonAdmin(
     {
         ArgumentNullException.ThrowIfNull(key);
         var validated = TargetingRules.Validate(compiler, key, targeting);
-        return UpdateDocumentAsync(key, expectedVersion, document => document with { Targeting = validated }, cancellationToken, rejectArchived: true);
+        return UpdateDocumentAsync(
+            key, expectedVersion, current => Unarchived(current, expectedVersion) with { Targeting = validated }, cancellationToken);
     }
+
+    /// <summary>
+    /// The document of <paramref name="current"/>, refusing an archived flag. Like the store, a stale
+    /// <paramref name="expectedVersion"/> is left to be reported as a conflict before the archived state; archiving bumps
+    /// the version, so an archive racing the write still surfaces as a conflict.
+    /// </summary>
+    /// <exception cref="FlagValidationException">The flag is archived (and <paramref name="expectedVersion"/> is current).</exception>
+    private static FlagDocument Unarchived(FlagRecord current, long expectedVersion) =>
+        current.Archived && current.Version == expectedVersion
+            ? throw new FlagValidationException($"Flag '{current.Key}' is archived; restore it to change it.")
+            : current.Document;
 
     public Task<FlagRecord> UpdateMetadataAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default)
     {
@@ -80,8 +93,9 @@ internal sealed partial class FlagonAdmin(
     private Task<FlagRecord> UpdateMetadataCoreAsync(string key, UpdateFlagMetadataRequest request, long expectedVersion, CancellationToken cancellationToken)
     {
         FlagTags.Validate(request.Tags);
-        return UpdateDocumentAsync(key, expectedVersion, document =>
+        return UpdateDocumentAsync(key, expectedVersion, current =>
         {
+            var document = current.Document;
             var metadata = document.Metadata;
             if (request.Description is not null)
             {
@@ -98,23 +112,18 @@ internal sealed partial class FlagonAdmin(
     }
 
     /// <summary>
-    /// Reads <paramref name="key"/>, applies <paramref name="update"/> to its document, stamps and stores the result
-    /// at <paramref name="expectedVersion"/>, then refreshes the snapshot. With <paramref name="rejectArchived"/>, an
-    /// archived flag is refused: like the store, a stale version is reported as a conflict before the archived state,
-    /// and archiving bumps the version, so an archive racing this write still surfaces as a conflict.
+    /// Reads <paramref name="key"/>, builds its new document from the current record with <paramref name="update"/>
+    /// (which may refuse the write by throwing), stamps and stores it at <paramref name="expectedVersion"/>, then
+    /// refreshes the snapshot.
     /// </summary>
     private async Task<FlagRecord> UpdateDocumentAsync(
-        string key, long expectedVersion, Func<FlagDocument, FlagDocument> update, CancellationToken cancellationToken, bool rejectArchived = false)
+        string key, long expectedVersion, Func<FlagRecord, FlagDocument> update, CancellationToken cancellationToken)
     {
         var current = await store.GetAsync(key, cancellationToken).ConfigureAwait(false)
             ?? throw new FlagNotFoundException(key);
-        if (rejectArchived && current.Archived && current.Version == expectedVersion)
-        {
-            throw new FlagValidationException($"Flag '{key}' is archived; restore it to change it.");
-        }
 
         var change = changes.Begin();
-        var document = update(current.Document).StampUpdated(change);
+        var document = update(current).StampUpdated(change);
 
         // The store enforces expectedVersion atomically; the read above only builds the new document.
         var record = await store.UpdateAsync(key, document, expectedVersion, change, cancellationToken).ConfigureAwait(false);

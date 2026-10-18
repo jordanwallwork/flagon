@@ -99,8 +99,11 @@ function toggle(flag, onChange) {
       }
     },
   });
-  return h("label", { class: "switch", title: flag.archived ? "Restore the flag to change it" : undefined }, input, h("span", { class: "slider" }));
+  return h("label", { class: "switch", title: flag.archived ? ARCHIVED_LOCKED : undefined }, input, h("span", { class: "slider" }));
 }
+
+/** Tooltip on controls disabled because the flag is archived. */
+const ARCHIVED_LOCKED = "Restore the flag to change it";
 
 /** Runs a write; on a version conflict shows the reload prompt, on other errors a notice. Returns the result or undefined. */
 async function write(action, reload) {
@@ -114,6 +117,32 @@ async function write(action, reload) {
       await reload?.();
     }
     return undefined;
+  }
+}
+
+/**
+ * Runs a save from a form whose input must survive a failure, disabling `button` meanwhile. Not write(): that reloads
+ * and would lose the input. Errors go to `showError` (as ruleError content); only a conflict prompts. True on success.
+ */
+async function saveInline(action, { button, showError, reload }) {
+  if (button) button.disabled = true;
+  try {
+    await action();
+    return true;
+  } catch (err) {
+    if (err instanceof ApiError && err.isVersionConflict) await conflictPrompt(err, reload);
+    else showError(ruleError(err));
+    if (button?.isConnected) button.disabled = false;
+    return false;
+  }
+}
+
+/** Asks with `dialog` (confirmDialog options), then clears the flag's targeting and shows `notice`. */
+async function confirmClearTargeting(flag, reload, dialog, notice) {
+  const ok = await confirmDialog(dialog);
+  if (ok && await write(() => api.clearTargeting(flag.key, flag.version), reload)) {
+    showNotice(notice, "success");
+    await reload();
   }
 }
 
@@ -315,7 +344,7 @@ function targetingCard(flag, reload) {
   };
   const changed = () => { for (const fn of listeners) fn(draft); };
 
-  const locked = flag.archived ? "Restore the flag to change it" : undefined;
+  const locked = flag.archived ? ARCHIVED_LOCKED : undefined;
 
   function show() {
     editor = null;
@@ -377,17 +406,9 @@ function targetingCard(flag, reload) {
       e.preventDefault();
       const p = parsed();
       if (!p) return;
-      const button = e.submitter;
-      if (button) button.disabled = true;
-      try {
-        await api.setTargeting(flag.key, flag.version, p.rule);
-      } catch (err) {
-        // Not write(): that reloads and would lose the draft. Errors stay next to it; only a conflict prompts.
-        if (err instanceof ApiError && err.isVersionConflict) await conflictPrompt(err, reload);
-        else status(ruleError(err));
-        if (button?.isConnected) button.disabled = false;
-        return;
-      }
+      const saved = await saveInline(() => api.setTargeting(flag.key, flag.version, p.rule),
+        { button: e.submitter, showError: status, reload });
+      if (!saved) return;
       showNotice(p.rule === null ? "Targeting cleared." : "Targeting saved.", "success");
       await reload();
     }
@@ -419,9 +440,12 @@ function targetingCard(flag, reload) {
       "aria-label": "Rollout percentage", oninput: () => { if (number.value !== "") set(number.value, true); }, onchange: () => set(number.value) });
     const saveButton = h("button", { type: "submit", class: "primary", disabled: flag.archived, title: locked }, current === undefined ? "Start rollout" : "Save rollout");
 
-    /** Clamps to an integer 0–100 and syncs both inputs (except the number box mid-typing). */
+    /**
+     * Clamps to an integer 0–100 and syncs both inputs (except the number box mid-typing). Empty or invalid input
+     * (Number("") would be 0) keeps the previous value, which the number box gets back once typing ends.
+     */
     function set(value, typing = false) {
-      const parsed = Math.round(Number(value));
+      const parsed = value === "" ? NaN : Math.round(Number(value));
       n = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : n;
       range.value = n;
       if (!typing) number.value = n;
@@ -432,30 +456,19 @@ function targetingCard(flag, reload) {
 
     async function save(e) {
       e.preventDefault();
-      saveButton.disabled = true;
-      try {
-        await api.setTargeting(flag.key, flag.version, { fractional: [["on", n], ["off", 100 - n]] });
-      } catch (err) {
-        if (err instanceof ApiError && err.isVersionConflict) await conflictPrompt(err, reload);
-        else { message.replaceChildren(...ruleError(err)); message.hidden = false; }
-        if (saveButton.isConnected) saveButton.disabled = false;
-        return;
-      }
+      const showError = (content) => { message.replaceChildren(...content); message.hidden = false; };
+      const saved = await saveInline(() => api.setTargeting(flag.key, flag.version, { fractional: [["on", n], ["off", 100 - n]] }),
+        { button: saveButton, showError, reload });
+      if (!saved) return;
       showNotice(`Rollout saved: ${n}% of users get on.`, "success");
       await reload();
     }
 
-    async function remove() {
-      const ok = await confirmDialog({
-        title: `Remove the rollout for ${flag.key}?`,
-        detail: "Targeting is cleared and everyone gets the default variant. The audit history keeps a copy.",
-        ok: "Remove",
-      });
-      if (ok && await write(() => api.clearTargeting(flag.key, flag.version), reload)) {
-        showNotice("Rollout removed.", "success");
-        await reload();
-      }
-    }
+    const remove = () => confirmClearTargeting(flag, reload, {
+      title: `Remove the rollout for ${flag.key}?`,
+      detail: "Targeting is cleared and everyone gets the default variant. The audit history keeps a copy.",
+      ok: "Remove",
+    }, "Rollout removed.");
 
     set(n);
     return h("form", { class: "stack rollout", onsubmit: save },
@@ -469,17 +482,11 @@ function targetingCard(flag, reload) {
         current !== undefined && h("button", { type: "button", class: "danger", disabled: flag.archived, title: locked, onclick: remove }, "Remove rollout…")));
   }
 
-  async function clear() {
-    const ok = await confirmDialog({
-      title: `Clear targeting for ${flag.key}?`,
-      detail: "The rule is removed and everyone gets the default variant. The audit history keeps a copy.",
-      ok: "Clear",
-    });
-    if (ok && await write(() => api.clearTargeting(flag.key, flag.version), reload)) {
-      showNotice("Targeting cleared.", "success");
-      await reload();
-    }
-  }
+  const clear = () => confirmClearTargeting(flag, reload, {
+    title: `Clear targeting for ${flag.key}?`,
+    detail: "The rule is removed and everyone gets the default variant. The audit history keeps a copy.",
+    ok: "Clear",
+  }, "Targeting cleared.");
 
   show();
   return { card, draft };
@@ -794,7 +801,7 @@ function restoreRuleButton(flag, entry, label, rule, reload) {
   return h("button", {
     class: "small",
     disabled: flag.archived,
-    title: flag.archived ? "Restore the flag to change it" : undefined,
+    title: flag.archived ? ARCHIVED_LOCKED : undefined,
     "aria-label": `Restore the rule in place ${side}`,
     onclick: restore,
   }, "Restore this rule");
@@ -812,8 +819,9 @@ function sameRule(a, b) {
 
 /**
  * The percentage N of a simple rollout, exactly {"fractional": [["on", N], ["off", 100 - N]]} with an
- * integer N, else null. Mirrors the server's RolloutShape (which fills `flag.rollout`); audit documents
- * carry no `rollout`, so the history needs this client-side copy.
+ * integral N (JSON 25.0 parses to 25, so it counts, as on the server), else null. Mirrors the server's
+ * RolloutShape (which fills `flag.rollout`); audit documents carry no `rollout`, so the history needs this
+ * client-side copy. The shapes both must agree on: tests/Flagon.Tests.Support/RolloutShapes.cs.
  */
 function rolloutPercentage(rule) {
   if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
