@@ -107,9 +107,13 @@ function badges(flag) {
   );
 }
 
-/** "rollout N%" for a simple percentage rollout, "targeted" for any other rule, nothing without one. */
+/** "rollout N%" for a boolean percentage rollout, "split 34/33/33" for any other split, "targeted" for any other rule, nothing without one. */
 function targetingBadge(flag) {
-  if (flag.rollout) return h("span", { class: "badge targeting", title: "Percentage rollout: this share of users gets on" }, `rollout ${flag.rollout.percentage}%`);
+  if (flag.rollout?.percentage !== undefined) return h("span", { class: "badge targeting", title: "Percentage rollout: this share of users gets on" }, `rollout ${flag.rollout.percentage}%`);
+  if (flag.rollout) {
+    const title = `Percentage split: ${flag.rollout.buckets.map((b) => `${b.variant} ${b.percentage}%`).join(", ")}`;
+    return h("span", { class: "badge targeting", title }, `split ${splitWeights(flag.rollout.buckets)}`);
+  }
   if (hasTargeting(flag)) return h("span", { class: "badge targeting", title: "Has a targeting rule" }, "targeted");
   return null;
 }
@@ -308,7 +312,7 @@ async function renderList() {
     select("source", "Source", [["", "Any"], ["manual", "Manual"], ["auto", "Auto"], ["code", "Code"]]),
     select("archived", "Show", [["active", "Active"], ["archived", "Archived"], ["all", "All"]]),
     select("hygiene", "Hygiene", [["", "Any"], ["stale", "Stale"], ["mismatch", "Default mismatch"]]),
-    select("targeting", "Targeting", [["", "Any"], ["targeted", "Targeted"], ["rollout", "Rollout"], ["none", "None"]]),
+    select("targeting", "Targeting", [["", "Any"], ["targeted", "Targeted"], ["rollout", "Rollout or split"], ["none", "None"]]),
     h("label", {}, "Stale after",
       h("select", {
         onchange: (e) => { try { localStorage.setItem(STALE_DAYS_KEY, e.target.value); } catch { /* ignore */ } draw(); },
@@ -385,15 +389,19 @@ function targetingCard(flag, reload) {
 
   function show() {
     editor = null;
-    // Only the server's recogniser (flag.rollout) decides what is a rollout; any other rule is never rewritten by the slider.
+    // Only the server's recogniser (flag.rollout) decides what is a split; any other rule is never rewritten by the
+    // slider or the split editor.
     const custom = hasTargeting(flag) && !flag.rollout;
+    // The on/off slider is the boolean two-bucket special case; any other split (or a non-boolean flag) gets the split editor.
+    const slider = isBoolean(flag) && (!flag.rollout || flag.rollout?.percentage !== undefined);
+    const splittable = Object.keys(flag.variants ?? {}).length >= 2;
     // replaceChildren doesn't flatten like h() does, so flatten and drop the conditional falsy children here.
     card.replaceChildren(...[
       h("h2", {}, "Targeting"),
       custom
         ? [h("p", { class: "small muted" }, "Custom rule: edit as JSON."), h("pre", { class: "rule" }, saved)]
-        // The percentage slider splits on/off, so only boolean flags get it.
-        : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."), isBoolean(flag) && rolloutControl()],
+        : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."),
+          slider ? rolloutControl() : splittable && splitControl()],
       h("div", { class: "actions" },
         h("button", { disabled: flag.archived, title: locked, onclick: () => edit(saved) }, hasTargeting(flag) ? "Edit JSON" : "Add rule"),
         custom && h("button", { class: "danger", disabled: flag.archived, title: locked, onclick: clear }, "Clear…")),
@@ -525,6 +533,78 @@ function targetingCard(flag, reload) {
       h("div", { class: "actions" },
         saveButton,
         current !== undefined && h("button", { type: "button", class: "danger", disabled: flag.archived, title: locked, onclick: remove }, "Remove rollout…")));
+  }
+
+  /**
+   * The percentage split form: one weight per variant (the current split's buckets first, in rule order, so saving
+   * keeps users in their buckets), summing to 100. Writes the canonical `fractional` shape the server reports back as
+   * `flag.rollout`; zero-weight variants are left out unless the split would otherwise have fewer than two buckets.
+   */
+  function splitControl() {
+    const current = flag.rollout?.buckets ?? [];
+    const names = [...current.map((b) => b.variant), ...Object.keys(flag.variants).filter((v) => !current.some((b) => b.variant === v))];
+    const initial = names.map((v) => current.find((b) => b.variant === v)?.percentage ?? 0);
+    const message = h("p", { role: "status", class: "small error-text", hidden: true });
+    const sum = h("p", { class: "small", role: "status" });
+    const saveButton = h("button", { type: "submit", class: "primary", disabled: true, title: locked }, current.length ? "Save split" : "Start split");
+    const inputs = names.map((name, i) => h("input", {
+      type: "number", class: "percent", min: "0", max: "100", step: "1", value: initial[i], disabled: flag.archived, title: locked,
+      "aria-label": `Percentage of users who get ${name}`, oninput: update,
+    }));
+
+    /** The weights as entered (NaN for an empty or non-integral box). */
+    const weights = () => inputs.map((input) => input.value === "" ? NaN : Number(input.value));
+
+    function update() {
+      const w = weights();
+      const valid = w.every((n) => Number.isInteger(n) && n >= 0 && n <= 100);
+      const total = valid ? w.reduce((a, n) => a + n, 0) : NaN;
+      sum.textContent = valid ? `Total: ${total}%${total === 100 ? "" : " (the weights must add up to 100%)"}` : "Each weight must be a whole number from 0 to 100.";
+      sum.className = `small ${total === 100 ? "muted" : "error-text"}`;
+      saveButton.disabled = flag.archived || total !== 100 || w.every((n, i) => n === initial[i]);
+      message.hidden = true;
+    }
+
+    /** 100 shared as evenly as whole numbers allow, the remainder going to the first variants (34/33/33). */
+    function even() {
+      const share = Math.floor(100 / inputs.length), extra = 100 % inputs.length;
+      inputs.forEach((input, i) => { input.value = share + (i < extra ? 1 : 0); });
+      update();
+    }
+
+    async function save(e) {
+      e.preventDefault();
+      const w = weights();
+      const all = names.map((variant, i) => ({ variant, percentage: w[i] }));
+      const weighted = all.filter((b) => b.percentage > 0);
+      // A zero-width bucket serves nobody, wherever it sits, so padding with them leaves every user where they were.
+      const buckets = weighted.length >= 2 ? weighted : [...weighted, ...all.filter((b) => b.percentage === 0).slice(0, 2 - weighted.length)];
+      const showError = (content) => { message.replaceChildren(...content); message.hidden = false; };
+      const saved = await saveInline(() => api.setTargeting(flag.key, flag.version, { fractional: buckets.map((b) => [b.variant, b.percentage]) }),
+        { button: saveButton, showError, reload });
+      if (!saved) return;
+      showNotice(`Split saved: ${buckets.map((b) => `${b.variant} ${b.percentage}%`).join(", ")}.`, "success");
+      await reload();
+    }
+
+    const remove = () => confirmClearTargeting(flag, reload, {
+      title: `Remove the split for ${flag.key}?`,
+      detail: "Targeting is cleared and everyone gets the default variant. The audit history keeps a copy.",
+      ok: "Remove",
+    }, "Split removed.");
+
+    update();
+    return h("form", { class: "stack rollout", onsubmit: save },
+      h("h3", {}, "Percentage split"),
+      h("div", { class: "split-weights" },
+        names.map((name, i) => h("label", {}, h("code", {}, name), h("span", { class: "rollout-inputs" }, inputs[i], h("span", {}, "%"))))),
+      sum,
+      h("p", { class: "small muted" }, "Users are bucketed by their targeting key, so each user consistently gets the same variant."),
+      message,
+      h("div", { class: "actions" },
+        saveButton,
+        h("button", { type: "button", disabled: flag.archived, title: locked, onclick: even }, "Even split"),
+        current.length > 0 && h("button", { type: "button", class: "danger", disabled: flag.archived, title: locked, onclick: remove }, "Remove split…")));
   }
 
   const clear = () => confirmClearTargeting(flag, reload, {
@@ -1003,12 +1083,13 @@ function restoreRuleActions(flag, entry, reload) {
 function restoreRuleButton(flag, entry, label, rule, reload) {
   const side = `${label.toLowerCase()} the change to version ${entry.version}`;
   async function restore() {
-    const percentage = rolloutPercentage(rule);
+    const buckets = splitBuckets(rule, flag.variants), percentage = onPercentage(buckets);
+    const shape = buckets === null ? "" : percentage === null ? ` (split ${splitWeights(buckets)})` : ` (rollout ${percentage}%)`;
     const ok = await confirmDialog({
       title: `Restore this rule on ${flag.key}?`,
       detail: rule === null
         ? `The flag had no targeting ${side}, so the current rule is removed and everyone gets the default variant.`
-        : `The current rule is replaced by the one in place ${side}${percentage === null ? "" : ` (rollout ${percentage}%)`}. The audit history keeps a copy of the current rule.`,
+        : `The current rule is replaced by the one in place ${side}${shape}. The audit history keeps a copy of the current rule.`,
       ok: "Restore",
     });
     if (!ok) return;
@@ -1040,30 +1121,53 @@ function sameRule(a, b) {
 }
 
 /**
- * The percentage N of a simple rollout, exactly {"fractional": [["on", N], ["off", 100 - N]]} with an
- * integral N (JSON 25.0 parses to 25, so it counts, as on the server), else null. Mirrors the server's
- * RolloutShape (which fills `flag.rollout`); audit documents carry no `rollout`, so the history needs this
- * client-side copy. The shapes both must agree on: tests/Flagon.Tests.Support/RolloutShapes.cs.
+ * The buckets ([{ variant, percentage }], in rule order) of a canonical split, exactly
+ * {"fractional": [[v1, w1], …, [vn, wn]]} with n ≥ 2, literal distinct names defined in `variants`, and integral
+ * weights from 0 to 100 summing to 100 (JSON 25.0 parses to 25, so it counts, as on the server), else null. Mirrors
+ * the server's RolloutShape (which fills `flag.rollout`); audit documents carry no `rollout`, so the history needs
+ * this client-side copy. The shapes both must agree on: tests/Flagon.Tests.Support/RolloutShapes.cs.
  */
-function rolloutPercentage(rule) {
+function splitBuckets(rule, variants) {
   if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
   const keys = Object.keys(rule);
-  const buckets = rule.fractional;
-  if (keys.length !== 1 || keys[0] !== "fractional" || !Array.isArray(buckets) || buckets.length !== 2) return null;
-  const [on, off] = buckets;
-  if (!Array.isArray(on) || !Array.isArray(off) || on.length !== 2 || off.length !== 2) return null;
-  if (on[0] !== "on" || off[0] !== "off" || !Number.isInteger(on[1]) || !Number.isInteger(off[1])) return null;
-  return on[1] >= 0 && on[1] <= 100 && on[1] + off[1] === 100 ? on[1] : null;
+  const raw = rule.fractional;
+  if (keys.length !== 1 || keys[0] !== "fractional" || !Array.isArray(raw) || raw.length < 2) return null;
+  const defined = variants ?? {};
+  const buckets = [];
+  for (const bucket of raw) {
+    if (!Array.isArray(bucket) || bucket.length !== 2) return null;
+    const [variant, percentage] = bucket;
+    if (typeof variant !== "string" || !Object.hasOwn(defined, variant) || buckets.some((b) => b.variant === variant)) return null;
+    if (!Number.isInteger(percentage) || percentage < 0 || percentage > 100) return null;
+    buckets.push({ variant, percentage });
+  }
+  return buckets.reduce((sum, b) => sum + b.percentage, 0) === 100 ? buckets : null;
 }
 
-/** "targeting added/removed/changed", or "rollout N% → M%" between two simple rollouts; null when unchanged. */
+/** The boolean rollout percentage N when `buckets` are exactly [on N, off 100 - N], else null (the server's `rollout.percentage`). */
+function onPercentage(buckets) {
+  return buckets?.length === 2 && buckets[0].variant === "on" && buckets[1].variant === "off" ? buckets[0].percentage : null;
+}
+
+/** "34/33/33": a split's weights in rule order. */
+function splitWeights(buckets) {
+  return buckets.map((b) => b.percentage).join("/");
+}
+
+/**
+ * "targeting added/removed/changed", "rollout N% → M%" between two boolean rollouts, or "split 50/50 → 34/33/33"
+ * between two other splits; null when unchanged.
+ */
 function describeTargetingChange(before, after) {
   const was = ruleOf(before), now = ruleOf(after);
   if (sameRule(was, now)) return null;
   if (was === null) return "targeting added";
   if (now === null) return "targeting removed";
-  const from = rolloutPercentage(was), to = rolloutPercentage(now);
-  return from !== null && to !== null ? `rollout ${from}% → ${to}%` : "targeting changed";
+  const from = splitBuckets(was, before.variants), to = splitBuckets(now, after.variants);
+  if (from === null || to === null) return "targeting changed";
+  const fromOn = onPercentage(from), toOn = onPercentage(to);
+  if (fromOn !== null && toOn !== null) return `rollout ${fromOn}% → ${toOn}%`;
+  return `split ${splitWeights(from)} → ${splitWeights(to)}`;
 }
 
 // ---------------------------------------------------------------- variant rows

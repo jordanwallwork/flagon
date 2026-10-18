@@ -128,6 +128,8 @@ textarea.code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; 
 .rollout-inputs { display: flex; align-items: center; gap: .5rem; }
 .rollout-inputs input[type="range"] { flex: 1; accent-color: var(--accent); }
 .rollout-inputs input.percent { width: 4.5rem; }
+.split-weights { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: .5rem; }
+.split-weights label { display: flex; flex-direction: column; gap: .25rem; }
 
 .tryit p { margin: 0; }
 .tryit .attribute { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 2fr) auto; gap: .4rem; }

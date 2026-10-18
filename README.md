@@ -196,8 +196,26 @@ flags.IsEnabled("new-checkout", context: new EvaluationContext("user-123", new D
 
 The management API takes the rule on `POST /flags` (`targeting`) and `PUT /flags/{key}/targeting` (`{ "targeting": ... }`),
 and `DELETE /flags/{key}/targeting` removes it; an archived flag's targeting can't be changed until it is restored. Flags
-it returns carry the raw `targeting` and, when the rule is exactly `{"fractional": [["on", N], ["off", 100 - N]]}` (default
-bucketing, integer N), a `rollout: { "percentage": N }` summary; any other rule has `rollout: null`.
+it returns carry the raw `targeting` and, when the rule is exactly a percentage split, a `rollout` summary; any other
+rule has `rollout: null`.
+
+A percentage split is exactly `{"fractional": [[v1, w1], …, [vn, wn]]}` with at least two buckets, literal and distinct
+variant names that the flag defines, whole-number weights summing to 100, and default bucketing (no explicit bucketing
+expression). Its summary lists the buckets in rule order, plus `percentage` for the boolean on/off shape
+`[["on", N], ["off", 100 - N]]`:
+
+```jsonc
+// a three-way split of a string flag
+{ "rollout": { "buckets": [ { "variant": "light", "percentage": 34 }, { "variant": "dark", "percentage": 33 }, { "variant": "solar", "percentage": 33 } ] } }
+// a 10% rollout of a boolean flag
+{ "rollout": { "buckets": [ { "variant": "on", "percentage": 10 }, { "variant": "off", "percentage": 90 } ], "percentage": 10 } }
+```
+
+Anything else, however close (weights that don't add up to 100, an unknown or repeated variant, a bucketing expression,
+a split nested in an `if`), is a custom rule. The UI edits a split with one weight per variant (with an even-split action
+and a live check that they add up to 100) and a boolean rollout with its slider; it writes this same shape through
+`PUT /flags/{key}/targeting`, and leaves custom rules to the JSON editor, never rewriting them.
+
 OFREP and the OpenFeature provider pass the caller's context through, so all three agree with in-process `IFlagon`.
 To try a rule before saving it, `POST /flags/{key}/evaluate` with `{ "context": ..., "document": <flagd flag> }`
 evaluates the draft exactly as `IFlagon` would once saved; a draft rule that does not compile gets the same `400` as a write.
@@ -291,7 +309,8 @@ app.MapHealthChecks("/health");
 
 - **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags (including by type); create
   boolean, string, number and object flags; toggle, enable or disable, edit, archive, restore and purge them; edit a typed
-  flag's variants and pick its default variant; view audit history,
+  flag's variants and pick its default variant; split traffic across variants by percentage (or roll a boolean flag out
+  with a slider) without writing JsonLogic; view audit history (summarising variant, default, state and split changes),
   last-evaluated time and code default (as typed JSON) per app, and default-mismatch warnings. It is plain
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
@@ -363,7 +382,8 @@ PUT /flagon/api/flags/theme/state
 A string, number or object flag's variants can be edited later: `SetVariantsAsync` (`PUT /flags/{key}/variants` with
 `{ "variants": {...}, "defaultVariant": ..., "version": N }`) replaces the variants and the default variant in one write.
 The same rules apply, and the values must keep the flag's type. The current default variant can only be removed by
-choosing another default (or `null`) in the same edit. Renaming a variant is a remove plus an add. Targeting rules are
+choosing another default (or `null`) in the same edit, and a variant that is a bucket of the flag's percentage split
+can't be removed until the split changes (`400`). Renaming a variant is a remove plus an add. Custom targeting rules are
 not checked for removed names; a rule that returns one fails at evaluation (each app gets its code default), and the UI
 warns when the rule mentions it. A boolean flag's `on`/`off` variants are fixed. `SetDefaultVariantAsync`
 (`PUT /flags/{key}/default-variant` with `{ "variant": "dark" }`, or `null` for none) switches the served variant for a

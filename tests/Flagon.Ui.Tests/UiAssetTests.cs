@@ -293,7 +293,7 @@ public class UiAssetTests
 
         Assert.Contains("`rollout ${flag.rollout.percentage}%`", app, StringComparison.Ordinal);
         Assert.Contains("\"targeted\")", app, StringComparison.Ordinal);
-        Assert.Contains("select(\"targeting\", \"Targeting\", [[\"\", \"Any\"], [\"targeted\", \"Targeted\"], [\"rollout\", \"Rollout\"], [\"none\", \"None\"]])", app, StringComparison.Ordinal);
+        Assert.Contains("select(\"targeting\", \"Targeting\", [[\"\", \"Any\"], [\"targeted\", \"Targeted\"], [\"rollout\", \"Rollout or split\"], [\"none\", \"None\"]])", app, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -315,7 +315,7 @@ public class UiAssetTests
 
         var app = await ImportsOfAppAsync(host);
 
-        foreach (var summary in new[] { "\"targeting added\"", "\"targeting removed\"", "\"targeting changed\"", "`rollout ${from}% → ${to}%`" })
+        foreach (var summary in new[] { "\"targeting added\"", "\"targeting removed\"", "\"targeting changed\"", "`rollout ${fromOn}% → ${toOn}%`" })
         {
             Assert.Contains(summary, app, StringComparison.Ordinal);
         }
