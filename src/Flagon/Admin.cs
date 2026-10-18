@@ -68,10 +68,24 @@ public interface IFlagonAdmin
     /// <exception cref="FlagAlreadyExistsException">A flag with the key already exists.</exception>
     Task<FlagRecord> CreateAsync(CreateFlagRequest request, CancellationToken cancellationToken = default);
 
-    /// <summary>Toggles a boolean flag on or off (switches its default variant).</summary>
+    /// <summary>
+    /// Toggles a boolean flag on or off (switches its default variant). For any type's kill switch, use
+    /// <see cref="SetStateAsync"/>.
+    /// </summary>
+    /// <exception cref="FlagValidationException">The flag is not a boolean flag; the flag is unchanged.</exception>
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     Task<FlagRecord> SetEnabledAsync(string key, bool enabled, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Switches a flag of any type between <see cref="FlagState.Enabled"/> and <see cref="FlagState.Disabled"/>. A
+    /// disabled flag serves each caller's own code default with reason <see cref="EvaluationReason.Disabled"/>; its
+    /// variants, default variant and targeting are kept for when it is enabled again.
+    /// </summary>
+    /// <exception cref="FlagValidationException">The flag is archived (restore it first); the flag is unchanged.</exception>
+    /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
+    /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
+    Task<FlagRecord> SetStateAsync(string key, FlagState state, long expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Replaces a flag's flagd targeting rule, or removes it when <paramref name="targeting"/> is null (or JSON
