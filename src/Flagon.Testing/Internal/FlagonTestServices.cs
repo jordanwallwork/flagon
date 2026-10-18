@@ -32,7 +32,6 @@ internal static class FlagonTestServices
             sp.GetRequiredService<IFlagStore>(),
             sp.GetRequiredService<FlagSnapshotManager>(),
             sp.GetRequiredService<ITargetingCompiler>(),
-            sp.GetRequiredService<FlagSeeder>(),
-            switches));
+            sp.GetRequiredService<FlagSeeder>()));
     }
 }

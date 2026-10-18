@@ -29,20 +29,17 @@ public sealed class TestFlags
     private readonly FlagSnapshotManager _snapshots;
     private readonly ITargetingCompiler _compiler;
     private readonly FlagSeeder _seeder;
-    private readonly FlagonTestingSwitches _switches;
 
     internal TestFlags(
         IFlagStore store,
         FlagSnapshotManager snapshots,
         ITargetingCompiler compiler,
-        FlagSeeder seeder,
-        FlagonTestingSwitches switches)
+        FlagSeeder seeder)
     {
         _store = store;
         _snapshots = snapshots;
         _compiler = compiler;
         _seeder = seeder;
-        _switches = switches;
     }
 
     /// <summary>Sets <paramref name="key"/> to an enabled boolean flag (<c>on</c>/<c>off</c> variants) serving <paramref name="value"/>.</summary>
@@ -326,10 +323,8 @@ public sealed class TestFlags
             await RemoveAsync(flag.Key).ConfigureAwait(false);
         }
 
-        if (_switches.SeedDefinitions)
-        {
-            await _seeder.SeedAsync(CancellationToken.None).ConfigureAwait(false);
-        }
+        // The seeder seeds nothing when SeedDefinitions is switched off.
+        await _seeder.SeedAsync(CancellationToken.None).ConfigureAwait(false);
     });
 
     /// <summary>Archives <paramref name="current"/>, or returns null when a concurrent write got there first.</summary>
