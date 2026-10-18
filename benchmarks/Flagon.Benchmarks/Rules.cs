@@ -32,9 +32,10 @@ internal static class Rules
         """;
 
     /// <summary>
-    /// Nested <c>if</c>/<c>and</c>/<c>or</c> over the body of a <c>$ref</c>'d evaluator. Flagon stores flags
-    /// individually, so a flag-set <c>$evaluators</c> entry is inlined on import (as the parity harness does); the
-    /// compiled rule is the same as flagd's after its own substitution.
+    /// Nested <c>if</c>/<c>and</c>/<c>or</c>: the body of a <c>$ref</c>'d evaluator, already inlined, so the rule
+    /// contains no <c>$ref</c>. Flagon rejects <c>$ref</c> on write, so a flag-set's <c>$evaluators</c> must be inlined
+    /// before writing (as the parity harness does); this measures the inlined rule, the same one flagd runs after its
+    /// own substitution, not <c>$ref</c> resolution.
     /// </summary>
     public const string Nested = """
         {

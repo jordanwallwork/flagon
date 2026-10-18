@@ -69,6 +69,6 @@ public class EvaluationBenchmarks
     [Benchmark(Description = "fractional 3-way")]
     public FlagEvaluationDetails<bool> Fractional() => _flagon.GetBooleanDetails("fractional", false, _context);
 
-    [Benchmark(Description = "nested if/and/$ref")]
+    [Benchmark(Description = "nested if/and (inlined $ref)")]
     public FlagEvaluationDetails<bool> Nested() => _flagon.GetBooleanDetails("nested", false, _context);
 }

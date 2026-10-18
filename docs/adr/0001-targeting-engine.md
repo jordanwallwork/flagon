@@ -36,7 +36,8 @@ licensing, and those are the criteria spec #19 names. Numbers: [`benchmarks/resu
 
 ## Consequences
 
-- Flagon owns about 1,740 lines of JsonLogic semantics: a port of diegoholiveira/jsonlogic v3.9.1 (flagd 0.18)
+- Flagon owns about 2,150 lines (about 1,780 non-blank, non-comment) of JsonLogic semantics in
+  `src/Flagon/Internal/Targeting/JsonLogic/`: a port of diegoholiveira/jsonlogic v3.9.1 (flagd 0.18)
   restricted to flagd's schema operators. A flagd engine upgrade that changes semantics has to be ported by hand. The
   vendored flagd-testbed (`tests/Flagon.Tests/FlagdParity`) is the guard: bump the fixtures, and every case that
   diverges fails `DefaultCompilerParityTests`.

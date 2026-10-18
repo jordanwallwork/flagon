@@ -9,6 +9,19 @@ Compares the two candidate engines behind the internal `ITargetingCompiler` seam
 
 Decision and trade-offs: [ADR 0001](../../docs/adr/0001-targeting-engine.md).
 
+## Current state (2026-10-18)
+
+The numbers below are historical: measured at commit `64a7588` and not re-run since. What has changed:
+
+- **Parity**: the flagd-testbed harness now passes **295 / 295** runnable cases with the default engine; its
+  expected-failure list (`tests/Flagon.Tests/FlagdParity/expected-failures/default.txt`) is empty.
+- **Divergences closed**: the `no-default-variant.feature` failures and both seam-level divergences listed below
+  (runtime rule failure, `targeting: {}`) now follow flagd (see the Consequences in
+  [ADR 0001](../../docs/adr/0001-targeting-engine.md)).
+- **Engine size**: about 2,150 lines (about 1,780 non-blank, non-comment) in 5 files.
+- The **nested** scenario was renamed from "nested if/and/$ref" to "nested if/and (inlined $ref)": the rule has no
+  `$ref`, because Flagon requires evaluators to be inlined on write.
+
 ## How it was run
 
 Suite: `benchmarks/Flagon.Benchmarks` at commit `64a7588`, which still referenced both engines.
@@ -35,13 +48,14 @@ targeting key and 8 attributes, and each targeted rule matches it. Rules (`Rules
 - **== on attribute**: `if(== var "country" "GB")`.
 - **in on list**: `if(in var "country" ["FR","DE","ES","GB"])`.
 - **fractional 3-way**: `fractional` 34/33/33 on the implicit targeting key.
-- **nested if/and/$ref**: `if(and(in, or(==, >=), starts_with)) … else if(==)`. This is the body of a `$ref`
-  evaluator, inlined. Flagon stores flags one at a time, so `$evaluators` are substituted on import, as the parity
-  harness does.
+- **nested if/and (inlined $ref)**: `if(and(in, or(==, >=), starts_with)) … else if(==)`. This is the body of a
+  `$ref` evaluator, already inlined: the rule contains no `$ref`. Flagon stores flags one at a time and rejects
+  `$ref` on write, so a flag-set's `$evaluators` must be inlined before writing, as the parity harness does. The
+  scenario measures the inlined rule, not `$ref` resolution. (Called "nested if/and/$ref" in the `64a7588` run.)
 
 Compile cost: `FlagSnapshot.Create` over 1,000 flags. The flags cycle through the four targeted rules above.
 
-## Comparison
+## Comparison (as of `64a7588`)
 
 ### Hot path: ns/op and allocated B/op (`GetBooleanDetails`)
 
@@ -51,7 +65,7 @@ Compile cost: `FlagSnapshot.Create` over 1,000 flags. The flags cycle through th
 | `==` on attribute | 224 ns / 56 B | 193 ns / 56 B | 1,825 ns / 1,568 B | 1,554 ns / 1,216 B |
 | `in` on list | 266 ns / 56 B | 220 ns / 56 B | 2,610 ns / 2,464 B | 2,100 ns / 2,040 B |
 | `fractional` 3-way | 404 ns / 56 B | 293 ns / 56 B | 4,564 ns / 6,472 B | 2,116 ns / 5,064 B |
-| nested `if`/`and`/`$ref` | 458 ns / 56 B | 430 ns / 56 B | 5,266 ns / 4,480 B | 2,850 ns / 3,240 B |
+| nested `if`/`and` (inlined `$ref`) | 458 ns / 56 B | 430 ns / 56 B | 5,266 ns / 4,480 B | 2,850 ns / 3,240 B |
 
 The 56 B in every row is the `FlagEvaluationDetails<bool>` result, which the static flag allocates too. Evaluating a
 rule with own-json-logic adds **0 B**. json-everything adds 1.2–6.4 KB per evaluation: the per-call `JsonObject` data
@@ -67,6 +81,8 @@ document, deep-cloned array literals, boxed `JsonValue` results, LINQ enumerator
 Both are fine at snapshot-reload frequency. own-json-logic is ~25% faster and allocates about half as much.
 
 ### Parity, footprint, size
+
+As of `64a7588`; see [Current state](#current-state-2026-10-18) for parity and size now.
 
 | | own-json-logic | json-everything |
 |---|---|---|
