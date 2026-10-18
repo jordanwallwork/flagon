@@ -1,0 +1,102 @@
+using Jorrk.Flagon.AspNetCore.Management;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+
+// ReSharper disable once CheckNamespace
+namespace Microsoft.AspNetCore.Builder;
+
+/// <summary>Maps Flagon's HTTP management API.</summary>
+public static class FlagonManagementEndpointRouteBuilderExtensions
+{
+    /// <summary>The path <see cref="MapFlagonApi"/> mounts the API at when none is given.</summary>
+    public const string DefaultPath = "/flagon/api";
+
+    /// <summary>
+    /// Maps the management API, a JSON wrapper over <see cref="Jorrk.Flagon.IFlagonAdmin"/> for building your own tooling:
+    /// <list type="bullet">
+    /// <item><c>GET {path}/flags</c>: lists flags; optional filters <c>q</c> (key/description contains, case-insensitive),
+    /// <c>tag</c>, <c>source</c> (<c>manual</c>|<c>auto</c>|<c>code</c>), <c>type</c>
+    /// (<c>boolean</c>|<c>string</c>|<c>number</c>|<c>object</c>), <c>enabled</c> and <c>archived</c> (<c>true</c>|<c>false</c>).</item>
+    /// <item><c>GET {path}/flags/{key}</c>: one flag (with an <c>ETag</c> of its version). Flags carry their <c>type</c>
+    /// (derived from the variants; <c>null</c> if they are empty or mixed), <c>variants</c>, <c>value</c> (the default
+    /// variant's value, or <c>null</c>), <c>enabled</c> (the on/off toggle; <c>null</c> for non-boolean flags), their raw
+    /// <c>targeting</c> (or <c>null</c>) and a <c>rollout</c> summary, <c>{ buckets: [{ variant, percentage }], percentage? }</c>,
+    /// when the rule is exactly a percentage split <c>{"fractional": [[v1, w1], …, [vn, wn]]}</c> (n ≥ 2; literal, distinct,
+    /// defined variant names; integral weights summing to 100; default bucketing), otherwise <c>null</c>. <c>percentage</c>
+    /// is N only for the boolean on/off shape <c>[["on", N], ["off", 100 - N]]</c>.</item>
+    /// <item><c>POST {path}/flags</c>: creates a flag from <c>{ key, enabled?, description?, tags?, targeting? }</c>, or a
+    /// string, number or object flag from <c>{ key, variants, defaultVariant?, description?, tags?, targeting? }</c>
+    /// (at least one variant; names non-empty, at most 128 characters and unique; values all of one type, no arrays or
+    /// <c>null</c>; <c>defaultVariant</c> one of them or <c>null</c>; <c>enabled</c> must not be <c>true</c>).</item>
+    /// <item><c>PATCH {path}/flags/{key}</c>: updates <c>{ description?, tags? }</c> (omitted fields are unchanged).</item>
+    /// <item><c>PUT {path}/flags/{key}/enabled</c>: toggles a boolean flag from <c>{ enabled }</c> (400 for other types).</item>
+    /// <item><c>PUT {path}/flags/{key}/state</c>: switches a flag of any type from <c>{ state }</c> (<c>enabled</c> or
+    /// <c>disabled</c>; a disabled flag serves each app's own code default).</item>
+    /// <item><c>PUT {path}/flags/{key}/targeting</c>: replaces the flag's flagd targeting rule from <c>{ targeting }</c>
+    /// (<c>null</c> removes it); <c>DELETE {path}/flags/{key}/targeting</c> removes it. Archived flags are refused (<c>400</c>).</item>
+    /// <item><c>PUT {path}/flags/{key}/variants</c>: replaces a string, number or object flag's variants and default
+    /// variant from <c>{ variants, defaultVariant? }</c> (create-time rules; the flag's type must not change; the current
+    /// default variant can only be removed by choosing another, or <c>null</c>; a bucket of the <c>rollout</c> split can't be
+    /// removed). Boolean and archived flags are refused (<c>400</c>).</item>
+    /// <item><c>PUT {path}/flags/{key}/default-variant</c>: sets the variant served by default from <c>{ variant }</c>
+    /// (one of the flag's variants, or <c>null</c> for none), for any type. Archived flags are refused (<c>400</c>).</item>
+    /// <item><c>POST {path}/flags/{key}/evaluate</c>: previews the flag against <c>{ context?, document? }</c> and returns
+    /// <c>{ value, variant, reason, errorCode?, errorMessage? }</c>, untyped: <c>value</c> is the served variant's JSON
+    /// value of any type, or <c>null</c> when no variant is served (never <c>TYPE_MISMATCH</c>). Without <c>document</c> the stored flag is evaluated;
+    /// with one, that unsaved flagd flag document is (as if stored and not archived). Previews have no side effects: no
+    /// usage, auto-create, evaluation metric or store write.</item>
+    /// <item><c>POST {path}/flags/{key}/archive</c>, <c>POST {path}/flags/{key}/restore</c>, <c>DELETE {path}/flags/{key}</c> (purge).</item>
+    /// <item><c>GET {path}/flags/{key}/audit</c>: audit history, newest first.</item>
+    /// </list>
+    /// Writes to an existing flag need the version the caller last saw, as an <c>If-Match</c> header (the flag's <c>ETag</c>)
+    /// or a <c>version</c> body field; a stale version is answered with <c>409</c> problem details carrying <c>currentVersion</c>.
+    /// Invalid requests get <c>400</c> problem details; a targeting rule that does not compile is one, titled
+    /// <c>Invalid targeting rule</c> and carrying the flag <c>key</c>, the failing <c>operator</c> and a JSON Pointer
+    /// <c>path</c> to it within the rule.
+    /// <para>
+    /// Security: unless authorization is added to the returned builder (e.g. <c>.RequireAuthorization("flag-admins")</c>),
+    /// the endpoints only serve in the <c>Development</c> environment and answer <c>404</c> elsewhere, so an unauthenticated
+    /// management API cannot be exposed in production by accident. Writes are attributed (audit actor, <c>updatedBy</c>) to
+    /// the request's <c>User.Identity.Name</c> unless an explicit <see cref="Jorrk.Flagon.FlagonActor"/> scope is active.
+    /// </para>
+    /// </summary>
+    /// <param name="endpoints">The app's endpoint route builder.</param>
+    /// <param name="path">The path to mount the API at. Defaults to <see cref="DefaultPath"/>.</param>
+    /// <returns>A builder that applies conventions (authorization, CORS, rate limiting, ...) to every management endpoint.</returns>
+    public static IEndpointConventionBuilder MapFlagonApi(this IEndpointRouteBuilder endpoints, string? path = null)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+
+        var group = endpoints.MapGroup(NormalizePath(path));
+        group.AddEndpointFilter(ManagementEndpointFilter.InvokeAsync);
+
+        group.MapGet("/flags", ManagementEndpoints.ListAsync);
+        group.MapPost("/flags", ManagementEndpoints.CreateAsync);
+        group.MapGet("/flags/{key}", ManagementEndpoints.GetAsync);
+        group.MapPatch("/flags/{key}", ManagementEndpoints.UpdateMetadataAsync);
+        group.MapPut("/flags/{key}/enabled", ManagementEndpoints.SetEnabledAsync);
+        group.MapPut("/flags/{key}/state", ManagementEndpoints.SetStateAsync);
+        group.MapPut("/flags/{key}/targeting", ManagementEndpoints.SetTargetingAsync);
+        group.MapDelete("/flags/{key}/targeting", ManagementEndpoints.ClearTargetingAsync);
+        group.MapPut("/flags/{key}/variants", ManagementEndpoints.SetVariantsAsync);
+        group.MapPut("/flags/{key}/default-variant", ManagementEndpoints.SetDefaultVariantAsync);
+        group.MapPost("/flags/{key}/evaluate", ManagementEndpoints.EvaluateAsync);
+        group.MapPost("/flags/{key}/archive", ManagementEndpoints.ArchiveAsync);
+        group.MapPost("/flags/{key}/restore", ManagementEndpoints.RestoreAsync);
+        group.MapDelete("/flags/{key}", ManagementEndpoints.PurgeAsync);
+        group.MapGet("/flags/{key}/audit", ManagementEndpoints.GetAuditHistoryAsync);
+
+        return group;
+    }
+
+    private static string NormalizePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return DefaultPath;
+        }
+
+        var trimmed = path.Trim().TrimEnd('/');
+        return trimmed.StartsWith('/') ? trimmed : "/" + trimmed;
+    }
+}

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Jorrk.Flagon.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.Testing" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- flagd-testbed parity harness: vendored fixtures and per-compiler expected-failure lists. -->
+    <None Include="FlagdParity\testbed\**\*;FlagdParity\expected-failures\*.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Jorrk.Flagon.Tests.Support\Jorrk.Flagon.Tests.Support.csproj" />
+    <ProjectReference Include="..\..\src\Jorrk.Flagon.Storage.Conformance\Jorrk.Flagon.Storage.Conformance.csproj" />
+  </ItemGroup>
+</Project>

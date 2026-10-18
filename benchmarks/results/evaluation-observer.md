@@ -1,6 +1,6 @@
 # Evaluation observer seam: benchmark results (#36)
 
-Flagon.Testing (#36, #62) added an internal `IFlagonEvaluationObserver` to `FlagonEvaluator`. Its evaluation log
+Jorrk.Flagon.Testing (#36, #62) added an internal `IFlagonEvaluationObserver` to `FlagonEvaluator`. Its evaluation log
 uses this seam. With no observer registered, the hot path pays one null check. Code review also reshaped the typed
 getters around one shared `Typed` path. This run checks that neither change slowed down the hot path.
 
@@ -11,8 +11,8 @@ The `EvaluationBenchmarks` suite (see [targeting-engines.md](targeting-engines.m
 loading did not change.
 
 ```sh
-dotnet build benchmarks/Flagon.Benchmarks -c Release
-dotnet run -c Release -f net10.0 --no-build --project benchmarks/Flagon.Benchmarks -- \
+dotnet build benchmarks/Jorrk.Flagon.Benchmarks -c Release
+dotnet run -c Release -f net10.0 --no-build --project benchmarks/Jorrk.Flagon.Benchmarks -- \
   --filter '*EvaluationBenchmarks*'
 ```
 
@@ -25,7 +25,7 @@ dotnet run -c Release -f net10.0 --no-build --project benchmarks/Flagon.Benchmar
 
 Commits:
 
-- **base** `0516c95`: main before Flagon.Testing.
+- **base** `0516c95`: main before Jorrk.Flagon.Testing.
 - **seam** `95560bf`: observer seam added. Typed getters each called `Evaluate`, then `Tracked`.
 - **delegates** `5051b85` (getter change in `6c8b52f`): first review fix. Each getter passed a static lambda (`TypedView<T>` delegate) to one
   `Typed<T>`. This version regressed and was replaced.

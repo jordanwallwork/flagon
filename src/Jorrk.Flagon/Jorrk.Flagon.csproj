@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>Jorrk.Flagon</PackageId>
+    <Description>Self-hosted, OpenFeature-compatible feature flags for .NET: in-process evaluation over flagd-schema flags stored in your own database.</Description>
+    <RootNamespace>Jorrk.Flagon</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- OFREP evaluates through FlagonEvaluator's remote path (no usage, auto-create or ambient context). Packages ship in lockstep. -->
+    <InternalsVisibleTo Include="Jorrk.Flagon.AspNetCore" />
+    <!-- Tests (and the shared test harness) register fake targeting compilers through the internal ITargetingCompiler seam. -->
+    <InternalsVisibleTo Include="Jorrk.Flagon.Tests" />
+    <InternalsVisibleTo Include="Jorrk.Flagon.Tests.Support" />
+    <!-- Benchmarks (#24) register a compiler and build snapshots directly through the same seam. -->
+    <InternalsVisibleTo Include="Jorrk.Flagon.Benchmarks" />
+    <!-- Jorrk.Flagon.Testing drives startup (validate, seed, load) and writes through the store, refreshing the snapshot itself. -->
+    <InternalsVisibleTo Include="Jorrk.Flagon.Testing" />
+  </ItemGroup>
+</Project>

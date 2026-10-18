@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>Jorrk.Flagon.Ui</PackageId>
+    <Description>An embeddable management console for Flagon feature flags: plain HTML and JavaScript served from the app, mounted with app.MapFlagonUi(path). No Node build step.</Description>
+    <RootNamespace>Jorrk.Flagon.Ui</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Jorrk.Flagon.AspNetCore\Jorrk.Flagon.AspNetCore.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Compiled into both packages so the UI and the management API apply exactly the same gating rule. -->
+    <Compile Include="..\Jorrk.Flagon.AspNetCore\Internal\ManagementGate.cs" Link="Internal\ManagementGate.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot\**\*" LogicalName="FlagonUi/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

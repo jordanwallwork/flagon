@@ -2,7 +2,7 @@
 
 Status: accepted (#24, spec #19)
 
-Flagon evaluates flagd `targeting` rules with its own compiler, `Flagon.Internal.Targeting.JsonLogic`. At snapshot
+Flagon evaluates flagd `targeting` rules with its own compiler, `Jorrk.Flagon.Internal.Targeting.JsonLogic`. At snapshot
 load the compiler turns each rule into a tree of stateless nodes. Evaluation walks that tree over a `ref struct` env
 and returns a 24-byte value struct. We did not wrap json-everything's `JsonLogic` package. We built both behind the
 `ITargetingCompiler` seam (#22, #23), and they tied on parity. The library lost on the hot path, on footprint and on
@@ -37,9 +37,9 @@ licensing, and those are the criteria spec #19 names. Numbers: [`benchmarks/resu
 ## Consequences
 
 - Flagon owns about 2,150 lines (about 1,780 non-blank, non-comment) of JsonLogic semantics in
-  `src/Flagon/Internal/Targeting/JsonLogic/`: a port of diegoholiveira/jsonlogic v3.9.1 (flagd 0.18)
+  `src/Jorrk.Flagon/Internal/Targeting/JsonLogic/`: a port of diegoholiveira/jsonlogic v3.9.1 (flagd 0.18)
   restricted to flagd's schema operators. A flagd engine upgrade that changes semantics has to be ported by hand. The
-  vendored flagd-testbed (`tests/Flagon.Tests/FlagdParity`) is the guard: bump the fixtures, and every case that
+  vendored flagd-testbed (`tests/Jorrk.Flagon.Tests/FlagdParity`) is the guard: bump the fixtures, and every case that
   diverges fails `DefaultCompilerParityTests`.
 - Core stays dependency-free beyond `Microsoft.Extensions.*` abstractions and the BCL.
 - Two known divergences were seam-level and shared by both candidates, and were left for the hardening work: a
