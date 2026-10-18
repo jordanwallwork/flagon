@@ -168,6 +168,109 @@ public class UiAssetTests
         });
     }
 
+    [Theory]
+    [InlineData("setTargeting", "request(\"PUT\", `${flag(key)}/targeting`")]
+    [InlineData("clearTargeting", "request(\"DELETE\", `${flag(key)}/targeting`")]
+    [InlineData("evaluate", "request(\"POST\", `${flag(key)}/evaluate`")]
+    public async Task The_console_client_exposes_the_targeting_calls(string name, string call)
+    {
+        await using var host = await StartAsync();
+
+        var script = await host.CreateClient().GetStringAsync("/flags/api.js");
+
+        Assert.Contains($"{name}: (", script, StringComparison.Ordinal);
+        Assert.Contains(call, script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_flag_page_has_a_targeting_card_that_edits_validates_saves_and_clears_the_rule()
+    {
+        await using var host = await StartAsync();
+
+        var app = await ImportsOfAppAsync(host);
+
+        Assert.Contains("No targeting: everyone gets the default variant", app, StringComparison.Ordinal);
+        foreach (var call in new[] { "api.setTargeting(", "api.clearTargeting(", "api.evaluate(" })
+        {
+            Assert.Contains(call, app, StringComparison.Ordinal);
+        }
+        foreach (var label in new[] { "\"Format\"", "\"Validate\"", "\"Save\"", "\"Clear…\"" })
+        {
+            Assert.Contains(label, app, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task The_console_loads_nothing_from_other_origins()
+    {
+        await using var host = await StartAsync();
+        var client = host.CreateClient();
+
+        foreach (var file in new[] { "", "app.js", "api.js", "keys.js", "styles.css" })
+        {
+            var text = await client.GetStringAsync($"/flags/{file}");
+            Assert.DoesNotMatch("(?i)https?://|//cdn\\.|@import", text);
+        }
+    }
+
+    [Fact]
+    public async Task The_console_api_sets_evaluates_and_clears_targeting()
+    {
+        await using var host = await StartAsync();
+        var client = host.CreateClient("alice");
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("checkout", Enabled: false));
+        var rule = JsonDocument.Parse("""{"if":[{"==":[{"var":"plan"},"pro"]},"on","off"]}""").RootElement;
+
+        var set = await client.SendAsync(WithIfMatch(HttpMethod.Put, "/flags/_api/flags/checkout/targeting", created.Version, new { targeting = rule }));
+        var setFlag = await set.Content.ReadFromJsonAsync<JsonElement>();
+        var evaluated = await client.PostAsJsonAsync("/flags/_api/flags/checkout/evaluate", new { context = new { plan = "pro" } });
+        var cleared = await client.SendAsync(WithIfMatch(HttpMethod.Delete, "/flags/_api/flags/checkout/targeting", setFlag.GetProperty("version").GetInt64()));
+
+        Assert.Equal(HttpStatusCode.OK, set.StatusCode);
+        Assert.Equal(rule.GetRawText(), setFlag.GetProperty("targeting").GetRawText());
+        Assert.Equal("on", (await evaluated.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("variant").GetString());
+        Assert.Equal(HttpStatusCode.OK, cleared.StatusCode);
+        Assert.Equal(JsonValueKind.Null, (await cleared.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("targeting").ValueKind);
+    }
+
+    [Fact]
+    public async Task The_console_api_reports_an_invalid_draft_rule_with_its_location()
+    {
+        await using var host = await StartAsync();
+        await host.Admin.CreateAsync(new CreateFlagRequest("checkout"));
+        var document = JsonDocument.Parse("""
+            {"state":"ENABLED","variants":{"on":true,"off":false},"defaultVariant":"off","targeting":{"if":[{"nope":[]},"on","off"]}}
+            """).RootElement;
+
+        var response = await host.CreateClient().PostAsJsonAsync("/flags/_api/flags/checkout/evaluate", new { context = new { }, document });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("/if/0", problem.GetProperty("path").GetString());
+        Assert.Equal("nope", problem.GetProperty("operator").GetString());
+    }
+
+    [Fact]
+    public async Task A_stale_targeting_save_through_the_console_api_is_a_version_conflict()
+    {
+        await using var host = await StartAsync();
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("checkout"));
+        await host.Admin.SetEnabledAsync("checkout", true, created.Version);
+
+        var response = await host.CreateClient().SendAsync(
+            WithIfMatch(HttpMethod.Put, "/flags/_api/flags/checkout/targeting", created.Version, new { targeting = (object?)null }));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.True((await response.Content.ReadFromJsonAsync<JsonElement>()).TryGetProperty("currentVersion", out _));
+    }
+
+    private static HttpRequestMessage WithIfMatch(HttpMethod method, string uri, long version, object? body = null)
+    {
+        var request = new HttpRequestMessage(method, uri) { Content = body is null ? null : JsonContent.Create(body) };
+        request.Headers.IfMatch.Add(new EntityTagHeaderValue($"\"{version}\""));
+        return request;
+    }
+
     private static async Task<string> ImportsOfAppAsync(FlagonTestHost host) =>
         await host.CreateClient().GetStringAsync("/flags/app.js");
 }

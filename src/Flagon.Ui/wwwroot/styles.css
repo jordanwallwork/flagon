@@ -58,6 +58,7 @@ main { padding: 1.25rem; max-width: 80rem; margin: 0 auto; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .error-text { color: var(--err-text); }
+.ok-text { color: var(--ok-text); }
 .warning { background: var(--warn-bg); color: var(--warn-text); padding: .5rem .75rem; border-radius: 6px; }
 .empty { text-align: center; color: var(--muted); padding: 2rem; }
 
@@ -116,3 +117,8 @@ dialog { border: 1px solid var(--border); border-radius: 10px; background: var(-
 dialog::backdrop { background: rgb(0 0 0 / .4); }
 dialog menu { display: flex; justify-content: end; gap: .5rem; padding: 0; margin: 1rem 0 0; }
 dialog label { display: flex; flex-direction: column; gap: .3rem; }
+
+.targeting p { margin: 0; }
+.targeting pre.rule { margin: 0; padding: .6rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  max-width: none; max-height: 24rem; overflow: auto; }
+textarea.code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; tab-size: 2; }

@@ -248,6 +248,168 @@ async function renderList() {
   ];
 }
 
+// ---------------------------------------------------------------- targeting
+
+/** True when the flag has a targeting rule; absent, null and `{}` mean none, as on the server. */
+function hasTargeting(flag) {
+  const t = flag.targeting;
+  return t !== null && t !== undefined && !(typeof t === "object" && !Array.isArray(t) && Object.keys(t).length === 0);
+}
+
+/** Parses editor text into a rule: empty text means no rule (null). Throws SyntaxError for invalid JSON. */
+function parseRule(text) {
+  return text.trim() === "" ? null : JSON.parse(text);
+}
+
+/**
+ * The flagd document the server evaluates for an unsaved rule: the stored flag's state and default variant with the
+ * console's boolean variants. Used by Validate and by draft evaluation elsewhere on the detail view.
+ */
+function draftDocument(flag, rule) {
+  const document = { state: flag.state === "enabled" ? "ENABLED" : "DISABLED", variants: { on: true, off: false }, defaultVariant: flag.defaultVariant };
+  if (rule !== null) document.targeting = rule;
+  return document;
+}
+
+/** Inline content for an editor error: invalid JSON, a rejected rule (with its location) or anything else. */
+function ruleError(e) {
+  if (e instanceof SyntaxError) return [h("strong", {}, "Invalid JSON: "), e.message];
+  const { path, operator, title } = e instanceof ApiError ? e.problem : {};
+  return [
+    title && title !== e.message && h("strong", {}, `${title}: `),
+    e.message,
+    typeof path === "string" && h("span", { class: "small" }, " (at ", h("code", {}, path === "" ? "/" : path),
+      operator ? [", operator ", h("code", {}, operator)] : null, ")"),
+  ];
+}
+
+/**
+ * The Targeting card. Returns the card and `draft`, the editor's unsaved state, for other cards on the detail view:
+ * `draft.editing`, `draft.dirty`, `draft.text`, `draft.document()` (the flagd document to evaluate; throws SyntaxError
+ * for invalid JSON) and `draft.subscribe(fn)` (called whenever any of those change; returns an unsubscribe function).
+ */
+function targetingCard(flag, reload) {
+  const saved = hasTargeting(flag) ? JSON.stringify(flag.targeting, null, 2) : "";
+  const card = h("section", { class: "card stack targeting" });
+  const listeners = new Set();
+  let editor = null; // the textarea while editing, else null
+
+  const draft = {
+    get editing() { return editor !== null; },
+    get text() { return editor ? editor.value : saved; },
+    get dirty() { return editor !== null && editor.value !== saved; },
+    document: () => draftDocument(flag, parseRule(draft.text)),
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+  };
+  const changed = () => { for (const fn of listeners) fn(draft); };
+
+  const locked = flag.archived ? "Restore the flag to change it" : undefined;
+
+  function show() {
+    editor = null;
+    card.replaceChildren(
+      h("h2", {}, "Targeting"),
+      hasTargeting(flag)
+        ? h("pre", { class: "rule" }, saved)
+        : h("p", { class: "muted" }, "No targeting: everyone gets the default variant."),
+      // The percentage rollout control goes here, above the JSON actions.
+      h("div", { class: "actions" },
+        h("button", { disabled: flag.archived, title: locked, onclick: () => edit(saved) }, hasTargeting(flag) ? "Edit JSON" : "Add rule"),
+        hasTargeting(flag) && h("button", { class: "danger", disabled: flag.archived, title: locked, onclick: clear }, "Clear…")),
+    );
+    changed();
+  }
+
+  function edit(text) {
+    const message = h("p", { role: "status", hidden: true });
+    const status = (content, kind) => {
+      message.className = `small ${kind === "ok" ? "ok-text" : "error-text"}`;
+      message.replaceChildren(...(content ?? []));
+      message.hidden = !content;
+    };
+    editor = h("textarea", {
+      class: "code", rows: 12, spellcheck: "false", autocomplete: "off", "aria-label": "Targeting rule (JSON Logic)",
+      placeholder: '{"if": [{"in": [{"var": "email"}, ["a@example.com"]]}, "on", "off"]}',
+      oninput: () => { status(); changed(); },
+    }, text);
+
+    /** The parsed draft as `{ rule }`, or undefined after showing why it doesn't parse. */
+    function parsed() {
+      try { return { rule: parseRule(editor.value) }; } catch (e) { status(ruleError(e)); return undefined; }
+    }
+
+    function format() {
+      const p = parsed();
+      if (!p) return;
+      editor.value = p.rule === null ? "" : JSON.stringify(p.rule, null, 2);
+      status();
+      changed();
+    }
+
+    async function validate(e) {
+      const p = parsed();
+      if (!p) return;
+      e.target.disabled = true;
+      try {
+        const result = await api.evaluate(flag.key, {}, draftDocument(flag, p.rule));
+        status(["Valid rule. With an empty context it returns ", h("code", {}, result.variant ?? JSON.stringify(result.value)), ` (${result.reason}).`], "ok");
+      } catch (err) {
+        status(ruleError(err));
+      } finally {
+        e.target.disabled = false;
+      }
+    }
+
+    async function save(e) {
+      e.preventDefault();
+      const p = parsed();
+      if (!p) return;
+      const button = e.submitter;
+      if (button) button.disabled = true;
+      try {
+        await api.setTargeting(flag.key, flag.version, p.rule);
+      } catch (err) {
+        // Not write(): that reloads and would lose the draft. Errors stay next to it; only a conflict prompts.
+        if (err instanceof ApiError && err.isVersionConflict) await conflictPrompt(err, reload);
+        else status(ruleError(err));
+        if (button?.isConnected) button.disabled = false;
+        return;
+      }
+      showNotice(p.rule === null ? "Targeting cleared." : "Targeting saved.", "success");
+      await reload();
+    }
+
+    card.replaceChildren(h("form", { class: "stack", onsubmit: save },
+      h("h2", {}, "Targeting"),
+      h("p", { class: "small muted" }, "A JSON Logic rule returning a variant name (", h("code", {}, "on"), " or ", h("code", {}, "off"),
+        "); when it matches nothing, the default variant applies. Leave it empty for no targeting."),
+      editor,
+      message,
+      h("div", { class: "actions" },
+        h("button", { type: "submit", class: "primary" }, "Save"),
+        h("button", { type: "button", onclick: format }, "Format"),
+        h("button", { type: "button", onclick: validate }, "Validate"),
+        h("button", { type: "button", onclick: show }, "Cancel"))));
+    changed();
+    editor.focus();
+  }
+
+  async function clear() {
+    const ok = await confirmDialog({
+      title: `Clear targeting for ${flag.key}?`,
+      detail: "The rule is removed and everyone gets the default variant. The audit history keeps a copy.",
+      ok: "Clear",
+    });
+    if (ok && await write(() => api.clearTargeting(flag.key, flag.version), reload)) {
+      showNotice("Targeting cleared.", "success");
+      await reload();
+    }
+  }
+
+  show();
+  return { card, draft };
+}
+
 // ---------------------------------------------------------------- detail
 
 async function renderDetail(key) {
@@ -259,6 +421,8 @@ async function renderDetail(key) {
   }
 
   const reload = () => route();
+  // targeting.draft is the editor's unsaved rule, for other cards on this view to read (see targetingCard).
+  const targeting = targetingCard(flag, reload);
 
   const description = h("textarea", { rows: 2, maxlength: 2000 }, flag.description ?? "");
   const tags = h("input", { value: flag.tags.join(", "), placeholder: "comma, separated, tags", spellcheck: "false" });
@@ -359,6 +523,7 @@ async function renderDetail(key) {
       `Version ${flag.version} · source ${flag.source} · created `, time(flag.createdAt), flag.createdBy ? ` by ${flag.createdBy}` : "",
       " · updated ", time(flag.updatedAt), flag.updatedBy ? ` by ${flag.updatedBy}` : ""),
     h("div", { class: "grid" }, metadata, lifecycle),
+    targeting.card,
     usage,
     history,
   ];
