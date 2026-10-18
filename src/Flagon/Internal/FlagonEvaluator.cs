@@ -105,7 +105,7 @@ internal sealed partial class FlagonEvaluator(
             if (targeting.Rule is not { } rule)
             {
                 return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
-                    $"Flag '{key}' has a targeting rule that could not be compiled: {targeting.Error}");
+                    $"Flag '{key}' has a targeting rule that could not be compiled: {targeting.Error?.Message}");
             }
 
             string? matched;

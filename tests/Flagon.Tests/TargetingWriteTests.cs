@@ -184,12 +184,17 @@ public class TargetingWriteTests
     [Theory]
     [InlineData("""{ "if": [ { "unknown_op": [1] }, "on", null ] }""", "unknown_op")]
     [InlineData("""{ "if": [ { "$ref": "is_staff" }, "on", null ] }""", "$ref")]
-    public void Defining_a_flag_with_an_invalid_rule_fails_at_configuration(string targeting, string op)
+    public async Task Defining_a_flag_with_an_invalid_rule_fails_startup_before_anything_is_written(string targeting, string op)
     {
-        var options = new FlagonOptions();
+        var store = new InMemoryFlagStore();
 
-        var ex = Assert.Throws<FlagTargetingException>(() => options.Define("broken", targeting: targeting));
+        var ex = await Assert.ThrowsAsync<FlagTargetingException>(() => FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.Define("broken", targeting: targeting);
+        }));
 
+        Assert.Null(await store.GetAsync("broken"));
         Assert.Equal("broken", ex.Key);
         Assert.Equal(op, ex.Operator);
         Assert.Equal("/if/0", ex.Path);

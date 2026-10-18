@@ -136,7 +136,7 @@ internal sealed partial class FlagSnapshotManager(
             // Once per snapshot version: a snapshot is only rebuilt when the store's change version moves.
             if (flag.Targeting?.Error is { } error)
             {
-                LogTargetingCompileFailed(logger, flag.Record.Key, snapshot.Version, error);
+                LogTargetingCompileFailed(logger, flag.Record.Key, snapshot.Version, error.Message);
             }
         }
 

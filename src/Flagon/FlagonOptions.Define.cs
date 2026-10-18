@@ -25,17 +25,18 @@ public sealed partial class FlagonOptions
     /// <param name="targeting">
     /// Optional flagd targeting rule as JSON text, e.g. <c>{"if":[{"in":[{"var":"email"},["a@example.com"]]},"on",null]}</c>.
     /// A rule that matches serves the variant it names (<c>"on"</c> or <c>"off"</c>); otherwise the flag serves its
-    /// default. Validated here with Flagon's targeting engine; <c>$ref</c> is not supported (inline the evaluator).
+    /// default. Only the JSON syntax is checked here; the rule is compiled with the registered targeting compiler when
+    /// the host starts, and a rule it rejects fails startup with <see cref="FlagTargetingException"/>. <c>$ref</c> is not
+    /// supported by Flagon's targeting engine (inline the evaluator).
     /// </param>
     /// <exception cref="FlagValidationException">The key, a tag or the targeting JSON is invalid.</exception>
-    /// <exception cref="FlagTargetingException">The targeting rule does not compile.</exception>
     /// <exception cref="ArgumentException">The key has already been defined.</exception>
     public FlagonOptions Define(string key, bool defaultValue = false, string? description = null, IEnumerable<string>? tags = null, string? targeting = null)
     {
         FlagKey.Validate(key);
         var tagList = tags?.ToArray() ?? [];
         FlagTags.Validate(tagList);
-        var rule = TargetingRules.Parse(TargetingRules.Engine, key, targeting);
+        var rule = TargetingRules.ParseJson(key, targeting);
 
         if (_definitions.Exists(d => string.Equals(d.Key, key, StringComparison.Ordinal)))
         {

@@ -16,7 +16,7 @@ public class JsonLogicTargetingCompilerTests
     private static CompiledRule Compile(string flagKey, string rule)
     {
         var compilation = Compiler.Compile(flagKey, JsonDocument.Parse(rule).RootElement);
-        Assert.True(compilation.Succeeded, compilation.Error);
+        Assert.True(compilation.Succeeded, compilation.Error?.Message);
         return compilation.Rule!;
     }
 

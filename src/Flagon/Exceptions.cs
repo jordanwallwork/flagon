@@ -34,6 +34,11 @@ public class FlagTargetingException : FlagValidationException
         Operator = @operator;
     }
 
+    internal FlagTargetingException(string key, Internal.Targeting.TargetingError error)
+        : this(key, error.Message, error.Path, error.Operator)
+    {
+    }
+
     /// <summary>The flag key.</summary>
     public string Key { get; }
 

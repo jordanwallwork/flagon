@@ -269,6 +269,39 @@ public class TargetingSeamTests
         Assert.True(details.Value);
     }
 
+    [Fact]
+    public async Task Targeting_defined_in_code_is_validated_by_the_registered_compiler_and_fails_startup_when_rejected()
+    {
+        var compiler = new FakeTargetingCompiler(_ => TargetingCompilation.Failure("rejected by the replacement", "/if/0", "in"));
+        var store = new InMemoryFlagStore();
+
+        var ex = await Assert.ThrowsAsync<FlagTargetingException>(() => FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.Define("gb-only", false, targeting: """{ "if": [ { "in": [ { "var": "country" }, ["GB"] ] }, "on", null ] }""");
+            o.Services = s => s.AddSingleton<ITargetingCompiler>(compiler);
+        }));
+
+        Assert.Equal("gb-only", ex.Key);
+        Assert.Equal("/if/0", ex.Path);
+        Assert.Equal("in", ex.Operator);
+        Assert.Contains("rejected by the replacement", ex.Message);
+        Assert.Null(await store.GetAsync("gb-only"));
+    }
+
+    [Fact]
+    public async Task Targeting_defined_in_code_that_only_the_registered_compiler_understands_is_seeded_and_evaluated()
+    {
+        var compiler = new FakeTargetingCompiler(_ => (in TargetingContext context) => "on");
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Flagon = f => f.Define("custom", false, targeting: """{ "fake": "rule" }""");
+            o.Services = s => s.AddSingleton<ITargetingCompiler>(compiler);
+        });
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("custom", true, "on", EvaluationReason.TargetingMatch), host.Flagon.GetBooleanDetails("custom"));
+    }
+
     private static IReadOnlyList<Support.CapturedLog> CompileWarnings(FlagonTestHost host) =>
         host.Logs.Flagon(Microsoft.Extensions.Logging.LogLevel.Warning).Where(e => e.EventId.Id == 1103).ToArray();
 }

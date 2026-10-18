@@ -12,16 +12,9 @@ namespace Flagon.Internal.Targeting.JsonLogic;
 /// </summary>
 internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
 {
-    private static readonly TargetingCompilation NeverMatches = TargetingCompilation.Success(static (in TargetingContext _) => null);
-
+    // Flagon only compiles rules (TargetingRules.IsRule): "{}" is no targeting, as in flagd, and never reaches here.
     public TargetingCompilation Compile(string flagKey, JsonElement targeting)
     {
-        // flagd treats "{}" as no targeting.
-        if (targeting.ValueKind == JsonValueKind.Object && !targeting.EnumerateObject().Any())
-        {
-            return NeverMatches;
-        }
-
         try
         {
             return TargetingCompilation.Success(new Rule(CompileValue(targeting)).Run);

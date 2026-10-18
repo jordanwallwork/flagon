@@ -26,39 +26,37 @@ internal delegate string? CompiledRule(in TargetingContext context);
 /// <summary>The outcome of <see cref="ITargetingCompiler.Compile"/>: a <see cref="Rule"/>, or an <see cref="Error"/>.</summary>
 internal sealed class TargetingCompilation
 {
-    private TargetingCompilation(CompiledRule? rule, string? error, string? errorPath, string? errorOperator)
+    private TargetingCompilation(CompiledRule? rule, TargetingError? error)
     {
         Rule = rule;
         Error = error;
-        ErrorPath = errorPath;
-        ErrorOperator = errorOperator;
     }
 
     /// <summary>The compiled rule; null when compilation failed.</summary>
     public CompiledRule? Rule { get; }
 
-    /// <summary>Why compilation failed; null on success.</summary>
-    public string? Error { get; }
-
-    /// <summary>
-    /// Where in the rule compilation failed, as a JSON Pointer (RFC 6901) to the failing operation (empty for the rule
-    /// itself); null on success or when the compiler cannot tell.
-    /// </summary>
-    public string? ErrorPath { get; }
-
-    /// <summary>The operator that failed to compile; null on success or when the compiler cannot tell.</summary>
-    public string? ErrorOperator { get; }
+    /// <summary>Why and where compilation failed; null on success.</summary>
+    public TargetingError? Error { get; }
 
     /// <summary>Whether the rule compiled.</summary>
     public bool Succeeded => Rule is not null;
 
     /// <summary>A successful compilation.</summary>
-    public static TargetingCompilation Success(CompiledRule rule) => new(rule ?? throw new ArgumentNullException(nameof(rule)), null, null, null);
+    public static TargetingCompilation Success(CompiledRule rule) => new(rule ?? throw new ArgumentNullException(nameof(rule)), null);
 
     /// <summary>
-    /// A failed compilation, explained by <paramref name="error"/>, optionally located by <paramref name="path"/>
-    /// (see <see cref="ErrorPath"/>) and <paramref name="operator"/>.
+    /// A failed compilation, explained by <paramref name="message"/>, optionally located by <paramref name="path"/>
+    /// and <paramref name="operator"/> (see <see cref="TargetingError"/>).
     /// </summary>
-    public static TargetingCompilation Failure(string error, string? path = null, string? @operator = null) =>
-        new(null, error ?? throw new ArgumentNullException(nameof(error)), path, @operator);
+    public static TargetingCompilation Failure(string message, string? path = null, string? @operator = null) =>
+        new(null, new TargetingError(message ?? throw new ArgumentNullException(nameof(message)), path, @operator));
 }
+
+/// <summary>Why a targeting rule was rejected, and where: the shape <see cref="FlagTargetingException"/> exposes.</summary>
+/// <param name="Message">Why the rule was rejected (<see cref="FlagTargetingException.Error"/>).</param>
+/// <param name="Path">
+/// A JSON Pointer (RFC 6901) to the failing operation within the rule (empty for the rule itself); null when the
+/// compiler cannot tell.
+/// </param>
+/// <param name="Operator">The operator that failed; null when the compiler cannot tell.</param>
+internal sealed record TargetingError(string Message, string? Path, string? Operator);
