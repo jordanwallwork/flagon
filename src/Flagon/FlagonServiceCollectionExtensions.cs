@@ -39,8 +39,8 @@ public static class FlagonServiceCollectionExtensions
         services.AddSingleton(storeFactory);
 
         services.AddSingleton<FlagonInstrumentation>();
-        // Internal seam for the targeting engine (docs/adr/0001-targeting-engine.md); TryAdd so a replacement registered
-        // first wins (last-added also wins).
+        // Internal seam for the targeting engine (docs/adr/0001-targeting-engine.md): an ITargetingCompiler registered
+        // before or after AddFlagon replaces this default.
         services.TryAddSingleton<ITargetingCompiler, JsonLogicTargetingCompiler>();
         services.AddSingleton<FlagSnapshotManager>();
         services.AddSingleton<IFlagonSnapshotStatus>(sp => sp.GetRequiredService<FlagSnapshotManager>());

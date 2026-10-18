@@ -16,6 +16,7 @@ internal sealed partial class FlagonEvaluator(
     TimeProvider time) : IFlagon
 {
     private readonly ConcurrentDictionary<string, byte> _warnedMissingKeys = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _warnedRuleFailures = new(StringComparer.Ordinal);
 
     public bool IsEnabled(string key, bool defaultValue = false, EvaluationContext? context = null) =>
         GetBooleanDetails(key, defaultValue, context).Value;
@@ -57,15 +58,19 @@ internal sealed partial class FlagonEvaluator(
     /// <summary>Bulk counterpart of <see cref="GetRemoteBooleanDetails"/>: uses only <paramref name="context"/>.</summary>
     internal FlagEvaluationSet<bool> GetAllRemoteBooleanDetails(EvaluationContext context) => EvaluateAll(context);
 
-    /// <summary>Pure evaluation against the current snapshot: no usage, auto-create, logging or metrics.</summary>
+    /// <summary>
+    /// Evaluation against the current snapshot: no usage, auto-create or metrics. The only logging is a warning, once per
+    /// snapshot version, for a rule that throws.
+    /// </summary>
     private FlagEvaluationDetails<bool> Evaluate(string key, bool defaultValue, EvaluationContext? context)
     {
-        if (key is null || !snapshots.Current.Flags.TryGetValue(key, out var flag))
+        var snapshot = snapshots.Current;
+        if (key is null || !snapshot.Flags.TryGetValue(key, out var flag))
         {
             return new(key ?? string.Empty, defaultValue, null, EvaluationReason.Error, ErrorCode.FlagNotFound, $"Flag '{key}' was not found.");
         }
 
-        return Evaluate(key, flag, defaultValue, context);
+        return Evaluate(key, flag, snapshot.Version, defaultValue, context);
     }
 
     public FlagEvaluationSet<bool> GetAllBooleanDetails(EvaluationContext? context = null) => EvaluateAll(context ?? ambientContext.Current);
@@ -76,12 +81,12 @@ internal sealed partial class FlagonEvaluator(
         var snapshot = snapshots.Current;
         var results = snapshot.Flags.Values
             .OrderBy(f => f.Record.Key, StringComparer.Ordinal)
-            .Select(f => Evaluate(f.Record.Key, f, defaultValue: false, context))
+            .Select(f => Evaluate(f.Record.Key, f, snapshot.Version, defaultValue: false, context))
             .ToList();
         return new FlagEvaluationSet<bool>(snapshot.Version, results);
     }
 
-    private FlagEvaluationDetails<bool> Evaluate(string key, SnapshotFlag flag, bool defaultValue, EvaluationContext? context)
+    private FlagEvaluationDetails<bool> Evaluate(string key, SnapshotFlag flag, long snapshotVersion, bool defaultValue, EvaluationContext? context)
     {
         // An archived flag fails safe to the caller's default whatever its document says.
         if (flag.Record.Archived)
@@ -97,43 +102,9 @@ internal sealed partial class FlagonEvaluator(
             return new(key, defaultValue, null, EvaluationReason.Disabled);
         }
 
-        // No targeting: the default variant, STATIC. Targeting resolving to null (no match): the default variant, DEFAULT.
-        var variant = document.DefaultVariant;
-        var reason = EvaluationReason.Static;
-        if (flag.Targeting is { } targeting)
+        if (ResolveTargeting(key, flag, snapshotVersion, defaultValue, context, out var variant, out var reason) is { } failed)
         {
-            if (targeting.Rule is not { } rule)
-            {
-                return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
-                    $"Flag '{key}' has a targeting rule that could not be compiled: {targeting.Error?.Message}");
-            }
-
-            string? matched;
-            try
-            {
-                matched = rule(new TargetingContext(key, context, time.GetUtcNow().ToUnixTimeSeconds()));
-            }
-            catch (Exception ex)
-            {
-                // flagd reports a JsonLogic failure while applying the rule (e.g. cat on a bool) as PARSE_ERROR.
-                return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
-                    $"Flag '{key}' targeting rule failed: {ex.Message}");
-            }
-
-            if (matched is null)
-            {
-                reason = EvaluationReason.Default;
-            }
-            else if (!document.Variants.ContainsKey(matched))
-            {
-                return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.General,
-                    $"Flag '{key}' targeting resolved to variant '{matched}', which is not one of its variants.");
-            }
-            else
-            {
-                variant = matched;
-                reason = EvaluationReason.TargetingMatch;
-            }
+            return failed;
         }
 
         if (variant is null)
@@ -157,6 +128,88 @@ internal sealed partial class FlagonEvaluator(
         return new(key, value.GetBoolean(), variant, reason);
     }
 
+    /// <summary>
+    /// Picks the variant to serve and why: with no targeting the default variant (STATIC); with a rule, the variant it
+    /// names (TARGETING_MATCH) or, when it matches nothing, the default variant (DEFAULT). Returns the error result when
+    /// the rule is broken, throws, or names a variant the flag does not define; otherwise null.
+    /// </summary>
+    private FlagEvaluationDetails<bool>? ResolveTargeting(
+        string key, SnapshotFlag flag, long snapshotVersion, bool defaultValue, EvaluationContext? context,
+        out string? variant, out EvaluationReason reason)
+    {
+        var document = flag.Record.Document;
+        variant = document.DefaultVariant;
+        reason = EvaluationReason.Static;
+        if (flag.Targeting is not { } targeting)
+        {
+            return null;
+        }
+
+        if (targeting.Rule is not { } rule)
+        {
+            return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
+                $"Flag '{key}' has a targeting rule that could not be compiled: {targeting.Error?.Message}");
+        }
+
+        string? matched;
+        try
+        {
+            matched = rule(new TargetingContext(key, context, time.GetUtcNow().ToUnixTimeSeconds()));
+        }
+        catch (Exception ex) when (!IsFatal(ex))
+        {
+            // flagd reports a JsonLogic failure while applying the rule (e.g. cat on a bool) as PARSE_ERROR.
+            WarnRuleFailedOnce(key, snapshotVersion, ex);
+            return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.ParseError,
+                $"Flag '{key}' targeting rule failed: {ex.Message}");
+        }
+
+        if (matched is null)
+        {
+            reason = EvaluationReason.Default;
+            return null;
+        }
+
+        if (!document.Variants.ContainsKey(matched))
+        {
+            return new(key, defaultValue, null, EvaluationReason.Error, ErrorCode.General,
+                $"Flag '{key}' targeting resolved to variant '{matched}', which is not one of its variants.");
+        }
+
+        variant = matched;
+        reason = EvaluationReason.TargetingMatch;
+        return null;
+    }
+
+    /// <summary>Failures that leave the process in no state to keep evaluating: these propagate rather than become PARSE_ERROR.</summary>
+    private static bool IsFatal(Exception ex) => ex is OutOfMemoryException or StackOverflowException or AccessViolationException;
+
+    /// <summary>Warns that <paramref name="key"/>'s rule threw, once per flag per snapshot version (as compile failures are).</summary>
+    private void WarnRuleFailedOnce(string key, long snapshotVersion, Exception exception)
+    {
+        // Lock-free claim of (key, version): exactly one concurrent caller wins and logs.
+        while (true)
+        {
+            if (!_warnedRuleFailures.TryGetValue(key, out var warnedAt))
+            {
+                if (_warnedRuleFailures.TryAdd(key, snapshotVersion))
+                {
+                    break;
+                }
+            }
+            else if (warnedAt == snapshotVersion)
+            {
+                return;
+            }
+            else if (_warnedRuleFailures.TryUpdate(key, snapshotVersion, warnedAt))
+            {
+                break;
+            }
+        }
+
+        LogRuleFailed(logger, exception, key, snapshotVersion);
+    }
+
     public ValueTask<FlagEvaluationDetails<bool>> GetBooleanDetailsAsync(string key, bool defaultValue = false, EvaluationContext? context = null, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(GetBooleanDetails(key, defaultValue, context));
 
@@ -170,4 +223,8 @@ internal sealed partial class FlagonEvaluator(
 
     [LoggerMessage(EventId = 1001, Level = LogLevel.Warning, Message = "Flag '{FlagKey}' was not found; returning the caller's default. This is logged once per key.")]
     private static partial void LogFlagNotFound(ILogger logger, string flagKey);
+
+    [LoggerMessage(EventId = 1002, Level = LogLevel.Warning,
+        Message = "Flag '{FlagKey}' targeting rule failed while evaluating (snapshot version {SnapshotVersion}); it evaluates to the caller's default with PARSE_ERROR. This is logged once per flag per snapshot version.")]
+    private static partial void LogRuleFailed(ILogger logger, Exception exception, string flagKey, long snapshotVersion);
 }

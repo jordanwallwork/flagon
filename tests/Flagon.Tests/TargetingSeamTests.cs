@@ -183,6 +183,37 @@ public class TargetingSeamTests
     }
 
     [Fact]
+    public async Task A_rule_that_throws_while_evaluating_is_warned_about_once_per_snapshot_version()
+    {
+        var compiler = new FakeTargetingCompiler(_ => (in TargetingContext context) => throw new InvalidOperationException("boom"));
+        await using var host = await HostAsync(compiler, ("targeted", TargetedFlag));
+
+        for (var i = 0; i < 5; i++)
+        {
+            host.Flagon.GetBooleanDetails("targeted");
+        }
+
+        host.Flagon.GetAllBooleanDetails();
+        var warning = Assert.Single(RuleFailureWarnings(host));
+        Assert.Contains("'targeted'", warning.Message);
+        Assert.IsType<InvalidOperationException>(warning.Exception);
+
+        await host.Admin.CreateAsync(new CreateFlagRequest("another")); // new snapshot version
+        host.Flagon.GetBooleanDetails("targeted");
+
+        Assert.Equal(2, RuleFailureWarnings(host).Count);
+    }
+
+    [Fact]
+    public async Task A_rule_that_runs_out_of_memory_is_not_swallowed_as_a_parse_error()
+    {
+        var compiler = new FakeTargetingCompiler(_ => (in TargetingContext context) => throw new OutOfMemoryException());
+        await using var host = await HostAsync(compiler, ("targeted", TargetedFlag));
+
+        Assert.Throws<OutOfMemoryException>(() => host.Flagon.GetBooleanDetails("targeted"));
+    }
+
+    [Fact]
     public async Task Empty_targeting_is_no_targeting_and_serves_the_default_variant_with_reason_static()
     {
         var compiler = new FakeTargetingCompiler(_ => (in TargetingContext context) => "on");
@@ -304,6 +335,9 @@ public class TargetingSeamTests
 
     private static IReadOnlyList<Support.CapturedLog> CompileWarnings(FlagonTestHost host) =>
         host.Logs.Flagon(Microsoft.Extensions.Logging.LogLevel.Warning).Where(e => e.EventId.Id == 1103).ToArray();
+
+    private static IReadOnlyList<Support.CapturedLog> RuleFailureWarnings(FlagonTestHost host) =>
+        host.Logs.Flagon(Microsoft.Extensions.Logging.LogLevel.Warning).Where(e => e.EventId.Id == 1002).ToArray();
 }
 
 /// <summary>A compiler whose output each test chooses: a function from the targeting JSON to a compilation.</summary>
