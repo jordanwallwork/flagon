@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Npgsql;
 using NpgsqlTypes;
@@ -14,13 +16,22 @@ namespace Jorrk.Flagon.Storage.Postgres;
 /// write that commits late.</para>
 /// <para><see cref="ApplyMigrationsAsync"/> runs the embedded scripts not yet recorded in <c>schema_version</c>,
 /// serialised across processes by <c>pg_advisory_lock</c>. Use <see cref="GetMigrationScripts"/> to export them instead.</para>
+/// <para>Every write that moves the change version also runs <c>pg_notify</c> on channel <c>flagon_{schema}</c> inside its
+/// transaction, so listeners hear about it at commit (see <see cref="StartAsync"/>). Usage writes and rejected writes do not notify.
+/// Writes made directly in SQL, outside this store, are not notified and are picked up by polling only.</para>
 /// </remarks>
-public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposable
+public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncDisposable, IDisposable
 {
     /// <summary>The schema used when none is configured.</summary>
     public const string DefaultSchema = "flagon";
 
+    private const int MaxIdentifierBytes = 63;
+
     private readonly NpgsqlDataSource _dataSource;
+    private readonly string _channel;
+    private readonly string _listenerConnectionString;
+    private readonly CancellationTokenSource _disposing = new();
+    private int _liveListeners;
     private readonly string _migrationLock;
     private readonly string _writeLock;
     private readonly string _flags;
@@ -38,8 +49,19 @@ public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposabl
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         PostgresMigrations.ValidateSchema(schema);
 
+        // PostgreSQL truncates identifiers longer than 63 bytes, so an over-long channel would silently be shared with another schema.
+        _channel = $"flagon_{schema}";
+        if (Encoding.UTF8.GetByteCount(_channel) > MaxIdentifierBytes)
+        {
+            throw new ArgumentException(
+                $"Schema '{schema}' is too long: its notification channel '{_channel}' must stay within {MaxIdentifierBytes} bytes.",
+                nameof(schema));
+        }
+
         Schema = schema;
         _dataSource = NpgsqlDataSource.Create(connectionString);
+        // Listeners get their own unpooled connection: a pooled one would keep its LISTEN after being returned to the pool.
+        _listenerConnectionString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ConnectionString;
         _migrationLock = $"flagon:migrate:{schema}";
         _writeLock = $"flagon:write:{schema}";
         _flags = $"\"{schema}\".flags";
@@ -54,6 +76,9 @@ public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposabl
 
     /// <inheritdoc />
     public bool IsReadOnly => false;
+
+    /// <inheritdoc />
+    public bool IsConnected => Volatile.Read(ref _liveListeners) > 0;
 
     /// <summary>
     /// The migration scripts for <paramref name="schema"/>, oldest first, for DBA-managed deployments (turn off
@@ -137,6 +162,7 @@ public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposabl
             }
 
             await AuditAsync(connection, transaction, change, key, FlagAuditAction.Created, version, before: null, after: document, cancellationToken).ConfigureAwait(false);
+            await NotifyChangeAsync(connection, transaction, version, cancellationToken).ConfigureAwait(false);
             return new FlagRecord(key, document, version);
         }, cancellationToken);
     }
@@ -156,6 +182,7 @@ public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposabl
             var version = (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
 
             await AuditAsync(connection, transaction, change, key, FlagAuditAction.Updated, version, current.Document, document, cancellationToken).ConfigureAwait(false);
+            await NotifyChangeAsync(connection, transaction, version, cancellationToken).ConfigureAwait(false);
             return current with { Document = document, Version = version };
         }, cancellationToken);
     }
@@ -189,6 +216,7 @@ public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposabl
             var version = (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
 
             await AuditAsync(connection, transaction, change, key, FlagAuditAction.Purged, version, current.Document, after: null, cancellationToken).ConfigureAwait(false);
+            await NotifyChangeAsync(connection, transaction, version, cancellationToken).ConfigureAwait(false);
             return version;
         }, cancellationToken);
     }
@@ -270,10 +298,93 @@ public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposabl
     }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
+    /// <remarks>
+    /// Opens a dedicated, unpooled connection and runs <c>LISTEN flagon_{schema}</c> before returning, so a write that commits
+    /// after this returns is delivered. A listener that fails later sets <see cref="IsConnected"/> to false and stops; polling
+    /// covers the gap. Reconnecting is not done here.
+    /// </remarks>
+    public async Task StartAsync(Action onChanged, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(onChanged);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposing.Token);
+        var connection = new NpgsqlConnection(_listenerConnectionString);
+        try
+        {
+            // Delivered on the thread that reads the connection (inside WaitAsync below); a stopped listener stays silent.
+            connection.Notification += (_, _) =>
+            {
+                if (!stop.IsCancellationRequested)
+                {
+                    onChanged();
+                }
+            };
+            await connection.OpenAsync(stop.Token).ConfigureAwait(false);
+            await new NpgsqlCommand($"LISTEN \"{_channel}\"", connection).ExecuteNonQueryAsync(stop.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            stop.Dispose();
+            throw;
+        }
+
+        Interlocked.Increment(ref _liveListeners);
+        _ = ListenAsync(connection, stop);
+    }
 
     /// <inheritdoc />
-    public void Dispose() => _dataSource.Dispose();
+    public ValueTask DisposeAsync()
+    {
+        _disposing.Cancel();
+        return _dataSource.DisposeAsync();
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _disposing.Cancel();
+        _dataSource.Dispose();
+    }
+
+    /// <summary>Pumps the listener connection until it is stopped or fails. Never throws: a failure only ends the listener.</summary>
+    private async Task ListenAsync(NpgsqlConnection connection, CancellationTokenSource stop)
+    {
+        try
+        {
+            while (true)
+            {
+                await connection.WaitAsync(stop.Token).ConfigureAwait(false);
+            }
+        }
+        catch (Exception)
+        {
+            // Stopped by cancellation, or the connection was lost. Either way the listener is gone and polling covers changes.
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _liveListeners);
+            await connection.DisposeAsync().ConfigureAwait(false);
+            stop.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Notifies listeners of a version-moving write, inside the write's transaction, so the notification is delivered at
+    /// commit and never for a write that rolls back. The payload is <c>{version}:{clock_timestamp in epoch ms}</c>.
+    /// </summary>
+    private async Task NotifyChangeAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, long version, CancellationToken cancellationToken)
+    {
+        await using var command = Command(connection, transaction,
+            "SELECT pg_notify(@channel, @version || ':' || floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint::text)");
+        AddText(command, "channel", _channel);
+        AddText(command, "version", version.ToString(CultureInfo.InvariantCulture));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     private Task<FlagRecord> SetArchivedAsync(string key, long expectedVersion, bool archived, FlagChangeContext? change, CancellationToken cancellationToken)
     {
@@ -294,6 +405,7 @@ public sealed class PostgresFlagStore : IFlagStore, IAsyncDisposable, IDisposabl
 
             var action = archived ? FlagAuditAction.Archived : FlagAuditAction.Restored;
             await AuditAsync(connection, transaction, change, key, action, version, current.Document, current.Document, cancellationToken).ConfigureAwait(false);
+            await NotifyChangeAsync(connection, transaction, version, cancellationToken).ConfigureAwait(false);
             return current with { Archived = archived, Version = version };
         }, cancellationToken);
     }

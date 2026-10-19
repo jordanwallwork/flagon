@@ -142,6 +142,19 @@ backstop, so a missed push costs latency, never correctness. Pushes never reset 
 to poll only, even when the store can push. `InMemoryFlagStore` pushes; SQL Server stores are polled. Usage writes do not
 push.
 
+**PostgreSQL push.** `UsePostgresStorage` pushes by default, using `LISTEN`/`NOTIFY` on the channel `flagon_{schema}`. Each
+create, update, archive, restore and purge sends its notification inside its own transaction, so it arrives at commit. No
+trigger or migration is needed. Each app opens one dedicated connection for listening, outside the connection pool.
+
+- **PgBouncer in transaction pooling mode drops `LISTEN` state.** Push then delivers nothing, and Flagon falls back to
+  polling with no error. Use session pooling or a direct connection to get push.
+- **Writes made directly in SQL are not pushed.** Only writes through Flagon notify, so other apps see those changes at the
+  next poll tick.
+- **Timestamps come from the database clock.** The notification payload carries the database's `clock_timestamp()`. Any
+  measurement that compares it with an app host's clock includes the skew between the two hosts.
+- A dropped listener connection stops push until the app restarts; `IsConnected` on the store reports it. Polling keeps
+  the snapshot fresh in the meantime.
+
 ### Flags as code
 
 `Define` declares a flag so it exists before first use. On startup (after migrations) a missing flag is created with
