@@ -18,6 +18,10 @@
   <ItemGroup>
     <!-- Connection-string-or-name resolution shared by every storage package. -->
     <Compile Include="..\Shared\ConnectionStringResolver.cs" Link="Internal\ConnectionStringResolver.cs" />
+    <Compile Include="..\Shared\ReconnectBackoff.cs" Link="Internal\ReconnectBackoff.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Jorrk.Flagon.Storage.SqlServer.Tests" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Migrations\*.sql" LogicalName="Jorrk.Flagon.Storage.SqlServer.Migrations.%(Filename)%(Extension)" />

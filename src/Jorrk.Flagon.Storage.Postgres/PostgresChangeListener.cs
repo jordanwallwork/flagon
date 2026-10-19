@@ -1,3 +1,4 @@
+using Jorrk.Flagon.Storage.Internal;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 

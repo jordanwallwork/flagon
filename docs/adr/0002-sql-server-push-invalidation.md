@@ -1,6 +1,6 @@
-# SQL Server push invalidation: feasible as an opt-in, polling stays the default
+# SQL Server push invalidation: opt-in via SqlDependency, polling stays the default
 
-Status: proposed (#67, spec #38 §4). Decision pending: see [Options](#options).
+Status: accepted (#67, spec #38 §4). Implemented in #72.
 
 Spec #38 adds an optional `IFlagChangeNotifier` seam so stores can push "the version moved" signals. Postgres
 does this with `LISTEN`/`NOTIFY` (spec #38 §3). This ADR asks whether `SqlServerFlagStore` should do the same, and how.
@@ -73,69 +73,54 @@ the counter is pushed, including other app instances.
 | Azure SQL Database (all tiers) | **No** for both | same page: "Query Notifications: No", "Service Broker: No" |
 | Amazon RDS for SQL Server | Broker supported, endpoints not | [AWS feature list](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/SQLServer.Concepts.General.FeatureNonSupport.html). Not tested. |
 
-### Permissions
+### Multiple instances and permissions (spike 2)
 
-`SqlDependency.Start(connectionString)` creates a queue, service and stored procedure per AppDomain. That needs
-`CREATE PROCEDURE/QUEUE/SERVICE` plus more, and a plain data login fails with "CREATE PROCEDURE permission denied".
-When a listener died mid-run, these `SqlQueryNotificationService-<guid>` objects were left behind as orphans.
+A second spike ran several app processes against one database.
 
-The least-privilege setup that worked uses a pre-created queue and service:
-
-```sql
-CREATE QUEUE [flagon].[FlagonNotifications];
-CREATE SERVICE [FlagonNotifications] ON QUEUE [flagon].[FlagonNotifications]
-    ([http://schemas.microsoft.com/SQL/Notifications/PostQueryNotification]);
--- app login (default schema = flagon):
-GRANT SUBSCRIBE QUERY NOTIFICATIONS TO app;
-GRANT RECEIVE ON [flagon].[FlagonNotifications] TO app;
-GRANT RECEIVE ON QueryNotificationErrorsQueue TO app;
-GRANT REFERENCES ON CONTRACT::[http://schemas.microsoft.com/SQL/Notifications/PostQueryNotification] TO app;
-GRANT SEND ON SERVICE::[FlagonNotifications] TO app;
-```
-
-The client side uses `SqlDependency.Start(cs, "FlagonNotifications")` and `new SqlDependency(cmd,
-"service=FlagonNotifications", 0)`. Two gotchas:
-
-- `Start` brackets the queue name as one identifier, so the queue must be in the login's default schema and be passed
-  unqualified.
-- A plain `new SqlDependency(cmd)` does not bind to a custom-queue listener. It throws "SqlDependency.Start() must be
-  called prior to execution". Explicit `service=` options are required.
-
-When the app login owns the schema (the usual case when the app runs its own migrations), it already has these rights.
+- **A shared, pre-provisioned queue does not work.** Two processes listening on one queue each received the other's
+  notification, which `SqlDependency` reports as `Change / Error / Client`, and then no further notifications arrived.
+  A Service Broker queue hands each message to one reader, so a shared queue cannot fan out.
+- **The default per-process queue works.** `SqlDependency.Start(connectionString)` creates a queue, service and activation
+  procedure for each process. Two processes each received all three of three changes.
+- **Crashed processes clean up.** After `kill -9`, the per-process queue was removed by its activation procedure within
+  about two minutes.
+- **Permissions: `db_owner`.** The per-process objects need more than `CREATE PROCEDURE/QUEUE/SERVICE`. With data roles,
+  `db_ddladmin`, `RECEIVE` on `QueryNotificationErrorsQueue`, `REFERENCES` on the contract, `VIEW DEFINITION`, `EXECUTE`
+  and `IMPERSONATE` on `dbo` granted one by one, `Start` still failed on its next step. `db_owner` worked. Apps that run
+  Flagon's migrations already have DDL rights, and usually `db_owner`.
+- **`QUOTED_IDENTIFIER`.** While a subscription exists on `change_sequence`, writes to it from a session with
+  `QUOTED_IDENTIFIER OFF` (for example `sqlcmd` without `-I`) fail with error 1934. SqlClient sets it on, so Flagon's own
+  writes are unaffected.
 
 ## Options
 
-**A. `SqlDependency` on the counter row, opt-in (recommended if push is wanted).**
-- A new migration creates the queue and service, guarded so it is a no-op where Service Broker DDL is unsupported
-  (Azure SQL Database).
-- `SqlServerFlagStore` implements `IFlagChangeNotifier`: start the listener, then subscribe, and resubscribe after every
-  notification. `Info = Error` or `Invalid` means "resubscribe and refresh"; an exception on `Start` means "disconnected,
-  polling covers".
-- No write-path change: the counter update already exists.
-- Cost: one migration, roughly a Postgres-listener-sized notifier, and the conformance cases. These already exist and map
-  one-to-one onto the findings above.
-- Off by default for SQL Server (for example `UseSqlServerStorage(…, push: true)`), because of the permission and
-  platform caveats.
+**A. `SqlDependency` on the counter row, per-process queue, opt-in (chosen).**
+- `UseSqlServerStorage(..., push: true)` builds `SqlServerPushFlagStore`, which implements `IFlagChangeNotifier`. It
+  subscribes, re-subscribes after every notification, and signals when the counter moved since its last read, which
+  closes the gap between a notification and the re-subscribe. The 30-second subscription timeout renews it periodically.
+- Any other notification, or a failed `Start` or subscribe, counts as a disconnect. It reconnects with the shared backoff,
+  then signals a resubscribe.
+- No write-path change and no migration.
+- Off by default because of the `db_owner` and Service Broker requirements.
 
 **B. Custom Service Broker queue written in the write transaction.** Same platforms as A, and a guaranteed message per
-commit. But it means a write-path change, a reader that must `RECEIVE` and `END CONVERSATION`, and backlog if the reader
+commit. A single shared queue cannot fan out to several instances (spike 2), so it would also need a queue per instance. But it means a write-path change, a reader that must `RECEIVE` and `END CONVERSATION`, and backlog if the reader
 stops. A's single-row subscription already gives commit-time signals with natural coalescing. Not worth it.
 
 **C. Polling only (status quo).** Works everywhere, with freshness bounded by `RefreshInterval` (default 10 s). This
 remains the only option on Azure SQL Database, and the backstop everywhere (spec #38 §5).
 
-## Recommendation
+## Decision
 
-The original reasons for rejecting push mostly do not hold:
+Implement A as an opt-in (#72). Polling stays the default, and the only option on Azure SQL Database.
+
+The original reasons for rejecting push mostly did not hold:
 
 - "Needs DBA-enabled broker": new databases have it on.
-- "Notifications are fragile": the listener self-heals, and errors map onto the existing reconnect path.
+- "Notifications are fragile": the listener self-heals, and errors map onto the reconnect path.
 - "MAX(version) is invalid": the store does not use it.
 
-What remains is the setup cost: the queue and service, explicit permissions for non-owner logins, and Azure SQL
-Database falling back to polling.
+What remains is the `db_owner` requirement, the `QUOTED_IDENTIFIER` caveat for hand-run SQL, and Azure SQL Database
+falling back to polling. These are documented in the README and are why push is opt-in.
 
-Recommend A as an opt-in follow-up, if sub-`RefreshInterval` propagation on SQL Server matters to users. Otherwise C
-stays acceptable: the seam is in place, and nothing here blocks adding A later.
-
-Open before implementing A: test on Managed Instance and on RDS with a non-admin login.
+Still untested: Managed Instance, and RDS.

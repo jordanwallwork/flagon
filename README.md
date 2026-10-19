@@ -140,8 +140,8 @@ Flagon keeps serving the last snapshot it loaded.
 snapshot rather than waiting for the next `RefreshInterval` tick. The first push starts a `PushMinInterval` window
 (default 100 ms); the app refreshes once when the window ends, and pushes that arrive inside it coalesce into that
 refresh. Pushes never reset the poll timer, and polling stays on as the backstop, so a missed push costs latency, never
-correctness. Set `PushRefresh = false` to poll only, even when the store can push. `InMemoryFlagStore` pushes; SQL Server
-stores are polled. Usage writes do not push.
+correctness. Set `PushRefresh = false` to poll only, even when the store can push. `InMemoryFlagStore` and PostgreSQL push;
+SQL Server pushes only when you opt in (see below). Usage writes do not push.
 
 **PostgreSQL push.** `UsePostgresStorage` notifies on `flagon_{schema}` inside each change's transaction, so the
 notification arrives at commit. Each app listens on one dedicated connection outside the connection pool. No trigger or
@@ -162,6 +162,25 @@ migration is needed. Writes made directly in SQL are not pushed; other apps see 
   so clock skew between the database and the app hosts is included: a host ahead of the database reports too large a lag,
   and one behind reports a negative lag. Keep them on NTP-synchronised clocks before reading the histogram as absolute
   latency. The lag is measured from the earliest timestamp a refresh covers, so a burst reports its worst case.
+
+**SQL Server push (opt-in).** `UseSqlServerStorage("Flags", push: true)` subscribes to query notifications
+(`SqlDependency`) on the change counter that every version-moving write already updates. Apps sharing the database see a
+change within milliseconds. No trigger or migration is needed, and writes are unchanged. Push is off by default because
+of its requirements:
+
+- **Service Broker** must be enabled on the database. It is on for databases made with `CREATE DATABASE`; restored or
+  attached databases need `ALTER DATABASE ... SET ENABLE_BROKER`.
+- **The login needs `db_owner`** (or equivalent rights): `SqlDependency` creates a queue, service and procedure for each
+  app process, and removes them on stop. A crashed process's objects clean themselves up within a few minutes.
+- **Azure SQL Database** supports neither Service Broker nor query notifications. On-premises SQL Server and Azure SQL
+  Managed Instance do. Amazon RDS is untested.
+- **`QUOTED_IDENTIFIER`.** While apps are subscribed, a write to the change counter from a session with
+  `QUOTED_IDENTIFIER OFF` fails with error 1934. Flagon's own writes are unaffected; hand-run scripts should use
+  `sqlcmd -I` or `SET QUOTED_IDENTIFIER ON`.
+
+When push cannot start or is lost (no broker, missing rights, database offline), the listener logs a Warning, retries
+with the same backoff as PostgreSQL, refreshes once when it is back, and polling covers the gap meanwhile. Subscriptions
+are renewed every 30 seconds. Notifications carry no commit time, so `flagon.push.lag` is not recorded for SQL Server.
 
 ### Flags as code
 
@@ -297,6 +316,7 @@ builder.Services.AddFlagon(opts => opts.UsePostgresStorage("Flags"));           
 
 // SQL Server (Jorrk.Flagon.Storage.SqlServer)
 builder.Services.AddFlagon(opts => opts.UseSqlServerStorage("Flags", schema: "flagon"));
+builder.Services.AddFlagon(opts => opts.UseSqlServerStorage("Flags", push: true));        // opt-in push (see above)
 ```
 
 Flagon's tables live in their own schema (default `flagon`). Apps that point at the same database and schema share

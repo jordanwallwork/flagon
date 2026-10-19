@@ -1,4 +1,5 @@
-namespace Jorrk.Flagon.Storage.Postgres;
+// Shared source: compiled into each storage package that pushes change notifications (linked via <Compile Include=... Link=...>).
+namespace Jorrk.Flagon.Storage.Internal;
 
 /// <summary>The wait before a listener reconnect attempt: 1 second doubling per attempt, capped at 30 seconds, jittered.</summary>
 internal static class ReconnectBackoff

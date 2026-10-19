@@ -1,3 +1,4 @@
+using Jorrk.Flagon.Storage.Internal;
 using System.Collections.Concurrent;
 using Jorrk.Flagon.Storage;
 using Jorrk.Flagon.Tests.Support;
