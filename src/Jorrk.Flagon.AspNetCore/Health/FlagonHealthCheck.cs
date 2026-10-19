@@ -63,6 +63,17 @@ public sealed class FlagonHealthCheck : IHealthCheck
             data["snapshotAge"] = snapshotAge;
         }
 
+        // Reported for operators only: push state never changes the status, because polling is the backstop.
+        if (status.IsPushConnected is { } pushConnected)
+        {
+            data["pushConnected"] = pushConnected;
+        }
+
+        if (status.LastPushAt is { } pushedAt)
+        {
+            data["lastPushAt"] = pushedAt;
+        }
+
         var result = (status, age) switch
         {
             ({ IsLoaded: false }, _) => HealthCheckResult.Degraded(

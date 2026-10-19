@@ -125,4 +125,54 @@ public class HealthCheckTests
         Assert.Equal(HealthStatus.Healthy, entry.Status);
         Assert.Contains("ready", entry.Tags);
     }
+
+    [Fact]
+    public async Task Push_state_is_absent_from_the_data_for_a_store_without_the_capability()
+    {
+        await using var host = await StartAsync(OutageFlagStore.Wrap());
+
+        var entry = await CheckAsync(host);
+
+        Assert.False(entry.Data.ContainsKey("pushConnected"));
+        Assert.False(entry.Data.ContainsKey("lastPushAt"));
+    }
+
+    [Fact]
+    public async Task A_connected_notifier_reports_pushConnected_and_lastPushAt_without_changing_the_status()
+    {
+        var store = new FakeNotifyingFlagStore { Connected = true };
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Services = s => s.AddHealthChecks().AddFlagon();
+        });
+
+        var before = await CheckAsync(host);
+        Assert.Equal(HealthStatus.Healthy, before.Status);
+        Assert.Equal(true, before.Data["pushConnected"]);
+        Assert.False(before.Data.ContainsKey("lastPushAt"));
+
+        host.Time.Advance(TimeSpan.FromSeconds(3));
+        store.Signal();
+
+        var after = await CheckAsync(host);
+        Assert.Equal(HealthStatus.Healthy, after.Status);
+        Assert.Equal(host.Time.GetUtcNow(), after.Data["lastPushAt"]);
+    }
+
+    [Fact]
+    public async Task A_disconnected_notifier_is_still_healthy_with_pushConnected_false()
+    {
+        var store = new FakeNotifyingFlagStore { Connected = false };
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Services = s => s.AddHealthChecks().AddFlagon();
+        });
+
+        var entry = await CheckAsync(host);
+
+        Assert.Equal(HealthStatus.Healthy, entry.Status);
+        Assert.Equal(false, entry.Data["pushConnected"]);
+    }
 }
