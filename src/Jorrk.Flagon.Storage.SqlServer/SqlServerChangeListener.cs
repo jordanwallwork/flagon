@@ -12,7 +12,8 @@ namespace Jorrk.Flagon.Storage.SqlServer;
 /// Notifications fire once, so the listener re-subscribes after each one and signals when the counter it reads has moved
 /// since its last read. That catches anything committed between a notification and the re-subscribe. The subscription
 /// timeout re-subscribes periodically, which also checks the database is reachable. Any other notification (database
-/// offline, invalid subscription) or a failed subscribe reports the listener disconnected. It then reconnects with
+/// offline, invalid subscription), no notification at all within the timeout plus a grace period, or a failed subscribe
+/// reports the listener disconnected. It then reconnects with
 /// <see cref="ReconnectBackoff"/> and signals a resubscribe, so the app refreshes what it may have missed.
 /// </remarks>
 internal sealed partial class SqlServerChangeListener
@@ -24,6 +25,12 @@ internal sealed partial class SqlServerChangeListener
     private readonly Action<bool> _connectionChanged;
     private bool _dependencyStarted;
     private long _lastVersion;
+
+    /// <summary>
+    /// How long past the subscription timeout a notification may be overdue before the listener counts as lost. The
+    /// timeout itself is raised by <c>SqlDependency</c>, so silence beyond it means notifications are not being delivered.
+    /// </summary>
+    private static readonly TimeSpan SubscriptionGrace = TimeSpan.FromSeconds(15);
 
     /// <param name="connectionString">The store's connection string; <c>SqlDependency</c> keys its listener on it.</param>
     /// <param name="counterQuery">The change-counter query to subscribe to (a valid query-notification shape).</param>
@@ -161,7 +168,8 @@ internal sealed partial class SqlServerChangeListener
     /// </summary>
     private async Task<Task<SqlNotificationEventArgs>> PumpAsync(Task<SqlNotificationEventArgs> subscription, Action<FlagChangeSignal> onChanged, CancellationToken stop)
     {
-        var e = await subscription.WaitAsync(stop).ConfigureAwait(false);
+        // Bounded: if notifications stop being delivered, the timeout throws and the caller reconnects.
+        var e = await subscription.WaitAsync(_subscriptionTimeout + SubscriptionGrace, stop).ConfigureAwait(false);
         LogNotification(_logger, e.Type, e.Info, e.Source);
         if (e.Type != SqlNotificationType.Change || e.Source is not (SqlNotificationSource.Data or SqlNotificationSource.Timeout))
         {

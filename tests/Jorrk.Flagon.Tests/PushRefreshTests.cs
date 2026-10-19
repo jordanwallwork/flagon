@@ -44,6 +44,25 @@ public class PushRefreshTests
     }
 
     [Fact]
+    public async Task A_pending_push_debounce_does_not_hold_up_the_poll_tick()
+    {
+        var store = new FakeNotifyingFlagStore();
+        await using var host = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.PushMinInterval = TimeSpan.FromMinutes(1);
+        });
+
+        // The push's debounce now runs for a minute; the write below does not signal, so only the tick can deliver it.
+        store.Signal();
+        await store.TryCreateAsync("late", Document);
+        host.Time.Advance(host.Status.RefreshInterval);
+        await host.WaitForRefreshAttemptAsync();
+
+        Assert.Equal(ErrorCode.None, host.Flagon.GetBooleanDetails("late").ErrorCode);
+    }
+
+    [Fact]
     public async Task A_burst_of_writes_coalesces_into_one_push_refresh()
     {
         var store = new InMemoryFlagStore();

@@ -1,3 +1,4 @@
+using Jorrk.Flagon.Storage.Internal;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -33,8 +34,7 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IFlagCh
     private readonly string _channel;
     private readonly string _listenerConnectionString;
     private readonly CancellationTokenSource _disposing = new();
-    private readonly object _listenersGate = new();
-    private readonly List<Task> _listenerRuns = [];
+    private readonly ListenerRuns _listenerRuns = new();
     private int _liveListeners;
     private readonly ILogger _logger;
     private readonly string _migrationLock;
@@ -326,24 +326,11 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IFlagCh
         var listener = new PostgresChangeListener(_listenerConnectionString, _channel, ListenerKeepaliveInterval, _logger,
             connected => Interlocked.Add(ref _liveListeners, connected ? 1 : -1));
         var run = await listener.StartAsync(onChanged, stop).ConfigureAwait(false);
-        lock (_listenersGate)
-        {
-            _listenerRuns.Add(run);
-        }
+        _listenerRuns.Add(cancellationToken, run);
     }
 
-    /// <summary>Completes once every listener started by <see cref="StartAsync"/> has stopped and released its connection.</summary>
     /// <inheritdoc />
-    public Task ListenersStopped
-    {
-        get
-        {
-            lock (_listenersGate)
-            {
-                return Task.WhenAll(_listenerRuns);
-            }
-        }
-    }
+    public Task WhenStoppedAsync(CancellationToken startToken) => _listenerRuns.WhenStoppedAsync(startToken);
 
     /// <inheritdoc />
     public ValueTask DisposeAsync()

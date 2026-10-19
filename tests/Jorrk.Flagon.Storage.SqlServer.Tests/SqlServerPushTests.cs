@@ -150,13 +150,27 @@ public class SqlServerPushTests(SqlServerFixture db)
         Assert.Equal(1, await CountProcessQueuesAsync(connectionString));
 
         await stop.CancelAsync();
-        await store.ListenersStopped;
+        await store.WhenStoppedAsync(stop.Token);
         Assert.False(store.IsConnected);
         Assert.Equal(0, await CountProcessQueuesAsync(connectionString));
 
         await writer.TryCreateAsync("checkout", Document);
         await Task.Delay(TimeSpan.FromSeconds(1));
         Assert.Empty(signals);
+    }
+
+    [Fact]
+    public async Task Stopping_one_host_does_not_wait_for_another_host_sharing_the_store()
+    {
+        using var store = new SqlServerPushFlagStore(db.PushConnectionString, SqlServerFixture.NewSchema());
+        await using var appA = await FlagonTestHost.StartAsync(o => o.Store = store);
+        await using var appB = await FlagonTestHost.StartAsync(o => o.Store = store);
+
+        var stopping = appA.StopAsync();
+
+        Assert.Same(stopping, await Task.WhenAny(stopping, Task.Delay(TimeSpan.FromSeconds(5))));
+        await stopping;
+        Assert.True(appB.Status.IsPushConnected);
     }
 
     private static Task<FlagonTestHost> StartHostAsync(string connectionString, string schema, FakeTimeProvider time, string application) =>

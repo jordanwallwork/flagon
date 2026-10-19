@@ -1,3 +1,4 @@
+using Jorrk.Flagon.Storage.Internal;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -22,8 +23,7 @@ public sealed class SqlServerPushFlagStore : SqlServerFlagStore, IFlagChangeNoti
     private readonly string _connectionString;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _disposing = new();
-    private readonly object _listenersGate = new();
-    private readonly List<Task> _listenerRuns = [];
+    private readonly ListenerRuns _listenerRuns = new();
     private int _liveListeners;
 
     /// <summary>Creates a pushing store over <paramref name="connectionString"/> using tables in <paramref name="schema"/>.</summary>
@@ -63,24 +63,11 @@ public sealed class SqlServerPushFlagStore : SqlServerFlagStore, IFlagChangeNoti
         var listener = new SqlServerChangeListener(_connectionString, $"SELECT [value] FROM [{Schema}].[change_sequence] WHERE [id] = 1",
             SubscriptionTimeout, _logger, connected => Interlocked.Add(ref _liveListeners, connected ? 1 : -1));
         var run = await listener.StartAsync(onChanged, stop).ConfigureAwait(false);
-        lock (_listenersGate)
-        {
-            _listenerRuns.Add(run);
-        }
+        _listenerRuns.Add(cancellationToken, run);
     }
 
-    /// <summary>Completes once every listener started by <see cref="StartAsync"/> has stopped and released its listener.</summary>
     /// <inheritdoc />
-    public Task ListenersStopped
-    {
-        get
-        {
-            lock (_listenersGate)
-            {
-                return Task.WhenAll(_listenerRuns);
-            }
-        }
-    }
+    public Task WhenStoppedAsync(CancellationToken startToken) => _listenerRuns.WhenStoppedAsync(startToken);
 
     /// <summary>Stops every listener this store started.</summary>
     public void Dispose() => _disposing.Cancel();

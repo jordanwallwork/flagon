@@ -33,6 +33,7 @@ internal sealed partial class FlagonHostedService(
     private DateTimeOffset? _pendingCommit;
     private PeriodicTimer? _timer;
     private Task? _polling;
+    private bool _pushStarted;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -61,7 +62,20 @@ internal sealed partial class FlagonHostedService(
 
         if (pushSignals is not null)
         {
-            await StartPushAsync((IFlagChangeNotifier)store, pushSignals.Writer).ConfigureAwait(false);
+            _pushStarted = true;
+            try
+            {
+                // The listener lives on _pushStopping; startup cancellation only abandons waiting for its first connect.
+                await StartPushAsync((IFlagChangeNotifier)store, pushSignals.Writer).WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Startup was abandoned: stop the listener and the poll loop that is already running.
+                await _pushStopping.CancelAsync().ConfigureAwait(false);
+                await _stopping.CancelAsync().ConfigureAwait(false);
+                _timer.Dispose();
+                throw;
+            }
         }
     }
 
@@ -83,10 +97,7 @@ internal sealed partial class FlagonHostedService(
 
                 if (signal.CommittedAt is { } committedAt)
                 {
-                    lock (_pendingCommitGate)
-                    {
-                        _pendingCommit = _pendingCommit is { } pending && pending <= committedAt ? pending : committedAt;
-                    }
+                    RememberCommit(committedAt);
                 }
 
                 var queued = signals.TryWrite(true);
@@ -116,15 +127,18 @@ internal sealed partial class FlagonHostedService(
                 return;
             }
 
-            // Both waits are kept across iterations: the timer must keep its own schedule when a push wins, and a
-            // PeriodicTimer tick must not be waited on twice at once.
+            // The waits are kept across iterations: the timer must keep its own schedule when a push wins, and a
+            // PeriodicTimer tick must not be waited on twice at once. A pending debounce is awaited alongside the tick, so
+            // a long PushMinInterval never holds up polling.
             Task<bool>? tick = null;
             Task<bool>? push = null;
+            Task? debounce = null;
             while (true)
             {
                 tick ??= timer.WaitForNextTickAsync(stoppingToken).AsTask();
-                push ??= pushes.WaitToReadAsync(stoppingToken).AsTask();
-                await Task.WhenAny(tick, push).ConfigureAwait(false);
+                // While a debounce is pending the slot stays full, so a wait to read would complete at once: skip it.
+                push ??= debounce is null ? pushes.WaitToReadAsync(stoppingToken).AsTask() : null;
+                await Task.WhenAny(tick, debounce ?? push!).ConfigureAwait(false);
 
                 if (tick.IsCompleted)
                 {
@@ -137,15 +151,19 @@ internal sealed partial class FlagonHostedService(
 
                     await RefreshAsync(stoppingToken).ConfigureAwait(false);
                 }
-                else
+                else if (debounce is not null)
                 {
-                    await push.ConfigureAwait(false);
-                    push = null;
-
-                    // Debounce: let the rest of the burst arrive (it coalesces into the slot), then take the slot and refresh.
-                    await Task.Delay(options.PushMinInterval, time, stoppingToken).ConfigureAwait(false);
+                    // The burst has had PushMinInterval to arrive (it coalesced into the slot): take the slot and refresh.
+                    await debounce.ConfigureAwait(false);
+                    debounce = null;
                     pushes.TryRead(out _);
                     await RefreshAsync(stoppingToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await push!.ConfigureAwait(false);
+                    push = null;
+                    debounce = Task.Delay(options.PushMinInterval, time, stoppingToken);
                 }
             }
         }
@@ -178,6 +196,20 @@ internal sealed partial class FlagonHostedService(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Already recorded and logged by the snapshot manager; keep serving last-known-good and retry next tick.
+            // The change is still unapplied, so keep its commit time for the refresh that does apply it.
+            if (committedAt is { } commit)
+            {
+                RememberCommit(commit);
+            }
+        }
+    }
+
+    /// <summary>Keeps the earliest commit time not yet covered by an applied refresh.</summary>
+    private void RememberCommit(DateTimeOffset committedAt)
+    {
+        lock (_pendingCommitGate)
+        {
+            _pendingCommit = _pendingCommit is { } pending && pending <= committedAt ? pending : committedAt;
         }
     }
 
@@ -189,10 +221,11 @@ internal sealed partial class FlagonHostedService(
         }
 
         // Stop the notifier first so no further signals are queued, wait for its connections to close, then end the poll loop.
+        // Only this host's listener is waited on: another host may share the store.
         await _pushStopping.CancelAsync().ConfigureAwait(false);
-        if (store is IFlagChangeNotifierTeardown teardown)
+        if (_pushStarted && store is IFlagChangeNotifierTeardown teardown)
         {
-            await teardown.ListenersStopped.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await teardown.WhenStoppedAsync(_pushStopping.Token).WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await _stopping.CancelAsync().ConfigureAwait(false);

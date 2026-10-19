@@ -92,6 +92,20 @@ public class PostgresPushHostTests(PostgresFixture db) : IClassFixture<PostgresF
         await app.DisposeAsync();
     }
 
+    [Fact]
+    public async Task Stopping_one_host_does_not_wait_for_another_host_sharing_the_store()
+    {
+        await using var store = new PostgresFlagStore(db.ConnectionString, PostgresFixture.NewSchema());
+        await using var appA = await FlagonTestHost.StartAsync(o => o.Store = store);
+        await using var appB = await FlagonTestHost.StartAsync(o => o.Store = store);
+
+        var stopping = appA.StopAsync();
+
+        Assert.Same(stopping, await Task.WhenAny(stopping, Task.Delay(TimeSpan.FromSeconds(5))));
+        await stopping;
+        Assert.True(appB.Status.IsPushConnected);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);

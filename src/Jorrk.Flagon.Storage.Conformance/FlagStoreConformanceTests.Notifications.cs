@@ -10,21 +10,21 @@ public abstract partial class FlagStoreConformanceTests
 
     /// <summary>
     /// Returns the <see cref="IFlagChangeNotifier"/> to exercise for <paramref name="store"/>, or null when the store has none.
-    /// Defaults to the store itself when it implements the capability. A null here means the notification cases must be
-    /// overridden with <c>[Fact(Skip = ...)]</c>.
+    /// Defaults to the store itself when it implements the capability. When this is null the notification cases are
+    /// skipped, so stores that are only polled need no overrides.
     /// </summary>
     protected virtual IFlagChangeNotifier? AsNotifier(IFlagStore store) => store as IFlagChangeNotifier;
 
     /// <summary>
     /// Creates a second store instance over the same storage as <paramref name="store"/> (for a database provider: the same
-    /// database and schema). Returns null, the default, when instances cannot share storage; such a store overrides the
-    /// cross-instance case with <c>[Fact(Skip = ...)]</c>.
+    /// database and schema). Returns null, the default, when instances cannot share storage; the cross-instance case is
+    /// then skipped.
     /// The caller disposes the instance; this does not drop storage.
     /// </summary>
     protected virtual Task<IFlagStore?> CreateSecondInstanceAsync(IFlagStore store) => Task.FromResult<IFlagStore?>(null);
 
     /// <summary>Conformance: create, update, archive, restore and purge each signal the notifier within five seconds.</summary>
-    [Fact]
+    [SkippableFact]
     public virtual Task Each_lifecycle_write_signals_the_notifier() => WithNotifierAsync(async (store, notifier) =>
     {
         await using var listener = await SignalListener.StartAsync(notifier);
@@ -38,11 +38,11 @@ public abstract partial class FlagStoreConformanceTests
     });
 
     /// <summary>Conformance: a write made through a second store instance over the same storage signals the first instance.</summary>
-    [Fact]
+    [SkippableFact]
     public virtual Task A_write_through_a_second_instance_signals_the_first() => WithNotifierAsync(async (store, notifier) =>
     {
-        var other = await CreateSecondInstanceAsync(store)
-            ?? throw new InvalidOperationException("The store cannot create a second instance: override this case with [Fact(Skip = ...)].");
+        var other = await CreateSecondInstanceAsync(store);
+        Skip.If(other is null, "The store cannot create a second instance over the same storage.");
 
         try
         {
@@ -57,7 +57,7 @@ public abstract partial class FlagStoreConformanceTests
     });
 
     /// <summary>Conformance: usage upserts do not signal the notifier.</summary>
-    [Fact]
+    [SkippableFact]
     public virtual Task Usage_upserts_do_not_signal() => WithNotifierAsync(async (store, notifier) =>
     {
         await CreateAsync(store, "checkout");
@@ -70,7 +70,7 @@ public abstract partial class FlagStoreConformanceTests
     });
 
     /// <summary>Conformance: once the token passed to StartAsync is cancelled, the notifier invokes no further callbacks.</summary>
-    [Fact]
+    [SkippableFact]
     public virtual Task No_callbacks_run_after_the_notifier_is_stopped() => WithNotifierAsync(async (store, notifier) =>
     {
         var created = await CreateAsync(store, "checkout");
@@ -89,24 +89,45 @@ public abstract partial class FlagStoreConformanceTests
     });
 
     /// <summary>
-    /// Conformance: after N concurrent writes, the change version read after a signal converges to the final version. This
-    /// asserts convergence, not the number of signals: signals may be coalesced or spurious.
+    /// Conformance: under concurrent writes, reading the change version on each signal (as an app's refresh does)
+    /// converges to the final version. Observations run while the writes are in flight, after a first observation that
+    /// precedes the burst, so a notifier that drops later signals fails. This asserts convergence, not the number of
+    /// signals: signals may be coalesced or spurious.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public virtual Task Under_concurrent_writes_the_change_version_converges_to_the_final_version() => WithNotifierAsync(async (store, notifier) =>
     {
         await using var listener = await SignalListener.StartAsync(notifier);
-
-        await Task.WhenAll(Enumerable.Range(1, 10).Select(i => Task.Run(() => CreateAsync(store, $"flag-{i}"))));
-        var final = await store.GetChangeVersionAsync();
-
-        using var timeout = new CancellationTokenSource(SignalTimeout);
-        while (true)
+        long observed = -1;
+        using var stopObserving = new CancellationTokenSource();
+        var observer = Task.Run(async () =>
         {
-            await listener.Signals.ReadAsync(timeout.Token).ConfigureAwait(false);
-            if (await store.GetChangeVersionAsync() == final)
+            await foreach (var _ in listener.Signals.ReadAllAsync(stopObserving.Token).ConfigureAwait(false))
             {
-                break;
+                Interlocked.Exchange(ref observed, await store.GetChangeVersionAsync().ConfigureAwait(false));
+            }
+        });
+
+        try
+        {
+            await CreateAsync(store, "flag-0");
+            var first = await store.GetChangeVersionAsync();
+            await WaitUntilAsync(() => Interlocked.Read(ref observed) >= first, "a signal-driven observation of the first write");
+
+            await Task.WhenAll(Enumerable.Range(1, 10).Select(i => Task.Run(() => CreateAsync(store, $"flag-{i}"))));
+            var final = await store.GetChangeVersionAsync();
+            await WaitUntilAsync(() => Interlocked.Read(ref observed) == final, "a signal-driven observation of the final version");
+        }
+        finally
+        {
+            await stopObserving.CancelAsync();
+            try
+            {
+                await observer;
+            }
+            catch (OperationCanceledException)
+            {
+                // The observer ends here.
             }
         }
     });
@@ -115,7 +136,7 @@ public abstract partial class FlagStoreConformanceTests
     /// Conformance: rejected writes leave the change version unchanged. Whether they signal is not required, so a commit-free
     /// period is only checked against the version, not against the signal count.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public virtual Task Rejected_writes_leave_the_notifier_contract_intact() => WithNotifierAsync(async (store, notifier) =>
     {
         var created = await CreateAsync(store, "checkout");
@@ -130,15 +151,12 @@ public abstract partial class FlagStoreConformanceTests
         Assert.Equal(version, await store.GetChangeVersionAsync());
     });
 
-    /// <summary>
-    /// Runs a notification case. A store without the capability must override the case with <c>[Fact(Skip = ...)]</c>
-    /// (xUnit 2 has no dynamic skip), so reaching here without a notifier is a failure, never a silent pass.
-    /// </summary>
+    /// <summary>Runs a notification case, or skips it (reported as skipped, never passed) when the store has no notifier.</summary>
     private async Task WithNotifierAsync(Func<IFlagStore, IFlagChangeNotifier, Task> test) => await WithStoreAsync(store =>
     {
-        var notifier = AsNotifier(store)
-            ?? throw new InvalidOperationException("The store has no IFlagChangeNotifier: override this case with [Fact(Skip = ...)].");
-        return test(store, notifier);
+        var notifier = AsNotifier(store);
+        Skip.If(notifier is null, "The store does not implement IFlagChangeNotifier; it is polled only.");
+        return test(store, notifier!);
     });
 
     private static async Task DisposeInstanceAsync(IFlagStore store)
