@@ -68,6 +68,7 @@ internal sealed partial class FlagonHostedService(
         {
             await notifier.StartAsync(() =>
             {
+                snapshots.RecordPush();
                 var queued = signals.TryWrite(true);
                 instrumentation.RecordPushNotification(coalesced: !queued);
             }, _pushStopping.Token).ConfigureAwait(false);
