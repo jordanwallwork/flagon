@@ -2,11 +2,14 @@ namespace Jorrk.Flagon.Storage;
 
 /// <summary>
 /// A process-local <see cref="IFlagStore"/>. The default when no storage is configured. Share one instance between
-/// several hosts to simulate apps sharing a database.
+/// several hosts to simulate apps sharing a database. Implements <see cref="IFlagChangeNotifier"/>: every write that moves
+/// the change version signals the listeners, usage writes do not.
 /// </summary>
-public sealed class InMemoryFlagStore : IFlagStore
+public sealed class InMemoryFlagStore : IFlagStore, IFlagChangeNotifier
 {
     private readonly object _gate = new();
+    private readonly object _listenersGate = new();
+    private readonly List<Action> _listeners = [];
     private readonly Dictionary<string, FlagRecord> _flags = new(StringComparer.Ordinal);
     private readonly List<FlagAuditEntry> _audit = [];
     private readonly Dictionary<(string Key, string ApplicationName), FlagUsage> _usage = new(UsageKeyComparer.Instance);
@@ -14,6 +17,55 @@ public sealed class InMemoryFlagStore : IFlagStore
 
     /// <inheritdoc />
     public bool IsReadOnly => false;
+
+    /// <inheritdoc />
+    public bool IsConnected
+    {
+        get
+        {
+            lock (_listenersGate)
+            {
+                return _listeners.Count > 0;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public Task StartAsync(Action onChanged, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(onChanged);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.CompletedTask;
+        }
+
+        lock (_listenersGate)
+        {
+            _listeners.Add(onChanged);
+        }
+
+        // Removing under the same lock that signalling holds means no callback runs once cancellation has been observed.
+        cancellationToken.Register(() =>
+        {
+            lock (_listenersGate)
+            {
+                _listeners.Remove(onChanged);
+            }
+        });
+        return Task.CompletedTask;
+    }
+
+    private void SignalChanged()
+    {
+        lock (_listenersGate)
+        {
+            // Callbacks are required to be quick and not to call back into the store, so running them under the lock is safe.
+            foreach (var listener in _listeners)
+            {
+                listener();
+            }
+        }
+    }
 
     /// <inheritdoc />
     public Task ApplyMigrationsAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -60,6 +112,7 @@ public sealed class InMemoryFlagStore : IFlagStore
             var record = new FlagRecord(key, document, ++_changeVersion);
             _flags[key] = record;
             Audit(change, key, FlagAuditAction.Created, record.Version, before: null, after: document);
+            SignalChanged();
             return Task.FromResult<FlagRecord?>(record);
         }
     }
@@ -74,6 +127,7 @@ public sealed class InMemoryFlagStore : IFlagStore
             var record = current with { Document = document, Version = ++_changeVersion };
             _flags[key] = record;
             Audit(change, key, FlagAuditAction.Updated, record.Version, current.Document, document);
+            SignalChanged();
             return Task.FromResult(record);
         }
     }
@@ -105,6 +159,7 @@ public sealed class InMemoryFlagStore : IFlagStore
 
             var version = ++_changeVersion;
             Audit(change, key, FlagAuditAction.Purged, version, current.Document, after: null);
+            SignalChanged();
             return Task.FromResult(version);
         }
     }
@@ -168,6 +223,7 @@ public sealed class InMemoryFlagStore : IFlagStore
             var record = current with { Archived = archived, Version = ++_changeVersion };
             _flags[key] = record;
             Audit(change, key, archived ? FlagAuditAction.Archived : FlagAuditAction.Restored, record.Version, current.Document, current.Document);
+            SignalChanged();
             return record;
         }
     }

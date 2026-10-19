@@ -12,6 +12,8 @@ namespace Jorrk.Flagon;
 /// <c>feature_flag.result.variant</c> (when a variant was served) and <c>error.type</c> (e.g. <c>flag_not_found</c>, on errors).</description></item>
 /// <item><description><c>flagon.refresh.duration</c> (histogram, seconds): each snapshot refresh against the store, tagged
 /// <c>flagon.refresh.outcome</c> (<c>unchanged</c>, <c>reloaded</c> or <c>failed</c>).</description></item>
+/// <item><description><c>flagon.push.notifications</c> (counter, <c>{notification}</c>): change signals pushed by a store that implements
+/// <c>IFlagChangeNotifier</c>, tagged <c>flagon.push.outcome</c> (<c>received</c> when queued for a refresh, <c>coalesced</c> when absorbed into one already queued).</description></item>
 /// <item><description><c>flagon.store.errors</c> (counter, <c>{error}</c>): store operations that failed, tagged
 /// <c>flagon.store.operation</c> (e.g. <c>refresh</c>, <c>create</c>, <c>set_enabled</c>) and <c>error.type</c> (exception type).</description></item>
 /// </list>

@@ -20,6 +20,7 @@ internal sealed class FlagonInstrumentation : IDisposable
     private readonly Counter<long> _evaluations;
     private readonly Histogram<double> _refreshDuration;
     private readonly Counter<long> _storeErrors;
+    private readonly Counter<long> _pushNotifications;
 
     public FlagonInstrumentation(IMeterFactory? meterFactory = null)
     {
@@ -37,6 +38,7 @@ internal sealed class FlagonInstrumentation : IDisposable
         _evaluations = meter.CreateCounter<long>("flagon.evaluations", "{evaluation}", "Flag evaluations.");
         _refreshDuration = meter.CreateHistogram<double>("flagon.refresh.duration", "s", "Duration of snapshot refreshes against the flag store.");
         _storeErrors = meter.CreateCounter<long>("flagon.store.errors", "{error}", "Flag store operations that failed.");
+        _pushNotifications = meter.CreateCounter<long>("flagon.push.notifications", "{notification}", "Change signals pushed by the flag store, tagged by outcome (received or coalesced).");
     }
 
     /// <summary>Counts one evaluation. Allocation-free when nobody listens.</summary>
@@ -74,6 +76,13 @@ internal sealed class FlagonInstrumentation : IDisposable
             RecordStoreError("refresh", error);
         }
     }
+
+    /// <summary>
+    /// Counts one push signal from the store: <c>received</c> when it was queued for a refresh, <c>coalesced</c> when it
+    /// was absorbed into a refresh already queued.
+    /// </summary>
+    public void RecordPushNotification(bool coalesced) =>
+        _pushNotifications.Add(1, new KeyValuePair<string, object?>("flagon.push.outcome", coalesced ? "coalesced" : "received"));
 
     /// <summary>Counts a failed store operation (an infrastructure failure, not a domain outcome such as a version conflict).</summary>
     public void RecordStoreError(string operation, Exception error) =>

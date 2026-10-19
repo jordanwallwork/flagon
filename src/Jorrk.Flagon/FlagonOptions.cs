@@ -7,6 +7,7 @@ public sealed partial class FlagonOptions
 {
     private TimeSpan _refreshInterval = TimeSpan.FromSeconds(10);
     private TimeSpan _usageFlushInterval = TimeSpan.FromSeconds(60);
+    private TimeSpan _pushMinInterval = TimeSpan.FromMilliseconds(100);
 
     internal Func<IServiceProvider, IFlagStore>? StoreFactory { get; private set; }
 
@@ -28,6 +29,28 @@ public sealed partial class FlagonOptions
         {
             ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
             _refreshInterval = value;
+        }
+    }
+
+    /// <summary>
+    /// When true (the default) and the store implements <see cref="IFlagChangeNotifier"/>, the store pushes a signal on each
+    /// change and the snapshot refreshes straight away instead of waiting for the next <see cref="RefreshInterval"/> tick.
+    /// Polling stays on as the backstop. Stores that do not implement the capability are polled regardless.
+    /// </summary>
+    public bool PushRefresh { get; set; } = true;
+
+    /// <summary>
+    /// The debounce for push-triggered refreshes (default 100 milliseconds): a burst of change signals collapses into one
+    /// refresh that runs once the burst has been quiet for this long. Has no effect when <see cref="PushRefresh"/> is off.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
+    public TimeSpan PushMinInterval
+    {
+        get => _pushMinInterval;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
+            _pushMinInterval = value;
         }
     }
 

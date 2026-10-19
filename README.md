@@ -120,6 +120,8 @@ builder.Services.AddFlagon(opts =>
 {
     opts.ApplicationName = "checkout-api";            // default: the host's application name
     opts.RefreshInterval = TimeSpan.FromSeconds(10);  // how often to poll the store for changes
+    opts.PushRefresh = true;                          // refresh at once when a store pushes a change (see below)
+    opts.PushMinInterval = TimeSpan.FromMilliseconds(100); // debounce: a burst of pushes becomes one refresh
     opts.AutoCreate = true;                           // create unknown keys on first evaluation
     opts.AutoMigrate = true;                          // create/upgrade Flagon's tables on startup
     opts.UsageTracking = true;                        // record last-evaluated time per flag and app
@@ -132,6 +134,13 @@ builder.Services.AddFlagon(opts =>
 
 If the store is unavailable at startup, the app still boots with code defaults and keeps retrying; if it fails later,
 Flagon keeps serving the last snapshot it loaded.
+
+`PushRefresh` (default on) matters only for stores that can push change notifications, which implement the optional
+`IFlagChangeNotifier` capability. For those stores, a change made by any app sharing the store refreshes this app's
+snapshot after `PushMinInterval` (default 100 ms) rather than at the next `RefreshInterval` tick. The poll stays on as the
+backstop, so a missed push costs latency, never correctness. Pushes never reset the poll timer. Set `PushRefresh = false`
+to poll only, even when the store can push. `InMemoryFlagStore` pushes; SQL Server stores are polled. Usage writes do not
+push.
 
 ### Flags as code
 
