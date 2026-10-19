@@ -88,7 +88,15 @@ public class PostgresPushHostTests(PostgresFixture db) : IClassFixture<PostgresF
 
         await app.StopAsync();
 
-        Assert.Equal(0, Convert.ToInt64(await db.ScalarAsync($"SELECT count(*) FROM pg_stat_activity WHERE pid = {pid}")));
+        // The connection is closed before StopAsync returns, but the server ends the backend asynchronously, so it can stay
+        // listed for a moment. An orphaned connection would stay listed for good.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (Convert.ToInt64(await db.ScalarAsync($"SELECT count(*) FROM pg_stat_activity WHERE pid = {pid}")) != 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "The listener's backend is still connected after the host stopped.");
+            await Task.Delay(20);
+        }
+
         await app.DisposeAsync();
     }
 
