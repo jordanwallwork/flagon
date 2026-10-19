@@ -54,3 +54,30 @@ public sealed record FlagAuditEntry(
 /// <param name="LastEvaluatedAt">When the application last evaluated the flag.</param>
 /// <param name="ObservedDefault">The default value the application's code supplied, as canonical JSON (object keys sorted, one number format); null when unknown.</param>
 public sealed record FlagUsage(string Key, string ApplicationName, DateTimeOffset LastEvaluatedAt, JsonElement? ObservedDefault = null);
+
+/// <summary>One append-only segment audit log entry, written atomically with the change it describes.</summary>
+/// <param name="Id">Store-assigned identifier; increases with each entry.</param>
+/// <param name="Key">The segment key.</param>
+/// <param name="Action">What happened.</param>
+/// <param name="Version">The change version the write was assigned.</param>
+/// <param name="Timestamp">When it happened (<see cref="FlagChangeContext.Timestamp"/>).</param>
+/// <param name="Actor">Who did it.</param>
+/// <param name="ApplicationName">Which application did it.</param>
+/// <param name="Before">The document before the change (null for <see cref="FlagAuditAction.Created"/>).</param>
+/// <param name="After">The document after the change (null for <see cref="FlagAuditAction.Purged"/>).</param>
+public sealed record SegmentAuditEntry(
+    long Id,
+    string Key,
+    FlagAuditAction Action,
+    long Version,
+    DateTimeOffset Timestamp,
+    string? Actor,
+    string? ApplicationName,
+    SegmentDocument? Before,
+    SegmentDocument? After);
+
+/// <summary>Every flag and segment from one consistent read (see <see cref="ISegmentStore.LoadAllWithSegmentsAsync"/>).</summary>
+/// <param name="Version">The change version the contents reflect: every write numbered up to it is included, none after.</param>
+/// <param name="Flags">Every flag, archived ones included.</param>
+/// <param name="Segments">Every segment, archived ones included.</param>
+public sealed record FlagStoreContents(long Version, IReadOnlyList<FlagRecord> Flags, IReadOnlyList<SegmentRecord> Segments);

@@ -11,10 +11,12 @@ namespace Jorrk.Flagon.Storage.SqlServer;
 /// <remarks>
 /// Flag writes run in a transaction that first locks the single-row change sequence, so writes are serialised, versions
 /// are committed in order (a refresher that reads version N never misses a later-committed lower version) and
-/// create-if-absent is race-free. Flag writes are rare, so the serialisation costs nothing in practice.
+/// create-if-absent is race-free. Flag writes are rare, so the serialisation costs nothing in practice. Every write
+/// increments the sequence before it changes any row, which lets <see cref="LoadAllWithSegmentsAsync"/> read a consistent
+/// view by holding a shared lock on it. Segment writes (<see cref="ISegmentStore"/>) share the sequence.
 /// <para>This store is polled. <see cref="SqlServerPushFlagStore"/> adds push notifications.</para>
 /// </remarks>
-public class SqlServerFlagStore : IFlagStore
+public partial class SqlServerFlagStore : IFlagStore, ISegmentStore
 {
     private readonly string _connectionString;
     private readonly string _schema;
@@ -145,6 +147,8 @@ public class SqlServerFlagStore : IFlagStore
                 throw new FlagValidationException($"Flag '{key}' must be archived before it can be purged.");
             }
 
+            // The version first, as for every write: rows change only once the sequence is exclusively held.
+            var version = await NextVersionAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
             await using (var delete = Command(connection, transaction,
                 $"DELETE FROM {T("flags")} WHERE [flag_key] = @key; DELETE FROM {T("usage")} WHERE [flag_key] = @key;"))
             {
@@ -152,7 +156,6 @@ public class SqlServerFlagStore : IFlagStore
                 await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            var version = await NextVersionAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
             await AuditAsync(connection, transaction, change, key, FlagAuditAction.Purged, version, current.Json, after: null, cancellationToken).ConfigureAwait(false);
             return version;
         }, cancellationToken);

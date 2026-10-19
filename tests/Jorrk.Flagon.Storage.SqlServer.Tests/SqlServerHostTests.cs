@@ -14,7 +14,7 @@ public class SqlServerHostTests(SqlServerFixture db)
         var schema = SqlServerFixture.NewSchema();
         await using var appA = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.UseSqlServerStorage(db.ConnectionString, schema: schema));
 
-        Assert.Equal(1, await db.ScalarAsync<int>($"SELECT MAX([version]) FROM [{schema}].[schema_version]"));
+        Assert.Equal(SqlServerMigrations.GetMigrations().Count, await db.ScalarAsync<int>($"SELECT MAX([version]) FROM [{schema}].[schema_version]"));
         Assert.True(appA.Status.IsLoaded);
         Assert.True(appA.Flagon.IsEnabled("checkout", defaultValue: true));
 
@@ -101,7 +101,7 @@ public class SqlServerHostTests(SqlServerFixture db)
         Assert.True(app.Status.IsLoaded);
         await app.Admin.CreateAsync(new CreateFlagRequest("installed-by-dba", Enabled: true));
         Assert.True(app.Flagon.IsEnabled("installed-by-dba"));
-        Assert.Equal(1, await db.ScalarAsync<int>($"SELECT COUNT(*) FROM [{schema}].[schema_version]"));
+        Assert.Equal(SqlServerMigrations.GetMigrations().Count, await db.ScalarAsync<int>($"SELECT COUNT(*) FROM [{schema}].[schema_version]"));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class SqlServerHostTests(SqlServerFixture db)
         await RunScriptAsync($"DROP TABLE [{schema}].[flags]");
         await RunScriptAsync(script);
 
-        Assert.Equal(1, await db.ScalarAsync<int>($"SELECT MAX([version]) FROM [{schema}].[schema_version]"));
+        Assert.Equal(SqlServerMigrations.GetMigrations().Count, await db.ScalarAsync<int>($"SELECT MAX([version]) FROM [{schema}].[schema_version]"));
         await using var app = await FlagonTestHost.StartAsync(o => o.Flagon = f =>
         {
             f.AutoMigrate = false;

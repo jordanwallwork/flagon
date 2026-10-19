@@ -3,15 +3,18 @@ namespace Jorrk.Flagon.Storage;
 /// <summary>
 /// A process-local <see cref="IFlagStore"/>. The default when no storage is configured. Share one instance between
 /// several hosts to simulate apps sharing a database. Implements <see cref="IFlagChangeNotifier"/>: every write that moves
-/// the change version signals the listeners, usage writes do not.
+/// the change version signals the listeners, usage writes do not. Implements <see cref="ISegmentStore"/>: segments share
+/// the flags' change sequence.
 /// </summary>
-public sealed class InMemoryFlagStore : IFlagStore, IFlagChangeNotifier
+public sealed class InMemoryFlagStore : IFlagStore, IFlagChangeNotifier, ISegmentStore
 {
     private readonly object _gate = new();
     private readonly object _listenersGate = new();
     private readonly List<Action<FlagChangeSignal>> _listeners = [];
     private readonly Dictionary<string, FlagRecord> _flags = new(StringComparer.Ordinal);
     private readonly List<FlagAuditEntry> _audit = [];
+    private readonly Dictionary<string, SegmentRecord> _segments = new(StringComparer.Ordinal);
+    private readonly List<SegmentAuditEntry> _segmentAudit = [];
     private readonly Dictionary<(string Key, string ApplicationName), FlagUsage> _usage = new(UsageKeyComparer.Instance);
     private long _changeVersion;
 
@@ -208,6 +211,148 @@ public sealed class InMemoryFlagStore : IFlagStore, IFlagChangeNotifier
         {
             return Task.FromResult<IReadOnlyList<FlagUsage>>(_usage.Values.ToArray());
         }
+    }
+
+    /// <inheritdoc />
+    public Task<FlagStoreContents> LoadAllWithSegmentsAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult(new FlagStoreContents(_changeVersion, _flags.Values.ToArray(), _segments.Values.ToArray()));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<SegmentRecord>> LoadAllSegmentsAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult<IReadOnlyList<SegmentRecord>>(_segments.Values.ToArray());
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<SegmentRecord?> GetSegmentAsync(string key, CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult(_segments.GetValueOrDefault(key));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<SegmentRecord?> TryCreateSegmentAsync(string key, SegmentDocument document, FlagChangeContext? change = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(document);
+        lock (_gate)
+        {
+            if (_segments.ContainsKey(key))
+            {
+                return Task.FromResult<SegmentRecord?>(null);
+            }
+
+            var record = new SegmentRecord(key, document, ++_changeVersion);
+            _segments[key] = record;
+            AuditSegment(change, key, FlagAuditAction.Created, record.Version, before: null, after: document);
+            SignalChanged();
+            return Task.FromResult<SegmentRecord?>(record);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<SegmentRecord> UpdateSegmentAsync(string key, SegmentDocument document, long expectedVersion, FlagChangeContext? change = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        lock (_gate)
+        {
+            var current = GetSegmentForWrite(key, expectedVersion);
+            var record = current with { Document = document, Version = ++_changeVersion };
+            _segments[key] = record;
+            AuditSegment(change, key, FlagAuditAction.Updated, record.Version, current.Document, document);
+            SignalChanged();
+            return Task.FromResult(record);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<SegmentRecord> ArchiveSegmentAsync(string key, long expectedVersion, FlagChangeContext? change = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult(SetSegmentArchived(key, expectedVersion, archived: true, change));
+
+    /// <inheritdoc />
+    public Task<SegmentRecord> RestoreSegmentAsync(string key, long expectedVersion, FlagChangeContext? change = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult(SetSegmentArchived(key, expectedVersion, archived: false, change));
+
+    /// <inheritdoc />
+    public Task<long> PurgeSegmentAsync(string key, long expectedVersion, FlagChangeContext? change = null, CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            var current = GetSegmentForWrite(key, expectedVersion);
+            if (!current.Archived)
+            {
+                throw new FlagValidationException($"Segment '{key}' must be archived before it can be purged.");
+            }
+
+            _segments.Remove(key);
+            var version = ++_changeVersion;
+            AuditSegment(change, key, FlagAuditAction.Purged, version, current.Document, after: null);
+            SignalChanged();
+            return Task.FromResult(version);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<SegmentAuditEntry>> GetSegmentAuditAsync(string key, CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult<IReadOnlyList<SegmentAuditEntry>>(_segmentAudit.Where(e => string.Equals(e.Key, key, StringComparison.Ordinal)).ToArray());
+        }
+    }
+
+    private SegmentRecord SetSegmentArchived(string key, long expectedVersion, bool archived, FlagChangeContext? change)
+    {
+        lock (_gate)
+        {
+            var current = GetSegmentForWrite(key, expectedVersion);
+            if (current.Archived == archived)
+            {
+                throw new FlagValidationException(archived ? $"Segment '{key}' is already archived." : $"Segment '{key}' is not archived.");
+            }
+
+            var record = current with { Archived = archived, Version = ++_changeVersion };
+            _segments[key] = record;
+            AuditSegment(change, key, archived ? FlagAuditAction.Archived : FlagAuditAction.Restored, record.Version, current.Document, current.Document);
+            SignalChanged();
+            return record;
+        }
+    }
+
+    private SegmentRecord GetSegmentForWrite(string key, long expectedVersion)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (!_segments.TryGetValue(key, out var current))
+        {
+            throw new SegmentNotFoundException(key);
+        }
+
+        if (current.Version != expectedVersion)
+        {
+            throw new SegmentVersionConflictException(key, expectedVersion, current.Version);
+        }
+
+        return current;
+    }
+
+    private void AuditSegment(FlagChangeContext? change, string key, FlagAuditAction action, long version, SegmentDocument? before, SegmentDocument? after)
+    {
+        if (change is null)
+        {
+            return;
+        }
+
+        _segmentAudit.Add(new SegmentAuditEntry(_segmentAudit.Count + 1, key, action, version, change.Timestamp, change.Actor, change.ApplicationName, before, after));
     }
 
     private FlagRecord SetArchived(string key, long expectedVersion, bool archived, FlagChangeContext? change)

@@ -328,8 +328,9 @@ public sealed class TestFlags
     }
 
     /// <summary>
-    /// Returns to the starting state: every flag is removed and, when <see cref="FlagonTestingSwitches.SeedDefinitions"/>
-    /// is on, the flags declared with <c>Define</c> are seeded again, and the <see cref="Evaluations"/> log is cleared.
+    /// Returns to the starting state: every flag and segment is removed and, when <see cref="FlagonTestingSwitches.SeedDefinitions"/>
+    /// is on, the segments and flags declared with <c>DefineSegment</c> and <c>Define</c> are seeded again, and the
+    /// <see cref="Evaluations"/> log is cleared.
     /// The next evaluation sees the reset state. Use it between tests that share one flagon or host.
     /// </summary>
     /// <returns>This instance, for chaining.</returns>
@@ -343,9 +344,34 @@ public sealed class TestFlags
             await RemoveAsync(flag.Key).ConfigureAwait(false);
         }
 
+        if (_store is ISegmentStore segments)
+        {
+            foreach (var segment in await segments.LoadAllSegmentsAsync().ConfigureAwait(false))
+            {
+                await RemoveSegmentAsync(segments, segment.Key).ConfigureAwait(false);
+            }
+        }
+
         // The seeder seeds nothing when SeedDefinitions is switched off. Reseeding is test setup, so it leaves no audit entry.
         await _seeder.SeedAsync(CancellationToken.None, audited: false).ConfigureAwait(false);
     });
+
+    /// <summary>Purges the segment <paramref name="key"/> (archiving it first), retrying when a concurrent write moves it.</summary>
+    private static async Task RemoveSegmentAsync(ISegmentStore segments, string key)
+    {
+        while (await segments.GetSegmentAsync(key).ConfigureAwait(false) is { } current)
+        {
+            try
+            {
+                var archived = current.Archived ? current : await segments.ArchiveSegmentAsync(key, current.Version).ConfigureAwait(false);
+                await segments.PurgeSegmentAsync(key, archived.Version).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (ex is SegmentVersionConflictException or SegmentNotFoundException)
+            {
+            }
+        }
+    }
 
     /// <summary>Archives <paramref name="current"/>, or returns null when a concurrent write got there first.</summary>
     private async Task<FlagRecord?> TryArchiveAsync(FlagRecord current)
@@ -392,9 +418,18 @@ public sealed class TestFlags
         return Upsert(key, _ => document);
     }
 
-    /// <summary>The rule to store for <paramref name="targeting"/>, compiled now with the registered compiler.</summary>
-    private JsonElement? Rule(string key, string? targeting) =>
-        TargetingRules.Validate(_compiler, key, TargetingRules.ParseJson(key, targeting));
+    /// <summary>
+    /// The rule to store for <paramref name="targeting"/>, compiled now with the registered compiler, segment references
+    /// inlined from the store's segments (they must exist).
+    /// </summary>
+    private JsonElement? Rule(string key, string? targeting)
+    {
+        var rule = TargetingRules.ParseJson(key, targeting);
+        var segments = _store is ISegmentStore segmentStore && TargetingRules.IsRule(rule) && SegmentRefs.FindAny(rule!.Value) is not null
+            ? TargetingRules.RulesOf(segmentStore.LoadAllSegmentsAsync().GetAwaiter().GetResult())
+            : null;
+        return TargetingRules.Validate(_compiler, key, rule, segments);
+    }
 
     /// <summary>Rewrites the document of the existing flag <paramref name="key"/>.</summary>
     /// <exception cref="FlagNotFoundException">There is no flag <paramref name="key"/>.</exception>

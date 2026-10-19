@@ -7,8 +7,55 @@ namespace Jorrk.Flagon;
 public sealed partial class FlagonOptions
 {
     private readonly List<FlagDefinition> _definitions = [];
+    private readonly List<SegmentDefinition> _segmentDefinitions = [];
 
     internal IReadOnlyList<FlagDefinition> Definitions => _definitions;
+
+    internal IReadOnlyList<SegmentDefinition> SegmentDefinitions => _segmentDefinitions;
+
+    /// <summary>
+    /// Declares a segment in code: a reusable targeting condition that flags reference with
+    /// <c>{"$ref": "&lt;key&gt;"}</c>. On startup segments are seeded before flags, so a <c>Define</c>d flag can reference
+    /// one on an empty store. A missing segment is created with source <see cref="FlagSource.Code"/>; an existing one has
+    /// its description, tags and source brought in line with this definition but its rule is never overwritten (an admin
+    /// may have changed it). Archived segments are left alone. Needs a store that supports segments (<see cref="Storage.ISegmentStore"/>).
+    /// </summary>
+    /// <param name="key">The segment key (same rules as <see cref="FlagKey"/>).</param>
+    /// <param name="ruleJson">
+    /// The condition as JSON text, e.g. <c>{"in":[{"var":"targetingKey"},["alice","bob"]]}</c>. Only the JSON syntax is
+    /// checked here; the rule is compiled with the registered targeting compiler when the host starts (it may not contain
+    /// <c>$ref</c>), and a rule it rejects fails startup with <see cref="SegmentRuleException"/>.
+    /// </param>
+    /// <param name="description">Human-readable description.</param>
+    /// <param name="tags">Tags, as for flags.</param>
+    /// <exception cref="FlagValidationException">The key, a tag or the rule JSON is invalid.</exception>
+    /// <exception cref="ArgumentException">The segment key has already been defined.</exception>
+    public FlagonOptions DefineSegment(string key, string ruleJson, string? description = null, IEnumerable<string>? tags = null)
+    {
+        ArgumentNullException.ThrowIfNull(ruleJson);
+        FlagonAdmin.ValidateSegmentKey(key);
+        var tagList = tags?.ToArray() ?? [];
+        FlagTags.Validate(tagList);
+
+        JsonElement rule;
+        try
+        {
+            using var document = JsonDocument.Parse(ruleJson);
+            rule = document.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            throw new FlagValidationException($"Segment '{key}' rule is not valid JSON: {ex.Message}");
+        }
+
+        if (_segmentDefinitions.Exists(d => string.Equals(d.Key, key, StringComparison.Ordinal)))
+        {
+            throw new ArgumentException($"Segment '{key}' has already been defined.", nameof(key));
+        }
+
+        _segmentDefinitions.Add(new SegmentDefinition(key, rule, description, tagList));
+        return this;
+    }
 
     /// <summary>
     /// Declares a boolean flag in code. On startup (after migrations) a missing flag is created with source
@@ -27,8 +74,9 @@ public sealed partial class FlagonOptions
     /// Optional flagd targeting rule as JSON text, e.g. <c>{"if":[{"in":[{"var":"email"},["a@example.com"]]},"on",null]}</c>.
     /// A rule that matches serves the variant it names (<c>"on"</c> or <c>"off"</c>); otherwise the flag serves its
     /// default. Only the JSON syntax is checked here; the rule is compiled with the registered targeting compiler when
-    /// the host starts, and a rule it rejects fails startup with <see cref="FlagTargetingException"/>. <c>$ref</c> is not
-    /// supported by Flagon's targeting engine (inline the evaluator).
+    /// the host starts, and a rule it rejects fails startup with <see cref="FlagTargetingException"/>. The rule may reference
+    /// segments with <c>{"$ref": "&lt;segment-key&gt;"}</c>, such as ones declared with <see cref="DefineSegment"/> (seeded
+    /// first); references are checked against the store when the flag is seeded.
     /// </param>
     /// <exception cref="FlagValidationException">The key, a tag or the targeting JSON is invalid.</exception>
     /// <exception cref="ArgumentException">The key has already been defined.</exception>

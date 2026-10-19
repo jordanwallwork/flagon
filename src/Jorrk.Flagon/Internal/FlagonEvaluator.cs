@@ -228,8 +228,9 @@ internal sealed partial class FlagonEvaluator(
     /// <exception cref="FlagTargetingException">The draft's targeting rule does not compile.</exception>
     internal FlagEvaluationDetails<JsonElement> PreviewDraftDetails(string key, FlagDocument draft, EvaluationContext context)
     {
-        // Compiled once, as a snapshot would; a rule that fails to compile is rejected as on write.
-        var flag = SnapshotFlag.Create(new FlagRecord(key, draft, Version: 0), compiler);
+        // Compiled once, as a snapshot would (segment references inlined from the current snapshot's segments); a rule
+        // that fails to compile is rejected as on write.
+        var flag = SnapshotFlag.Create(new FlagRecord(key, draft, Version: 0), compiler, snapshots.Current.SegmentRules);
         if (flag.Targeting?.Error is { } error)
         {
             throw new FlagTargetingException(key, error);
@@ -237,6 +238,30 @@ internal sealed partial class FlagonEvaluator(
 
         // A version no snapshot has suppresses the once-per-snapshot rule-failure warning: a draft is not live.
         return Evaluate(key, flag, snapshotVersion: -1, context).ToDetails();
+    }
+
+    /// <summary>
+    /// Runs a segment's <paramref name="rule"/> against <paramref name="context"/> for the management API, with no side
+    /// effects. The rule must be valid for a segment. <c>$flagd.flagKey</c> (and fractional bucketing) sees the segment key.
+    /// </summary>
+    /// <exception cref="SegmentRuleException">The rule is not a valid segment rule.</exception>
+    internal SegmentPreview PreviewSegment(string key, JsonElement rule, EvaluationContext context)
+    {
+        var validated = TargetingRules.ValidateSegmentRule(compiler, key, rule);
+        var result = TargetingRules.Compile(compiler, key, validated).Rule!;
+        // JsonLogic truthiness of the result, through the registered engine: "!!" is part of flagd's operator set.
+        using var truthiness = JsonDocument.Parse($"{{\"!!\":[{validated.GetRawText()}]}}");
+        var matches = TargetingRules.Compile(compiler, key, truthiness.RootElement.Clone()).Rule;
+
+        var target = new TargetingContext(key, context, time.GetUtcNow().ToUnixTimeSeconds());
+        try
+        {
+            return new SegmentPreview(matches?.Invoke(target) == "true", result(target), Error: null);
+        }
+        catch (Exception ex) when (!TargetingRules.IsFatal(ex))
+        {
+            return new SegmentPreview(false, null, ex.Message);
+        }
     }
 
     /// <summary>
@@ -424,3 +449,9 @@ internal sealed partial class FlagonEvaluator(
         Message = "Flag '{FlagKey}' targeting rule failed while evaluating (snapshot version {SnapshotVersion}); it evaluates to the caller's default with PARSE_ERROR. This is logged once per flag per snapshot version.")]
     private static partial void LogRuleFailed(ILogger logger, Exception exception, string flagKey, long snapshotVersion);
 }
+
+/// <summary>
+/// A segment rule run against a context: whether it matches (its result is JsonLogic-truthy), its result as flagd would
+/// name a variant (null when the rule returns null), or why the rule failed while running.
+/// </summary>
+internal sealed record SegmentPreview(bool Matches, string? Result, string? Error);

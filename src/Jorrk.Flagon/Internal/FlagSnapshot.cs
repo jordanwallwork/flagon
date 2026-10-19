@@ -1,19 +1,35 @@
 using System.Collections.Frozen;
+using System.Text.Json;
 using Jorrk.Flagon.Internal.Targeting;
 using Jorrk.Flagon.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace Jorrk.Flagon.Internal;
 
-/// <summary>An immutable view of every flag at one change version. Swapped atomically; read lock-free by evaluation.</summary>
+/// <summary>
+/// An immutable view of every flag (and segment) at one change version. Swapped atomically; read lock-free by evaluation.
+/// </summary>
 internal sealed class FlagSnapshot
 {
-    public static FlagSnapshot Empty { get; } = new(0, FrozenDictionary<string, SnapshotFlag>.Empty);
+    public static FlagSnapshot Empty { get; } = new(
+        0,
+        FrozenDictionary<string, SnapshotFlag>.Empty,
+        FrozenDictionary<string, SegmentRecord>.Empty,
+        FrozenDictionary<string, IReadOnlyList<string>>.Empty,
+        segmentRules: null);
 
-    private FlagSnapshot(long version, FrozenDictionary<string, SnapshotFlag> flags)
+    private FlagSnapshot(
+        long version,
+        FrozenDictionary<string, SnapshotFlag> flags,
+        FrozenDictionary<string, SegmentRecord> segments,
+        FrozenDictionary<string, IReadOnlyList<string>> segmentUsage,
+        IReadOnlyDictionary<string, JsonElement>? segmentRules)
     {
         Version = version;
         Flags = flags;
+        Segments = segments;
+        SegmentUsage = segmentUsage;
+        SegmentRules = segmentRules;
     }
 
     /// <summary>The store change version this snapshot reflects.</summary>
@@ -21,31 +37,58 @@ internal sealed class FlagSnapshot
 
     public FrozenDictionary<string, SnapshotFlag> Flags { get; }
 
+    /// <summary>Every segment, archived ones included, by key (empty when the store has no segments).</summary>
+    public FrozenDictionary<string, SegmentRecord> Segments { get; }
+
+    /// <summary>Segment key to the keys of the flags whose targeting references it (archived flags included), ordered by key.</summary>
+    public FrozenDictionary<string, IReadOnlyList<string>> SegmentUsage { get; }
+
+    /// <summary>
+    /// The rules flags' <c>$ref</c>s are inlined from (every segment, archived ones included), or null when the store has
+    /// no segments (a <c>$ref</c> then fails to compile).
+    /// </summary>
+    public IReadOnlyDictionary<string, JsonElement>? SegmentRules { get; }
+
     /// <summary>
     /// Builds a snapshot from <paramref name="records"/>, compiling each flag's targeting once with
-    /// <paramref name="compiler"/>. A rule that fails to compile (or whose compiler throws) marks only that flag broken.
-    /// Empty targeting (<c>{}</c>) is no targeting, as in flagd.
+    /// <paramref name="compiler"/> after inlining its segment references from <paramref name="segments"/> (null when the
+    /// store has no segments). A rule that fails to compile (or whose compiler throws), including one referencing a
+    /// segment that is not loaded, marks only that flag broken. Empty targeting (<c>{}</c>) is no targeting, as in flagd.
     /// </summary>
-    public static FlagSnapshot Create(long version, IEnumerable<FlagRecord> records, ITargetingCompiler compiler)
+    public static FlagSnapshot Create(long version, IEnumerable<FlagRecord> records, IEnumerable<SegmentRecord>? segments, ITargetingCompiler compiler)
     {
+        var segmentRecords = segments?.ToFrozenDictionary(s => s.Key, StringComparer.Ordinal);
+        var rules = segmentRecords?.ToFrozenDictionary(s => s.Key, s => s.Value.Document.Rule, StringComparer.Ordinal);
         var flags = records.ToFrozenDictionary(
             r => r.Key,
-            r => SnapshotFlag.Create(r, compiler),
+            r => SnapshotFlag.Create(r, compiler, rules),
             StringComparer.Ordinal);
-        return new FlagSnapshot(version, flags);
+        var usage = flags.Values
+            .SelectMany(f => SegmentRefs.References(f.Record.Document.Targeting).Select(segment => (Segment: segment, Flag: f.Record.Key)))
+            .GroupBy(u => u.Segment, StringComparer.Ordinal)
+            .ToFrozenDictionary(
+                g => g.Key,
+                g => (IReadOnlyList<string>)g.Select(u => u.Flag).Order(StringComparer.Ordinal).ToArray(),
+                StringComparer.Ordinal);
+        return new FlagSnapshot(version, flags, segmentRecords ?? FrozenDictionary<string, SegmentRecord>.Empty, usage, rules);
     }
+
+    /// <summary>A snapshot of a store without segments.</summary>
+    public static FlagSnapshot Create(long version, IEnumerable<FlagRecord> records, ITargetingCompiler compiler) =>
+        Create(version, records, segments: null, compiler);
 }
 
 /// <summary>A flag in a <see cref="FlagSnapshot"/>: its record plus its compiled targeting (null when it has none).</summary>
 internal sealed record SnapshotFlag(FlagRecord Record, TargetingCompilation? Targeting)
 {
     /// <summary>
-    /// <paramref name="record"/> with its targeting compiled by <paramref name="compiler"/> (never throws: a rule that
-    /// fails to compile is a failed <see cref="TargetingCompilation"/>). No rule, including <c>{}</c>, compiles to null.
+    /// <paramref name="record"/> with its targeting compiled by <paramref name="compiler"/>, segment references inlined
+    /// from <paramref name="segments"/> (never throws: a rule that fails to compile is a failed
+    /// <see cref="TargetingCompilation"/>). No rule, including <c>{}</c>, compiles to null.
     /// </summary>
-    public static SnapshotFlag Create(FlagRecord record, ITargetingCompiler compiler) =>
+    public static SnapshotFlag Create(FlagRecord record, ITargetingCompiler compiler, IReadOnlyDictionary<string, JsonElement>? segments = null) =>
         new(record, TargetingRules.IsRule(record.Document.Targeting)
-            ? TargetingRules.Compile(compiler, record.Key, record.Document.Targeting!.Value)
+            ? TargetingRules.Compile(compiler, record.Key, record.Document.Targeting!.Value, segments)
             : null);
 }
 
@@ -165,10 +208,22 @@ internal sealed partial class FlagSnapshotManager(
             return RefreshOutcome.Unchanged;
         }
 
-        var flags = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
-        // Stamp with the version read *before* loading: a write racing the load then just causes one extra reload,
-        // whereas stamping with the highest loaded version could skip a lower-numbered write that commits late.
-        var snapshot = FlagSnapshot.Create(version, flags, compiler);
+        FlagSnapshot snapshot;
+        if (store is ISegmentStore segmentStore)
+        {
+            // One consistent read of flags and segments, stamped with the version it reflects: separate reads could tear
+            // (a segment purged between them would break a flag that had already stopped referencing it).
+            var contents = await segmentStore.LoadAllWithSegmentsAsync(cancellationToken).ConfigureAwait(false);
+            snapshot = FlagSnapshot.Create(contents.Version, contents.Flags, contents.Segments, compiler);
+        }
+        else
+        {
+            var flags = await store.LoadAllAsync(cancellationToken).ConfigureAwait(false);
+            // Stamp with the version read *before* loading: a write racing the load then just causes one extra reload,
+            // whereas stamping with the highest loaded version could skip a lower-numbered write that commits late.
+            snapshot = FlagSnapshot.Create(version, flags, compiler);
+        }
+
         foreach (var flag in snapshot.Flags.Values)
         {
             // Once per snapshot version: a snapshot is only rebuilt when the store's change version moves.
