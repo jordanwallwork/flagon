@@ -89,7 +89,7 @@ public class InMemoryChangeNotifierTests
     private static async Task<Signals> ListenAsync(InMemoryFlagStore store, CancellationToken cancellationToken = default)
     {
         var signals = new Signals();
-        await ((IFlagChangeNotifier)store).StartAsync(() => Interlocked.Increment(ref signals.Count), cancellationToken);
+        await ((IFlagChangeNotifier)store).StartAsync(_ => Interlocked.Increment(ref signals.Count), cancellationToken);
         return signals;
     }
 

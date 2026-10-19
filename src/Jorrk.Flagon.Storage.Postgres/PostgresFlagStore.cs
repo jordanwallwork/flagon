@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -32,6 +34,7 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
     private readonly string _listenerConnectionString;
     private readonly CancellationTokenSource _disposing = new();
     private int _liveListeners;
+    private readonly ILogger _logger;
     private readonly string _migrationLock;
     private readonly string _writeLock;
     private readonly string _flags;
@@ -43,8 +46,9 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
     /// <summary>Creates a store over the database at <paramref name="connectionString"/>.</summary>
     /// <param name="connectionString">An Npgsql connection string.</param>
     /// <param name="schema">The schema holding Flagon's tables (letters, digits and underscores).</param>
+    /// <param name="logger">Receives the change listener's connect, disconnect, reconnect and notification logs. Optional.</param>
     /// <exception cref="ArgumentException">The schema name is invalid.</exception>
-    public PostgresFlagStore(string connectionString, string schema = DefaultSchema)
+    public PostgresFlagStore(string connectionString, string schema = DefaultSchema, ILogger? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         PostgresMigrations.ValidateSchema(schema);
@@ -59,6 +63,7 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
         }
 
         Schema = schema;
+        _logger = logger ?? NullLogger.Instance;
         _dataSource = NpgsqlDataSource.Create(connectionString);
         // Listeners get their own unpooled connection: a pooled one would keep its LISTEN after being returned to the pool.
         _listenerConnectionString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ConnectionString;
@@ -73,6 +78,9 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
 
     /// <summary>The schema holding Flagon's tables.</summary>
     public string Schema { get; }
+
+    /// <summary>How long the listener connection may stay silent before a <c>SELECT 1</c> checks it (30 seconds).</summary>
+    internal TimeSpan ListenerKeepaliveInterval { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <inheritdoc />
     public bool IsReadOnly => false;
@@ -300,10 +308,11 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
     /// <inheritdoc />
     /// <remarks>
     /// Opens a dedicated, unpooled connection and runs <c>LISTEN flagon_{schema}</c> before returning, so a write that commits
-    /// after this returns is delivered. A listener that fails later sets <see cref="IsConnected"/> to false and stops; polling
-    /// covers the gap. Reconnecting is not done here.
+    /// after this returns is delivered. If the connection is later lost, it reconnects in the background with backoff,
+    /// re-issues <c>LISTEN</c> and signals a resubscribe (see <see cref="FlagChangeSignal.Resubscribed"/>). Polling covers
+    /// the gap. The listener stops when <paramref name="cancellationToken"/> is cancelled or the store is disposed.
     /// </remarks>
-    public async Task StartAsync(Action onChanged, CancellationToken cancellationToken = default)
+    public async Task StartAsync(Action<FlagChangeSignal> onChanged, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(onChanged);
         if (cancellationToken.IsCancellationRequested)
@@ -312,29 +321,9 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
         }
 
         var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposing.Token);
-        var connection = new NpgsqlConnection(_listenerConnectionString);
-        try
-        {
-            // Delivered on the thread that reads the connection (inside WaitAsync below); a stopped listener stays silent.
-            connection.Notification += (_, _) =>
-            {
-                if (!stop.IsCancellationRequested)
-                {
-                    onChanged();
-                }
-            };
-            await connection.OpenAsync(stop.Token).ConfigureAwait(false);
-            await new NpgsqlCommand($"LISTEN \"{_channel}\"", connection).ExecuteNonQueryAsync(stop.Token).ConfigureAwait(false);
-        }
-        catch
-        {
-            await connection.DisposeAsync().ConfigureAwait(false);
-            stop.Dispose();
-            throw;
-        }
-
-        Interlocked.Increment(ref _liveListeners);
-        _ = ListenAsync(connection, stop);
+        var listener = new PostgresChangeListener(_listenerConnectionString, _channel, ListenerKeepaliveInterval, _logger,
+            connected => Interlocked.Add(ref _liveListeners, connected ? 1 : -1));
+        await listener.StartAsync(onChanged, stop).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -349,28 +338,6 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
     {
         _disposing.Cancel();
         _dataSource.Dispose();
-    }
-
-    /// <summary>Pumps the listener connection until it is stopped or fails. Never throws: a failure only ends the listener.</summary>
-    private async Task ListenAsync(NpgsqlConnection connection, CancellationTokenSource stop)
-    {
-        try
-        {
-            while (true)
-            {
-                await connection.WaitAsync(stop.Token).ConfigureAwait(false);
-            }
-        }
-        catch (Exception)
-        {
-            // Stopped by cancellation, or the connection was lost. Either way the listener is gone and polling covers changes.
-        }
-        finally
-        {
-            Interlocked.Decrement(ref _liveListeners);
-            await connection.DisposeAsync().ConfigureAwait(false);
-            stop.Dispose();
-        }
     }
 
     /// <summary>

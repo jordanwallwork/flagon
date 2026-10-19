@@ -1,5 +1,6 @@
 using Jorrk.Flagon.Tests.Support;
 using Microsoft.Extensions.Time.Testing;
+using Npgsql;
 
 namespace Jorrk.Flagon.Storage.Postgres.Tests;
 
@@ -38,5 +39,49 @@ public class PostgresPushHostTests(PostgresFixture db) : IClassFixture<PostgresF
 
         Assert.True(appB.Flagon.IsEnabled("search-v2"));
         Assert.True(time.GetUtcNow() - started < refreshInterval);
+    }
+
+    [Fact]
+    public async Task A_write_made_while_the_listener_is_down_reaches_the_snapshot_after_it_reconnects_long_before_the_refresh_interval()
+    {
+        var schema = PostgresFixture.NewSchema();
+        await using var writer = new PostgresFlagStore(db.ConnectionString, schema);
+        await writer.ApplyMigrationsAsync();
+        var time = new FakeTimeProvider(FlagonTestHost.Epoch);
+        var refreshInterval = TimeSpan.FromMinutes(1);
+        await using var app = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Time = time;
+            o.Flagon = f => { f.UsePostgresStorage(db.ConnectionString, schema); f.RefreshInterval = refreshInterval; };
+        });
+        Assert.True(app.Status.IsPushConnected);
+
+        var pid = Convert.ToInt32(await db.ScalarAsync(
+            $"SELECT pid FROM pg_stat_activity WHERE query = 'LISTEN \"flagon_{schema}\"' AND pid <> pg_backend_pid()"));
+        await db.ExecuteAsync($"SELECT pg_terminate_backend({pid})");
+        await WaitUntilAsync(() => app.Status.IsPushConnected == false);
+
+        // Written in the gap: no signal reaches the app for this one.
+        await writer.TryCreateAsync("late", FlagDocument.Boolean(true, new FlagMetadata()));
+
+        var started = time.GetUtcNow();
+        await WaitUntilAsync(() =>
+        {
+            time.Advance(TimeSpan.FromMilliseconds(100));
+            return app.Flagon.GetBooleanDetails("late").ErrorCode == ErrorCode.None;
+        });
+
+        Assert.True(app.Status.IsPushConnected);
+        Assert.True(time.GetUtcNow() - started < refreshInterval);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "The condition did not become true in time.");
+            await Task.Delay(10);
+        }
     }
 }

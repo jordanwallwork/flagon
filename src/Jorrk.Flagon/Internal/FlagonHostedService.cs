@@ -28,6 +28,9 @@ internal sealed partial class FlagonHostedService(
 {
     private readonly CancellationTokenSource _stopping = new();
     private readonly CancellationTokenSource _pushStopping = new();
+    // The earliest commit time among signals not yet covered by a refresh: the lag of the next applied refresh is measured from it.
+    private readonly object _pendingCommitGate = new();
+    private DateTimeOffset? _pendingCommit;
     private PeriodicTimer? _timer;
     private Task? _polling;
 
@@ -66,11 +69,31 @@ internal sealed partial class FlagonHostedService(
     {
         try
         {
-            await notifier.StartAsync(() =>
+            await notifier.StartAsync(signal =>
             {
-                snapshots.RecordPush();
+                if (signal.Resubscribed)
+                {
+                    // Not a change: the listener came back, so refresh to pick up whatever it missed.
+                    instrumentation.RecordPushReconnect();
+                }
+                else
+                {
+                    snapshots.RecordPush();
+                }
+
+                if (signal.CommittedAt is { } committedAt)
+                {
+                    lock (_pendingCommitGate)
+                    {
+                        _pendingCommit = _pendingCommit is { } pending && pending <= committedAt ? pending : committedAt;
+                    }
+                }
+
                 var queued = signals.TryWrite(true);
-                instrumentation.RecordPushNotification(coalesced: !queued);
+                if (!signal.Resubscribed)
+                {
+                    instrumentation.RecordPushNotification(coalesced: !queued);
+                }
             }, _pushStopping.Token).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -136,9 +159,21 @@ internal sealed partial class FlagonHostedService(
     {
         await startup.RetryPendingAsync(stoppingToken).ConfigureAwait(false);
 
+        // Taken before the refresh, so a commit that arrives while it runs stays pending for the next one.
+        DateTimeOffset? committedAt;
+        lock (_pendingCommitGate)
+        {
+            committedAt = _pendingCommit;
+            _pendingCommit = null;
+        }
+
         try
         {
-            await snapshots.RefreshAsync(stoppingToken).ConfigureAwait(false);
+            var outcome = await snapshots.RefreshAsync(stoppingToken).ConfigureAwait(false);
+            if (outcome == RefreshOutcome.Reloaded && committedAt is { } commit)
+            {
+                instrumentation.RecordPushLag(time.GetUtcNow() - commit);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -75,7 +75,7 @@ public class PostgresChangeNotifierTests(PostgresFixture db) : IClassFixture<Pos
         Assert.False(notifier.IsConnected);
 
         using var stop = new CancellationTokenSource();
-        await notifier.StartAsync(() => { }, stop.Token);
+        await notifier.StartAsync(_ => { }, stop.Token);
         Assert.True(notifier.IsConnected);
 
         await stop.CancelAsync();
@@ -90,7 +90,7 @@ public class PostgresChangeNotifierTests(PostgresFixture db) : IClassFixture<Pos
         await store.ApplyMigrationsAsync();
         var notifier = (IFlagChangeNotifier)store;
         using var stop = new CancellationTokenSource();
-        await notifier.StartAsync(() => { }, stop.Token);
+        await notifier.StartAsync(_ => { }, stop.Token);
         Assert.True(notifier.IsConnected);
 
         // The listener is the only idle session whose last query is its LISTEN statement.
@@ -153,7 +153,7 @@ public class PostgresChangeNotifierTests(PostgresFixture db) : IClassFixture<Pos
         public static async Task<Listening> StartAsync(PostgresFlagStore store)
         {
             var listening = new Listening();
-            await ((IFlagChangeNotifier)store).StartAsync(() => Interlocked.Increment(ref listening._count), listening._stop.Token);
+            await ((IFlagChangeNotifier)store).StartAsync(_ => Interlocked.Increment(ref listening._count), listening._stop.Token);
             return listening;
         }
 

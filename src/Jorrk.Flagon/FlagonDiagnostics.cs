@@ -14,6 +14,8 @@ namespace Jorrk.Flagon;
 /// <c>flagon.refresh.outcome</c> (<c>unchanged</c>, <c>reloaded</c> or <c>failed</c>).</description></item>
 /// <item><description><c>flagon.push.notifications</c> (counter, <c>{notification}</c>): change signals pushed by a store that implements
 /// <c>IFlagChangeNotifier</c>, tagged <c>flagon.push.outcome</c> (<c>received</c> when queued for a refresh, <c>coalesced</c> when absorbed into one already queued).</description></item>
+/// <item><description><c>flagon.push.reconnects</c> (counter, <c>{reconnect}</c>): times the store's change listener reconnected after losing its connection.</description></item>
+/// <item><description><c>flagon.push.lag</c> (histogram, seconds): time from a change's commit to the snapshot applying it. Measured on the app's clock against the database's commit time, so clock skew between them shows up directly (see the README).</description></item>
 /// <item><description><c>flagon.store.errors</c> (counter, <c>{error}</c>): store operations that failed, tagged
 /// <c>flagon.store.operation</c> (e.g. <c>refresh</c>, <c>create</c>, <c>set_enabled</c>) and <c>error.type</c> (exception type).</description></item>
 /// </list>

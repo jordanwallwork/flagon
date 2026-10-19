@@ -9,7 +9,7 @@ public sealed class InMemoryFlagStore : IFlagStore, IFlagChangeNotifier
 {
     private readonly object _gate = new();
     private readonly object _listenersGate = new();
-    private readonly List<Action> _listeners = [];
+    private readonly List<Action<FlagChangeSignal>> _listeners = [];
     private readonly Dictionary<string, FlagRecord> _flags = new(StringComparer.Ordinal);
     private readonly List<FlagAuditEntry> _audit = [];
     private readonly Dictionary<(string Key, string ApplicationName), FlagUsage> _usage = new(UsageKeyComparer.Instance);
@@ -31,7 +31,7 @@ public sealed class InMemoryFlagStore : IFlagStore, IFlagChangeNotifier
     }
 
     /// <inheritdoc />
-    public Task StartAsync(Action onChanged, CancellationToken cancellationToken = default)
+    public Task StartAsync(Action<FlagChangeSignal> onChanged, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(onChanged);
         if (cancellationToken.IsCancellationRequested)
@@ -62,7 +62,7 @@ public sealed class InMemoryFlagStore : IFlagStore, IFlagChangeNotifier
             // Callbacks are required to be quick and not to call back into the store, so running them under the lock is safe.
             foreach (var listener in _listeners)
             {
-                listener();
+                listener(default);
             }
         }
     }

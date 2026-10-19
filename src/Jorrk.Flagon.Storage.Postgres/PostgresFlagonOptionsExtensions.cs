@@ -1,5 +1,6 @@
 using Jorrk.Flagon.Storage.Internal;
 using Jorrk.Flagon.Storage.Postgres;
+using Microsoft.Extensions.Logging;
 
 // ReSharper disable once CheckNamespace
 namespace Jorrk.Flagon;
@@ -25,6 +26,9 @@ public static class PostgresFlagonOptionsExtensions
         ConnectionStringResolver.Guard(connectionStringOrName);
         ArgumentNullException.ThrowIfNull(schema);
 
-        return options.UseStorage(services => new PostgresFlagStore(ConnectionStringResolver.Resolve(services, connectionStringOrName), schema));
+        return options.UseStorage(services => new PostgresFlagStore(
+            ConnectionStringResolver.Resolve(services, connectionStringOrName),
+            schema,
+            (services.GetService(typeof(ILoggerFactory)) as ILoggerFactory)?.CreateLogger<PostgresFlagStore>()));
     }
 }

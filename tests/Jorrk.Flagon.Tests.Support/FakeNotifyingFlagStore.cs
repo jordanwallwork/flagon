@@ -9,7 +9,7 @@ namespace Jorrk.Flagon.Tests.Support;
 public sealed class FakeNotifyingFlagStore : IFlagStore, IFlagChangeNotifier
 {
     private readonly IFlagStore _inner;
-    private Action? _onChanged;
+    private Action<FlagChangeSignal>? _onChanged;
 
     public FakeNotifyingFlagStore(IFlagStore? inner = null)
     {
@@ -23,14 +23,17 @@ public sealed class FakeNotifyingFlagStore : IFlagStore, IFlagChangeNotifier
     public bool IsConnected => Connected;
 
     /// <inheritdoc />
-    public Task StartAsync(Action onChanged, CancellationToken cancellationToken = default)
+    public Task StartAsync(Action<FlagChangeSignal> onChanged, CancellationToken cancellationToken = default)
     {
         _onChanged = onChanged;
         return Task.CompletedTask;
     }
 
     /// <summary>Raises a change signal as if the database had notified the listener.</summary>
-    public void Signal() => _onChanged?.Invoke();
+    public void Signal(FlagChangeSignal signal = default) => _onChanged?.Invoke(signal);
+
+    /// <summary>Raises the signal a notifier raises after it reconnects.</summary>
+    public void SignalResubscribed() => _onChanged?.Invoke(new FlagChangeSignal(Resubscribed: true));
 
     public bool IsReadOnly => _inner.IsReadOnly;
     public Task ApplyMigrationsAsync(CancellationToken cancellationToken = default) => _inner.ApplyMigrationsAsync(cancellationToken);

@@ -21,6 +21,8 @@ internal sealed class FlagonInstrumentation : IDisposable
     private readonly Histogram<double> _refreshDuration;
     private readonly Counter<long> _storeErrors;
     private readonly Counter<long> _pushNotifications;
+    private readonly Counter<long> _pushReconnects;
+    private readonly Histogram<double> _pushLag;
 
     public FlagonInstrumentation(IMeterFactory? meterFactory = null)
     {
@@ -39,6 +41,8 @@ internal sealed class FlagonInstrumentation : IDisposable
         _refreshDuration = meter.CreateHistogram<double>("flagon.refresh.duration", "s", "Duration of snapshot refreshes against the flag store.");
         _storeErrors = meter.CreateCounter<long>("flagon.store.errors", "{error}", "Flag store operations that failed.");
         _pushNotifications = meter.CreateCounter<long>("flagon.push.notifications", "{notification}", "Change signals pushed by the flag store, tagged by outcome (received or coalesced).");
+        _pushReconnects = meter.CreateCounter<long>("flagon.push.reconnects", "{reconnect}", "Times the flag store's change listener reconnected after losing its connection.");
+        _pushLag = meter.CreateHistogram<double>("flagon.push.lag", "s", "Time from a change's commit to the snapshot applying it, as measured by the app's clock minus the database's commit time.");
     }
 
     /// <summary>Counts one evaluation. Allocation-free when nobody listens.</summary>
@@ -83,6 +87,12 @@ internal sealed class FlagonInstrumentation : IDisposable
     /// </summary>
     public void RecordPushNotification(bool coalesced) =>
         _pushNotifications.Add(1, new KeyValuePair<string, object?>("flagon.push.outcome", coalesced ? "coalesced" : "received"));
+
+    /// <summary>Counts one reconnect of the store's change listener.</summary>
+    public void RecordPushReconnect() => _pushReconnects.Add(1);
+
+    /// <summary>Records how long a change took from commit to the snapshot applying it.</summary>
+    public void RecordPushLag(TimeSpan lag) => _pushLag.Record(lag.TotalSeconds);
 
     /// <summary>Counts a failed store operation (an infrastructure failure, not a domain outcome such as a version conflict).</summary>
     public void RecordStoreError(string operation, Exception error) =>

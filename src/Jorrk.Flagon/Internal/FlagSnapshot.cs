@@ -101,7 +101,7 @@ internal sealed partial class FlagSnapshotManager(
     /// Reloads all flags if the store's change version moved past the current snapshot's.
     /// On failure the snapshot is kept, the failure is recorded and logged, and the exception is rethrown.
     /// </summary>
-    public async Task RefreshAsync(CancellationToken cancellationToken = default)
+    public async Task<RefreshOutcome> RefreshAsync(CancellationToken cancellationToken = default)
     {
         await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -148,6 +148,8 @@ internal sealed partial class FlagSnapshotManager(
             {
                 LogRefreshRecovered(logger, previous.ConsecutiveFailures, _current.Version);
             }
+
+            return outcome;
         }
         finally
         {

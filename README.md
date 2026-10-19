@@ -142,6 +142,22 @@ backstop, so a missed push costs latency, never correctness. Pushes never reset 
 to poll only, even when the store can push. `InMemoryFlagStore` pushes; SQL Server stores are polled. Usage writes do not
 push.
 
+**PostgreSQL push.** `UsePostgresStorage` notifies on `flagon_{schema}` inside each change's transaction and listens on a
+dedicated connection. If that connection fails (including a keepalive `SELECT 1` every 30 seconds that gets no answer),
+the listener reconnects with exponential backoff (1 second doubling, capped at 30 seconds, jittered), re-issues `LISTEN`
+and refreshes once so changes made during the gap are picked up. Until it reconnects, polling covers the gap. Logs:
+Information on connect and disconnect, Warning on each backoff, Debug per notification. The `flagon.push.reconnects`
+counter and `IsPushConnected` in the snapshot status show how often it has happened.
+
+- **PgBouncer in transaction-pool mode is not supported for push.** It drops `LISTEN` state between transactions, so no
+  notifications arrive. Flagon then degrades to polling without an error. Session-pool mode and direct connections work.
+- **Push lag and clock skew.** `flagon.push.lag` is the time from a change's commit to the snapshot applying it. The commit
+  time is the database's `clock_timestamp()`, and the lag is measured on the app host's clock. The two clocks must agree:
+  a host that is ahead of the database reports too large a lag, and one that is behind reports a negative lag. Keep the
+  hosts and the database on NTP-synchronised clocks before reading the histogram as absolute latency. The lag is measured
+  from the earliest commit a refresh covers, so a burst reports its worst case.
+- SQL Server stores are still polled; push is not implemented for them.
+
 **PostgreSQL push.** `UsePostgresStorage` pushes by default, using `LISTEN`/`NOTIFY` on the channel `flagon_{schema}`. Each
 create, update, archive, restore and purge sends its notification inside its own transaction, so it arrives at commit. No
 trigger or migration is needed. Each app opens one dedicated connection for listening, outside the connection pool.
