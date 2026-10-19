@@ -75,6 +75,23 @@ public class PostgresPushHostTests(PostgresFixture db) : IClassFixture<PostgresF
         Assert.True(time.GetUtcNow() - started < refreshInterval);
     }
 
+    [Fact]
+    public async Task Stopping_the_host_closes_the_listener_connection_before_stop_returns()
+    {
+        var schema = PostgresFixture.NewSchema();
+        await using var writer = new PostgresFlagStore(db.ConnectionString, schema);
+        await writer.ApplyMigrationsAsync();
+        var app = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.UsePostgresStorage(db.ConnectionString, schema));
+        Assert.True(app.Status.IsPushConnected);
+        var pid = Convert.ToInt32(await db.ScalarAsync(
+            $"SELECT pid FROM pg_stat_activity WHERE query = 'LISTEN \"flagon_{schema}\"' AND pid <> pg_backend_pid()"));
+
+        await app.StopAsync();
+
+        Assert.Equal(0, Convert.ToInt64(await db.ScalarAsync($"SELECT count(*) FROM pg_stat_activity WHERE pid = {pid}")));
+        await app.DisposeAsync();
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);

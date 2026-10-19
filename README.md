@@ -137,39 +137,31 @@ Flagon keeps serving the last snapshot it loaded.
 
 `PushRefresh` (default on) matters only for stores that can push change notifications, which implement the optional
 `IFlagChangeNotifier` capability. For those stores, a change made by any app sharing the store refreshes this app's
-snapshot after `PushMinInterval` (default 100 ms) rather than at the next `RefreshInterval` tick. The poll stays on as the
-backstop, so a missed push costs latency, never correctness. Pushes never reset the poll timer. Set `PushRefresh = false`
-to poll only, even when the store can push. `InMemoryFlagStore` pushes; SQL Server stores are polled. Usage writes do not
-push.
+snapshot rather than waiting for the next `RefreshInterval` tick. The first push starts a `PushMinInterval` window
+(default 100 ms); the app refreshes once when the window ends, and pushes that arrive inside it coalesce into that
+refresh. Pushes never reset the poll timer, and polling stays on as the backstop, so a missed push costs latency, never
+correctness. Set `PushRefresh = false` to poll only, even when the store can push. `InMemoryFlagStore` pushes; SQL Server
+stores are polled. Usage writes do not push.
 
-**PostgreSQL push.** `UsePostgresStorage` notifies on `flagon_{schema}` inside each change's transaction and listens on a
-dedicated connection. If that connection fails (including a keepalive `SELECT 1` every 30 seconds that gets no answer),
-the listener reconnects with exponential backoff (1 second doubling, capped at 30 seconds, jittered), re-issues `LISTEN`
-and refreshes once so changes made during the gap are picked up. Until it reconnects, polling covers the gap. Logs:
-Information on connect and disconnect, Warning on each backoff, Debug per notification. The `flagon.push.reconnects`
-counter and `IsPushConnected` in the snapshot status show how often it has happened.
+**PostgreSQL push.** `UsePostgresStorage` notifies on `flagon_{schema}` inside each change's transaction, so the
+notification arrives at commit. Each app listens on one dedicated connection outside the connection pool. No trigger or
+migration is needed. Writes made directly in SQL are not pushed; other apps see them at the next poll tick.
 
+- The listener checks its connection with `SELECT 1` every 30 seconds, bounded by a 5-second timeout. A lost connection or
+  a failed check reconnects with exponential backoff (1 second doubling, capped at 30 seconds, jittered), re-issues
+  `LISTEN` and refreshes once, so changes made during the gap are picked up. Until it reconnects, polling covers the gap.
+  A failed first connect is retried the same way. Logs: Information on connect and disconnect, Warning on each backoff,
+  Debug per notification. The `flagon.push.reconnects` counter and `IsPushConnected` in the snapshot status show how often
+  it has happened.
+- Stopping the host closes the listener connection before `StopAsync` returns.
 - **PgBouncer in transaction-pool mode is not supported for push.** It drops `LISTEN` state between transactions, so no
-  notifications arrive. Flagon then degrades to polling without an error. Session-pool mode and direct connections work.
-- **Push lag and clock skew.** `flagon.push.lag` is the time from a change's commit to the snapshot applying it. The commit
-  time is the database's `clock_timestamp()`, and the lag is measured on the app host's clock. The two clocks must agree:
-  a host that is ahead of the database reports too large a lag, and one that is behind reports a negative lag. Keep the
-  hosts and the database on NTP-synchronised clocks before reading the histogram as absolute latency. The lag is measured
-  from the earliest commit a refresh covers, so a burst reports its worst case.
-- SQL Server stores are still polled; push is not implemented for them.
-
-**PostgreSQL push.** `UsePostgresStorage` pushes by default, using `LISTEN`/`NOTIFY` on the channel `flagon_{schema}`. Each
-create, update, archive, restore and purge sends its notification inside its own transaction, so it arrives at commit. No
-trigger or migration is needed. Each app opens one dedicated connection for listening, outside the connection pool.
-
-- **PgBouncer in transaction pooling mode drops `LISTEN` state.** Push then delivers nothing, and Flagon falls back to
-  polling with no error. Use session pooling or a direct connection to get push.
-- **Writes made directly in SQL are not pushed.** Only writes through Flagon notify, so other apps see those changes at the
-  next poll tick.
-- **Timestamps come from the database clock.** The notification payload carries the database's `clock_timestamp()`. Any
-  measurement that compares it with an app host's clock includes the skew between the two hosts.
-- A dropped listener connection stops push until the app restarts; `IsConnected` on the store reports it. Polling keeps
-  the snapshot fresh in the meantime.
+  notifications arrive, and Flagon falls back to polling without an error. Session-pool mode and direct connections work.
+- **Timestamps and push lag.** The notification payload carries the database's `clock_timestamp()` (epoch milliseconds),
+  taken inside the write transaction just before it commits. It is the notify time, not the exact commit instant.
+  `flagon.push.lag` is the time from that timestamp to the snapshot applying the change, measured on the app host's clock,
+  so clock skew between the database and the app hosts is included: a host ahead of the database reports too large a lag,
+  and one behind reports a negative lag. Keep them on NTP-synchronised clocks before reading the histogram as absolute
+  latency. The lag is measured from the earliest timestamp a refresh covers, so a burst reports its worst case.
 
 ### Flags as code
 

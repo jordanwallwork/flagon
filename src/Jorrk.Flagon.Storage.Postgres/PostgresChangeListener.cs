@@ -16,6 +16,9 @@ internal sealed partial class PostgresChangeListener
     private readonly ILogger _logger;
     private readonly Action<bool> _connectionChanged;
 
+    /// <summary>How long the keepalive <c>SELECT 1</c> may take before the connection counts as lost.</summary>
+    private static readonly TimeSpan KeepaliveTimeout = TimeSpan.FromSeconds(5);
+
     /// <param name="connectionString">An unpooled connection string: a pooled connection would keep its LISTEN after reuse.</param>
     /// <param name="channel">The notification channel, already validated.</param>
     /// <param name="keepaliveInterval">How long the connection may stay silent before a <c>SELECT 1</c> checks it.</param>
@@ -31,16 +34,25 @@ internal sealed partial class PostgresChangeListener
     }
 
     /// <summary>
-    /// Connects and listens before returning, so a write that commits after this returns is delivered. A failure here is
-    /// thrown to the caller; after this, failures are retried in the background until <paramref name="stop"/> is cancelled.
+    /// Connects and listens before returning, so a write that commits after this returns is delivered. If that first
+    /// connect fails, it is not thrown: the listener retries in the background like any later failure, until
+    /// <paramref name="stop"/> is cancelled. The returned task completes once the listener has stopped and released its
+    /// connection.
     /// </summary>
     /// <remarks>Takes ownership of <paramref name="stop"/>: it is disposed when the listener ends.</remarks>
-    public async Task StartAsync(Action<FlagChangeSignal> onChanged, CancellationTokenSource stop)
+    public async Task<Task> StartAsync(Action<FlagChangeSignal> onChanged, CancellationTokenSource stop)
     {
-        NpgsqlConnection connection;
+        NpgsqlConnection? connection = null;
+        Exception? initialError = null;
         try
         {
             connection = await ConnectAsync(onChanged, stop.Token).ConfigureAwait(false);
+            _connectionChanged(true);
+            LogConnected(_logger, _channel);
+        }
+        catch (Exception ex) when (!stop.IsCancellationRequested)
+        {
+            initialError = ex;
         }
         catch
         {
@@ -48,9 +60,7 @@ internal sealed partial class PostgresChangeListener
             throw;
         }
 
-        _connectionChanged(true);
-        LogConnected(_logger, _channel);
-        _ = RunAsync(connection, onChanged, stop);
+        return RunAsync(connection, initialError, onChanged, stop);
     }
 
     private async Task<NpgsqlConnection> ConnectAsync(Action<FlagChangeSignal> onChanged, CancellationToken stop)
@@ -82,7 +92,7 @@ internal sealed partial class PostgresChangeListener
     }
 
     /// <summary>Pumps the connection, reconnecting after any failure, until stopped. Never throws.</summary>
-    private async Task RunAsync(NpgsqlConnection? connection, Action<FlagChangeSignal> onChanged, CancellationTokenSource stop)
+    private async Task RunAsync(NpgsqlConnection? connection, Exception? initialError, Action<FlagChangeSignal> onChanged, CancellationTokenSource stop)
     {
         var connected = connection is not null;
         try
@@ -91,7 +101,8 @@ internal sealed partial class PostgresChangeListener
             {
                 if (connection is null)
                 {
-                    connection = await ReconnectAsync(onChanged, stop.Token).ConfigureAwait(false);
+                    connection = await ReconnectAsync(onChanged, initialError, stop.Token).ConfigureAwait(false);
+                    initialError = null;
                     if (connection is null)
                     {
                         return;
@@ -151,16 +162,18 @@ internal sealed partial class PostgresChangeListener
             }
             catch (OperationCanceledException) when (!stop.IsCancellationRequested)
             {
+                // Bounded: a half-open connection would otherwise hang here. A timeout throws, which the caller treats as a disconnect.
+                using var bound = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                bound.CancelAfter(KeepaliveTimeout);
                 await using var keepalive = new NpgsqlCommand("SELECT 1", connection);
-                await keepalive.ExecuteScalarAsync(stop).ConfigureAwait(false);
+                await keepalive.ExecuteScalarAsync(bound.Token).ConfigureAwait(false);
             }
         }
     }
 
     /// <summary>Reconnects with backoff until connected (returns the connection) or stopped (returns null).</summary>
-    private async Task<NpgsqlConnection?> ReconnectAsync(Action<FlagChangeSignal> onChanged, CancellationToken stop)
+    private async Task<NpgsqlConnection?> ReconnectAsync(Action<FlagChangeSignal> onChanged, Exception? lastError, CancellationToken stop)
     {
-        Exception? lastError = null;
         for (var attempt = 0; ; attempt++)
         {
             var delay = ReconnectBackoff.Delay(attempt, Random.Shared);

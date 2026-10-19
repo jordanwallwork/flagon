@@ -40,8 +40,9 @@ public sealed partial class FlagonOptions
     public bool PushRefresh { get; set; } = true;
 
     /// <summary>
-    /// The debounce for push-triggered refreshes (default 100 milliseconds): a burst of change signals collapses into one
-    /// refresh that runs once the burst has been quiet for this long. Has no effect when <see cref="PushRefresh"/> is off.
+    /// The debounce for push-triggered refreshes (default 100 milliseconds). After the first push, the app waits this long and
+    /// then refreshes once; pushes that arrive during the wait coalesce into that refresh. Has no effect when
+    /// <see cref="PushRefresh"/> is off.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
     public TimeSpan PushMinInterval

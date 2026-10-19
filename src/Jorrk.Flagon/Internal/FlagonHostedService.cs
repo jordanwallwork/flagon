@@ -188,8 +188,13 @@ internal sealed partial class FlagonHostedService(
             return;
         }
 
-        // Stop the notifier first so no further signals are queued, then end the poll loop.
+        // Stop the notifier first so no further signals are queued, wait for its connections to close, then end the poll loop.
         await _pushStopping.CancelAsync().ConfigureAwait(false);
+        if (store is IFlagChangeNotifierTeardown teardown)
+        {
+            await teardown.ListenersStopped.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await _stopping.CancelAsync().ConfigureAwait(false);
         await _polling.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -204,7 +209,7 @@ internal sealed partial class FlagonHostedService(
         return ValueTask.CompletedTask;
     }
 
-    [LoggerMessage(EventId = 1106, Level = LogLevel.Warning,
+    [LoggerMessage(EventId = 1111, Level = LogLevel.Warning,
         Message = "Flagon could not start listening for flag changes in the store; relying on polling every {RefreshInterval}.")]
     private static partial void LogPushUnavailable(ILogger logger, Exception exception, TimeSpan refreshInterval);
 }

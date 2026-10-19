@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Jorrk.Flagon.Storage;
 using Jorrk.Flagon.Tests.Support;
 using Microsoft.Extensions.Logging;
+using System.Net.Sockets;
 using Npgsql;
 
 namespace Jorrk.Flagon.Storage.Postgres.Tests;
@@ -37,6 +38,90 @@ public class PostgresListenerTests(PostgresFixture db) : IClassFixture<PostgresF
 
         await writer.TryCreateAsync("checkout", Document);
         await Eventually(() => signals.Any(s => !s.Resubscribed));
+    }
+
+    [Fact]
+    public async Task A_first_connect_that_fails_is_retried_in_the_background_until_it_succeeds()
+    {
+        var schema = PostgresFixture.NewSchema();
+        await using var writer = new PostgresFlagStore(db.ConnectionString, schema);
+        await writer.ApplyMigrationsAsync();
+        await using var proxy = new RefusingProxy(db.ConnectionString);
+        await using var store = new PostgresFlagStore(proxy.ConnectionString, schema);
+        var notifier = (IFlagChangeNotifier)store;
+        var signals = new ConcurrentQueue<FlagChangeSignal>();
+        using var stop = new CancellationTokenSource();
+
+        // The first connect is refused. StartAsync returns anyway and the listener keeps retrying.
+        await notifier.StartAsync(signals.Enqueue, stop.Token);
+        Assert.False(notifier.IsConnected);
+
+        proxy.Accepting = true;
+        await Eventually(() => notifier.IsConnected);
+
+        await writer.TryCreateAsync("checkout", Document);
+        await Eventually(() => signals.Any(s => !s.Resubscribed));
+    }
+
+    /// <summary>A TCP relay to the database that drops every connection while <see cref="Accepting"/> is false.</summary>
+    private sealed class RefusingProxy : IAsyncDisposable
+    {
+        private readonly TcpListener _listener = new(System.Net.IPAddress.Loopback, 0);
+        private readonly CancellationTokenSource _stop = new();
+        private readonly Task _accepting;
+        private readonly string _target;
+        private readonly NpgsqlConnectionStringBuilder _builder;
+
+        public RefusingProxy(string connectionString)
+        {
+            _builder = new NpgsqlConnectionStringBuilder(connectionString);
+            _listener.Start();
+            ConnectionString = new NpgsqlConnectionStringBuilder(connectionString) { Host = "127.0.0.1", Port = ((System.Net.IPEndPoint)_listener.LocalEndpoint).Port }.ConnectionString;
+            _target = _builder.Host ?? "localhost";
+            _accepting = AcceptLoopAsync();
+        }
+
+        public string ConnectionString { get; }
+
+        public bool Accepting { get; set; }
+
+        private async Task AcceptLoopAsync()
+        {
+            while (!_stop.IsCancellationRequested)
+            {
+                var client = await _listener.AcceptTcpClientAsync(_stop.Token).ConfigureAwait(false);
+                if (!Accepting)
+                {
+                    client.Dispose();
+                    continue;
+                }
+
+                _ = RelayAsync(client);
+            }
+        }
+
+        private async Task RelayAsync(TcpClient client)
+        {
+            using var upstream = new TcpClient();
+            await upstream.ConnectAsync(_target, _builder.Port).ConfigureAwait(false);
+            var up = client.GetStream().CopyToAsync(upstream.GetStream());
+            var down = upstream.GetStream().CopyToAsync(client.GetStream());
+            await Task.WhenAny(up, down).ConfigureAwait(false);
+            client.Dispose();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _stop.CancelAsync();
+            _listener.Stop();
+            try
+            {
+                await _accepting;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
     }
 
     [Fact]

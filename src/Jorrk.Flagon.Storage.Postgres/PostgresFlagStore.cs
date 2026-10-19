@@ -22,7 +22,7 @@ namespace Jorrk.Flagon.Storage.Postgres;
 /// transaction, so listeners hear about it at commit (see <see cref="StartAsync"/>). Usage writes and rejected writes do not notify.
 /// Writes made directly in SQL, outside this store, are not notified and are picked up by polling only.</para>
 /// </remarks>
-public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncDisposable, IDisposable
+public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IFlagChangeNotifierTeardown, IAsyncDisposable, IDisposable
 {
     /// <summary>The schema used when none is configured.</summary>
     public const string DefaultSchema = "flagon";
@@ -33,6 +33,8 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
     private readonly string _channel;
     private readonly string _listenerConnectionString;
     private readonly CancellationTokenSource _disposing = new();
+    private readonly object _listenersGate = new();
+    private readonly List<Task> _listenerRuns = [];
     private int _liveListeners;
     private readonly ILogger _logger;
     private readonly string _migrationLock;
@@ -323,7 +325,24 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IAsyncD
         var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposing.Token);
         var listener = new PostgresChangeListener(_listenerConnectionString, _channel, ListenerKeepaliveInterval, _logger,
             connected => Interlocked.Add(ref _liveListeners, connected ? 1 : -1));
-        await listener.StartAsync(onChanged, stop).ConfigureAwait(false);
+        var run = await listener.StartAsync(onChanged, stop).ConfigureAwait(false);
+        lock (_listenersGate)
+        {
+            _listenerRuns.Add(run);
+        }
+    }
+
+    /// <summary>Completes once every listener started by <see cref="StartAsync"/> has stopped and released its connection.</summary>
+    /// <inheritdoc />
+    public Task ListenersStopped
+    {
+        get
+        {
+            lock (_listenersGate)
+            {
+                return Task.WhenAll(_listenerRuns);
+            }
+        }
     }
 
     /// <inheritdoc />
