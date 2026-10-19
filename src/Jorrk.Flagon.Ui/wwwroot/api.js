@@ -50,6 +50,7 @@ async function request(method, path, { body, version } = {}) {
 }
 
 const flag = (key) => `flags/${encodeURIComponent(key)}`;
+const segment = (key) => `segments/${encodeURIComponent(key)}`;
 
 export const api = {
   listFlags: () => request("GET", "flags"),
@@ -75,4 +76,19 @@ export const api = {
   restore: (key, version) => request("POST", `${flag(key)}/restore`, { version }),
   purge: (key, version) => request("DELETE", flag(key), { version }),
   audit: (key) => request("GET", `${flag(key)}/audit`),
+
+  // Segments: reusable conditions flags reference with {"$ref": "<key>"}. Every call fails with status 501 when the
+  // store does not support segments.
+  listSegments: () => request("GET", "segments"),
+  getSegment: (key) => request("GET", segment(key)),
+  createSegment: ({ key, rule, description, tags }) => request("POST", "segments", { body: { key, rule, description, tags } }),
+  updateSegmentMetadata: (key, version, { description, tags }) => request("PATCH", segment(key), { body: { description, tags }, version }),
+  setSegmentRule: (key, version, rule) => request("PUT", `${segment(key)}/rule`, { body: { rule }, version }),
+  archiveSegment: (key, version) => request("POST", `${segment(key)}/archive`, { version }),
+  restoreSegment: (key, version) => request("POST", `${segment(key)}/restore`, { version }),
+  purgeSegment: (key, version) => request("DELETE", segment(key), { version }),
+  segmentAudit: (key) => request("GET", `${segment(key)}/audit`),
+  /** Tests the stored rule, or the unsaved `rule` when given, against `context`: `{ matches, result, error? }`. No side effects. */
+  evaluateSegment: (key, context = {}, rule) =>
+    request("POST", `${segment(key)}/evaluate`, { body: rule === undefined ? { context } : { context, rule } }),
 };
