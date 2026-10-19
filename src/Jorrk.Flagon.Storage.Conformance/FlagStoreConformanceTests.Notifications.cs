@@ -183,7 +183,7 @@ public abstract partial class FlagStoreConformanceTests
 
         public ChannelReader<bool> Signals => _signals.Reader;
 
-        public void OnChanged()
+        public void OnChanged(FlagChangeSignal signal)
         {
             Interlocked.Increment(ref _count);
             _signals.Writer.TryWrite(true);
