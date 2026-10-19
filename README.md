@@ -44,7 +44,7 @@ dotnet add package Jorrk.Flagon.OpenFeature
 ## Quickstart
 
 ```csharp
-using Flagon;
+using Jorrk.Flagon;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -95,7 +95,7 @@ or `default` (`JsonValueKind.Undefined`) when no variant was served (disabled, n
 your own default.
 
 Every evaluation method takes an optional `EvaluationContext` (targeting key plus attributes). When you don't pass one,
-Flagon uses the ambient context: with `builder.Services.AddFlagonAmbientContext()` (Flagon.AspNetCore) that is the
+Flagon uses the ambient context: with `builder.Services.AddFlagonAmbientContext()` (Jorrk.Flagon.AspNetCore) that is the
 current request's user; a context you pass always wins. A flag's flagd `targeting` rule is evaluated against that
 context (see [Targeting](#targeting)).
 
@@ -257,15 +257,15 @@ See [ADR 0001](docs/adr/0001-targeting-engine.md) for the engine choice.
 Without a storage call Flagon uses an in-memory store, which is ideal for trying it out and for tests. For real use,
 install a provider and pass the name of a connection string in `ConnectionStrings`, or a connection string itself. A
 configured name wins; otherwise a value containing `=` is used as the connection string; anything else fails with a
-clear error when the store is created. Both extensions live in the `Flagon` namespace.
+clear error when the store is created. Both extensions live in the `Jorrk.Flagon` namespace.
 
 ```csharp
-using Flagon;
+using Jorrk.Flagon;
 
-// PostgreSQL (Flagon.Storage.Postgres)
+// PostgreSQL (Jorrk.Flagon.Storage.Postgres)
 builder.Services.AddFlagon(opts => opts.UsePostgresStorage("Flags"));                      // ConnectionStrings:Flags
 
-// SQL Server (Flagon.Storage.SqlServer)
+// SQL Server (Jorrk.Flagon.Storage.SqlServer)
 builder.Services.AddFlagon(opts => opts.UseSqlServerStorage("Flags", schema: "flagon"));
 ```
 
@@ -277,8 +277,8 @@ yourself, set `opts.AutoMigrate = false` and export the versioned scripts. Each 
 together with its `schema_version` row, so a run that fails part way leaves nothing behind and can simply be repeated:
 
 ```csharp
-using Flagon.Storage.Postgres;
-using Flagon.Storage.SqlServer;
+using Jorrk.Flagon.Storage.Postgres;
+using Jorrk.Flagon.Storage.SqlServer;
 
 string sqlServerScript = SqlServerMigrations.GenerateScript("flagon");           // idempotent, GO-separated
 foreach (var script in PostgresFlagStore.GetMigrationScripts("flagon"))
@@ -287,12 +287,12 @@ foreach (var script in PostgresFlagStore.GetMigrationScripts("flagon"))
 }
 ```
 
-To write your own provider, implement `Flagon.Storage.IFlagStore` and run the `Flagon.Storage.Conformance` suite
+To write your own provider, implement `Jorrk.Flagon.Storage.IFlagStore` and run the `Jorrk.Flagon.Storage.Conformance` suite
 against it by deriving a test class from `FlagStoreConformanceTests`.
 
 ## Endpoints, UI and authorization
 
-`Flagon.AspNetCore` and `Flagon.Ui` add HTTP endpoints. Each `Map*` call returns a convention builder, so
+`Jorrk.Flagon.AspNetCore` and `Jorrk.Flagon.Ui` add HTTP endpoints. Each `Map*` call returns a convention builder, so
 `.RequireAuthorization(...)` composes as usual.
 
 ```csharp
@@ -407,7 +407,7 @@ theme = await admin.SetDefaultVariantAsync("theme", "light", theme.Version);
 
 ## OpenFeature
 
-`Flagon.OpenFeature` plugs Flagon into the [OpenFeature](https://openfeature.dev) .NET SDK, so your code can use the
+`Jorrk.Flagon.OpenFeature` plugs Flagon into the [OpenFeature](https://openfeature.dev) .NET SDK, so your code can use the
 vendor-neutral `IFeatureClient` (and any OpenFeature hooks you already have):
 
 ```csharp
@@ -481,7 +481,7 @@ dotnet add package Jorrk.Flagon.Testing
 ```
 
 ```csharp
-using Flagon.Testing;
+using Jorrk.Flagon.Testing;
 
 [Fact]
 public void Checkout_uses_the_new_flow_when_the_flag_is_on()

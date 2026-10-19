@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>Jorrk.Flagon.Storage.Conformance</PackageId>
+    <Description>xUnit conformance suite for Flagon IFlagStore providers. Derive from FlagStoreConformanceTests in a test project to verify that a storage provider honours the full IFlagStore contract.</Description>
+    <RootNamespace>Jorrk.Flagon.Storage.Conformance</RootNamespace>
+    <PackageTags>$(PackageTags);testing;conformance</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.assert" />
+    <PackageReference Include="xunit.extensibility.core" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Jorrk.Flagon\Jorrk.Flagon.csproj" />
+  </ItemGroup>
+</Project>

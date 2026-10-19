@@ -1,0 +1,278 @@
+using System.Text.Json;
+using Jorrk.Flagon.Storage;
+using Jorrk.Flagon.Tests.Support;
+using Microsoft.Extensions.Time.Testing;
+
+namespace Jorrk.Flagon.Tests;
+
+/// <summary>
+/// Writing targeting through Flagon (<see cref="IFlagonAdmin"/> and <c>Define</c>): valid rules are stored and drive
+/// evaluation at once; rules the targeting compiler rejects are refused before anything is written.
+/// </summary>
+public class TargetingWriteTests
+{
+    private const string GbRule = """{ "if": [ { "==": [ { "var": "country" }, "GB" ] }, "on", null ] }""";
+
+    private static readonly EvaluationContext Gb = new("alice", new Dictionary<string, object?> { ["country"] = "GB" });
+    private static readonly EvaluationContext Fr = new("bob", new Dictionary<string, object?> { ["country"] = "FR" });
+
+    private static JsonElement Rule(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    [Fact]
+    public async Task An_admin_can_create_a_flag_with_a_targeting_rule_that_drives_evaluation_immediately()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+
+        var created = await host.Admin.CreateAsync(new CreateFlagRequest("gb-only", Enabled: false, Targeting: Rule(GbRule)));
+
+        Assert.NotNull(created.Document.Targeting);
+        Assert.Equal(new FlagEvaluationDetails<bool>("gb-only", true, "on", EvaluationReason.TargetingMatch), host.Flagon.GetBooleanDetails("gb-only", false, Gb));
+        Assert.Equal(new FlagEvaluationDetails<bool>("gb-only", false, "off", EvaluationReason.Default), host.Flagon.GetBooleanDetails("gb-only", true, Fr));
+    }
+
+    [Fact]
+    public async Task Creating_a_flag_with_an_invalid_rule_is_rejected_naming_the_operator_and_where_it_is()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+
+        var ex = await Assert.ThrowsAsync<FlagTargetingException>(() => host.Admin.CreateAsync(new CreateFlagRequest(
+            "broken", Targeting: Rule("""{ "if": [ { "and": [ true, { "regex": [ "a", "b" ] } ] }, "on", "off" ] }"""))));
+
+        Assert.Equal("broken", ex.Key);
+        Assert.Equal("regex", ex.Operator);
+        Assert.Equal("/if/0/and/1", ex.Path);
+        Assert.Contains("regex", ex.Message);
+        Assert.Contains("/if/0/and/1", ex.Message);
+        Assert.Null(await host.Admin.GetAsync("broken"));
+    }
+
+    [Fact]
+    public async Task A_rule_with_an_unresolved_ref_is_rejected_because_flagon_has_no_flag_set_evaluators()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+
+        var ex = await Assert.ThrowsAsync<FlagTargetingException>(() => host.Admin.CreateAsync(new CreateFlagRequest(
+            "ref", Targeting: Rule("""{ "if": [ { "$ref": "is_staff" }, "on", null ] }"""))));
+
+        Assert.Equal("$ref", ex.Operator);
+        Assert.Equal("/if/0", ex.Path);
+        Assert.Contains("is_staff", ex.Message);
+        Assert.Contains("$evaluators", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("null")]
+    public async Task Empty_or_null_targeting_is_accepted_as_no_targeting(string json)
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+
+        await host.Admin.CreateAsync(new CreateFlagRequest("plain", Enabled: true, Targeting: Rule(json)));
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("plain", true, "on", EvaluationReason.Static), host.Flagon.GetBooleanDetails("plain", false, Gb));
+    }
+
+    [Fact]
+    public async Task An_admin_can_set_change_and_clear_a_flags_targeting()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("rollout", Enabled: false, "Rollout", ["web"]));
+
+        flag = await host.Admin.SetTargetingAsync("rollout", Rule(GbRule), flag.Version);
+        Assert.Equal(EvaluationReason.TargetingMatch, host.Flagon.GetBooleanDetails("rollout", false, Gb).Reason);
+        Assert.Equal("Rollout", flag.Document.Metadata.Description);
+        Assert.Equal(["web"], flag.Document.Metadata.Tags);
+        Assert.Equal(FlagDocument.OffVariant, flag.Document.DefaultVariant);
+
+        flag = await host.Admin.SetTargetingAsync("rollout", null, flag.Version);
+        Assert.Null(flag.Document.Targeting);
+        Assert.Equal(new FlagEvaluationDetails<bool>("rollout", false, "off", EvaluationReason.Static), host.Flagon.GetBooleanDetails("rollout", true, Gb));
+    }
+
+    [Fact]
+    public async Task Setting_an_invalid_rule_is_rejected_and_leaves_the_flag_unchanged()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("rollout", Targeting: Rule(GbRule)));
+
+        var ex = await Assert.ThrowsAsync<FlagTargetingException>(() =>
+            host.Admin.SetTargetingAsync("rollout", Rule("""{ "nope": [] }"""), flag.Version));
+
+        Assert.Equal("nope", ex.Operator);
+        Assert.Equal("", ex.Path);
+        Assert.Equal(flag, await host.Admin.GetAsync("rollout"));
+    }
+
+    [Fact]
+    public async Task Setting_targeting_on_a_stale_version_is_rejected()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("rollout"));
+        await host.Admin.SetEnabledAsync("rollout", true, flag.Version);
+
+        await Assert.ThrowsAsync<FlagVersionConflictException>(() => host.Admin.SetTargetingAsync("rollout", Rule(GbRule), flag.Version));
+    }
+
+    [Fact]
+    public async Task Setting_targeting_is_audited()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("rollout"));
+
+        await host.Admin.SetTargetingAsync("rollout", Rule(GbRule), flag.Version);
+
+        var latest = (await host.Admin.GetAuditHistoryAsync("rollout"))[0];
+        Assert.Null(latest.Before!.Targeting);
+        Assert.NotNull(latest.After!.Targeting);
+    }
+
+    [Fact]
+    public async Task Setting_targeting_on_an_archived_flag_is_rejected_and_leaves_it_unchanged()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("retired"));
+        flag = await host.Admin.ArchiveAsync("retired", flag.Version);
+
+        var ex = await Assert.ThrowsAsync<FlagValidationException>(() => host.Admin.SetTargetingAsync("retired", Rule(GbRule), flag.Version));
+
+        Assert.IsNotType<FlagTargetingException>(ex);
+        Assert.Contains("archived", ex.Message);
+        Assert.Equal(flag, await host.Admin.GetAsync("retired"));
+    }
+
+    [Fact]
+    public async Task Setting_targeting_is_audited_with_the_documents_before_and_after_each_change()
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("rollout"));
+
+        flag = await host.Admin.SetTargetingAsync("rollout", Rule(GbRule), flag.Version);
+        flag = await host.Admin.SetTargetingAsync("rollout", Rule("""{ "fractional": [ [ "on", 5 ], [ "off", 95 ] ] }"""), flag.Version);
+        await host.Admin.SetTargetingAsync("rollout", null, flag.Version);
+
+        var history = await host.Admin.GetAuditHistoryAsync("rollout");
+        Assert.Null(history[0].After!.Targeting);
+        Assert.Contains("fractional", history[0].Before!.Targeting!.Value.GetRawText());
+        Assert.Contains("fractional", history[1].After!.Targeting!.Value.GetRawText());
+        Assert.Contains("country", history[1].Before!.Targeting!.Value.GetRawText());
+        Assert.Contains("country", history[2].After!.Targeting!.Value.GetRawText());
+        Assert.Null(history[2].Before!.Targeting);
+    }
+
+    [Fact]
+    public async Task Targeting_set_by_another_app_is_evaluated_after_the_next_refresh()
+    {
+        var store = new InMemoryFlagStore();
+        var time = new FakeTimeProvider(FlagonTestHost.Epoch);
+        await using var appA = await FlagonTestHost.StartAsync(o => { o.Store = store; o.Time = time; });
+        await using var appB = await FlagonTestHost.StartAsync(o => { o.Store = store; o.Time = time; });
+        var flag = await appA.Admin.CreateAsync(new CreateFlagRequest("shared"));
+        await FlagonTestHost.AdvanceToNextRefreshAsync(appA, appB);
+
+        flag = await appA.Admin.SetTargetingAsync("shared", Rule(GbRule), flag.Version);
+        Assert.Equal(EvaluationReason.Static, appB.Flagon.GetBooleanDetails("shared", false, Gb).Reason);
+        await FlagonTestHost.AdvanceToNextRefreshAsync(appA, appB);
+        Assert.Equal(new FlagEvaluationDetails<bool>("shared", true, "on", EvaluationReason.TargetingMatch), appB.Flagon.GetBooleanDetails("shared", false, Gb));
+
+        await appA.Admin.SetTargetingAsync("shared", null, flag.Version);
+        await FlagonTestHost.AdvanceToNextRefreshAsync(appA, appB);
+        Assert.Equal(EvaluationReason.Static, appB.Flagon.GetBooleanDetails("shared", false, Gb).Reason);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(100, 200)]
+    public async Task A_rollout_of_none_or_everyone_serves_off_or_on_to_every_user(int percentage, int expectedOn)
+    {
+        await using var host = await FlagonTestHost.StartAsync();
+        var flag = await host.Admin.CreateAsync(new CreateFlagRequest("rollout"));
+
+        await host.Admin.SetTargetingAsync("rollout", Rule($$"""{ "fractional": [ [ "on", {{percentage}} ], [ "off", {{100 - percentage}} ] ] }"""), flag.Version);
+
+        var on = Enumerable.Range(0, 200).Count(i => host.Flagon.IsEnabled("rollout", context: new EvaluationContext($"user-{i}")));
+        Assert.Equal(expectedOn, on);
+    }
+
+    [Fact]
+    public async Task A_flag_defined_in_code_with_targeting_is_created_with_it()
+    {
+        await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.Define("gb-only", false, targeting: GbRule));
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("gb-only", true, "on", EvaluationReason.TargetingMatch), host.Flagon.GetBooleanDetails("gb-only", false, Gb));
+        Assert.Equal(new FlagEvaluationDetails<bool>("gb-only", false, "off", EvaluationReason.Default), host.Flagon.GetBooleanDetails("gb-only", true, Fr));
+    }
+
+    [Fact]
+    public async Task Redeploying_a_definition_never_overwrites_targeting_an_admin_changed()
+    {
+        var store = new InMemoryFlagStore();
+        await using (var firstDeploy = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.Define("gb-only", false, targeting: GbRule);
+        }))
+        {
+            var flag = await firstDeploy.Admin.GetAsync("gb-only");
+            await firstDeploy.Admin.SetTargetingAsync("gb-only", null, flag!.Version);
+        }
+
+        await using var secondDeploy = await FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.Define("gb-only", false, "now described", targeting: GbRule);
+        });
+
+        var updated = await secondDeploy.Admin.GetAsync("gb-only");
+        Assert.Equal("now described", updated!.Document.Metadata.Description);
+        Assert.Null(updated.Document.Targeting);
+    }
+
+    [Fact]
+    public async Task The_readme_targeting_example_turns_the_flag_on_for_staff_and_a_tenth_of_everyone_else()
+    {
+        const string rule = """
+            {
+              "if": [
+                { "ends_with": [ { "var": "email" }, "@example.com" ] }, "on",
+                { "fractional": [ [ "on", 10 ], [ "off", 90 ] ] }
+              ]
+            }
+            """;
+        await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.Define("new-checkout", defaultValue: false, targeting: rule));
+
+        var staff = host.Flagon.GetBooleanDetails("new-checkout", context: new EvaluationContext("user-123",
+            new Dictionary<string, object?> { ["email"] = "ada@example.com" }));
+        var others = Enumerable.Range(0, 1000).Count(i => host.Flagon.IsEnabled("new-checkout", context: new EvaluationContext($"user-{i}",
+            new Dictionary<string, object?> { ["email"] = $"user-{i}@elsewhere.test" })));
+
+        Assert.Equal(new FlagEvaluationDetails<bool>("new-checkout", true, "on", EvaluationReason.TargetingMatch), staff);
+        Assert.InRange(others, 70, 130);
+    }
+
+    [Theory]
+    [InlineData("""{ "if": [ { "unknown_op": [1] }, "on", null ] }""", "unknown_op")]
+    [InlineData("""{ "if": [ { "$ref": "is_staff" }, "on", null ] }""", "$ref")]
+    public async Task Defining_a_flag_with_an_invalid_rule_fails_startup_before_anything_is_written(string targeting, string op)
+    {
+        var store = new InMemoryFlagStore();
+
+        var ex = await Assert.ThrowsAsync<FlagTargetingException>(() => FlagonTestHost.StartAsync(o =>
+        {
+            o.Store = store;
+            o.Flagon = f => f.Define("broken", targeting: targeting);
+        }));
+
+        Assert.Null(await store.GetAsync("broken"));
+        Assert.Equal("broken", ex.Key);
+        Assert.Equal(op, ex.Operator);
+        Assert.Equal("/if/0", ex.Path);
+    }
+
+    [Fact]
+    public void Defining_a_flag_whose_targeting_is_not_json_fails_at_configuration()
+    {
+        var options = new FlagonOptions();
+
+        Assert.Throws<FlagValidationException>(() => options.Define("broken", targeting: "{ if: "));
+    }
+}

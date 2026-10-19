@@ -3,7 +3,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Flagon.Storage.Internal;
+namespace Jorrk.Flagon.Storage.Internal;
 
 /// <summary>Resolves the <c>connectionStringOrName</c> argument of the <c>Use*Storage</c> extensions.</summary>
 internal static class ConnectionStringResolver

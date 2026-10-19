@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>Jorrk.Flagon.Storage.Postgres</PackageId>
+    <Description>PostgreSQL storage for Flagon feature flags: raw ADO.NET via Npgsql, embedded versioned migrations applied on startup (or exported for DBA-managed deployments).</Description>
+    <RootNamespace>Jorrk.Flagon.Storage.Postgres</RootNamespace>
+    <PackageTags>$(PackageTags);postgres;postgresql;npgsql</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Migrations\*.sql" LogicalName="Jorrk.Flagon.Storage.Postgres.Migrations.%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Jorrk.Flagon\Jorrk.Flagon.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Connection-string-or-name resolution shared by every storage package. -->
+    <Compile Include="..\Shared\ConnectionStringResolver.cs" Link="Internal\ConnectionStringResolver.cs" />
+  </ItemGroup>
+</Project>

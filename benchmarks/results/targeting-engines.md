@@ -3,9 +3,9 @@
 Compares the two candidate engines behind the internal `ITargetingCompiler` seam:
 
 - **own-json-logic** (Spike A, #22): Flagon's own JsonLogic-to-node-tree compiler. Now
-  `src/Flagon/Internal/Targeting/JsonLogic/` (`JsonLogicTargetingCompiler`), the default.
+  `src/Jorrk.Flagon/Internal/Targeting/JsonLogic/` (`JsonLogicTargetingCompiler`), the default.
 - **json-everything** (Spike B, #23): a compiler over json-everything's `JsonLogic` 5.5.0 NuGet package
-  (`src/Flagon.Targeting.JsonEverything/`, deleted after this run; source at commit `4894d11`).
+  (`src/Jorrk.Flagon.Targeting.JsonEverything/`, deleted after this run; source at commit `4894d11`).
 
 Decision and trade-offs: [ADR 0001](../../docs/adr/0001-targeting-engine.md).
 
@@ -14,7 +14,7 @@ Decision and trade-offs: [ADR 0001](../../docs/adr/0001-targeting-engine.md).
 The numbers below are historical: measured at commit `64a7588` and not re-run since. What has changed:
 
 - **Parity**: the flagd-testbed harness now passes **295 / 295** runnable cases with the default engine; its
-  expected-failure list (`tests/Flagon.Tests/FlagdParity/expected-failures/default.txt`) is empty.
+  expected-failure list (`tests/Jorrk.Flagon.Tests/FlagdParity/expected-failures/default.txt`) is empty.
 - **Divergences closed**: the `no-default-variant.feature` failures and both seam-level divergences listed below
   (runtime rule failure, `targeting: {}`) now follow flagd (see the Consequences in
   [ADR 0001](../../docs/adr/0001-targeting-engine.md)).
@@ -24,11 +24,11 @@ The numbers below are historical: measured at commit `64a7588` and not re-run si
 
 ## How it was run
 
-Suite: `benchmarks/Flagon.Benchmarks` at commit `64a7588`, which still referenced both engines.
+Suite: `benchmarks/Jorrk.Flagon.Benchmarks` at commit `64a7588`, which still referenced both engines.
 
 ```sh
-dotnet build benchmarks/Flagon.Benchmarks -c Release
-dotnet run -c Release -f net10.0 --no-build --project benchmarks/Flagon.Benchmarks -- \
+dotnet build benchmarks/Jorrk.Flagon.Benchmarks -c Release
+dotnet run -c Release -f net10.0 --no-build --project benchmarks/Jorrk.Flagon.Benchmarks -- \
   --filter '*' --job short --runtimes net8.0 net10.0
 ```
 
