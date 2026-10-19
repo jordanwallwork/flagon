@@ -19,6 +19,12 @@ public interface IFlagonSnapshotStatus
 /// <param name="ConsecutiveFailures">Refresh attempts that have failed in a row since the last success.</param>
 /// <param name="LastError">The error from the most recent attempt, or null if it succeeded.</param>
 /// <param name="RefreshInterval">The configured polling interval (see <see cref="FlagonOptions.RefreshInterval"/>).</param>
+/// <param name="IsPushConnected">
+/// Whether the store's change notifier currently holds a live subscription, or null when the store has no notifier or
+/// <see cref="FlagonOptions.PushRefresh"/> is off. A false value does not change <see cref="IsStoreReachable"/> or the health
+/// status: polling still bounds staleness.
+/// </param>
+/// <param name="LastPushAt">When the most recent change signal was received from the notifier, or null if none has been.</param>
 public sealed record FlagonSnapshotStatus(
     long Version,
     bool IsLoaded,
@@ -27,7 +33,9 @@ public sealed record FlagonSnapshotStatus(
     DateTimeOffset? LastAttemptAt,
     int ConsecutiveFailures,
     Exception? LastError,
-    TimeSpan RefreshInterval)
+    TimeSpan RefreshInterval,
+    bool? IsPushConnected = null,
+    DateTimeOffset? LastPushAt = null)
 {
     /// <summary>
     /// The time since the store was last successfully read, as of <paramref name="now"/>; null if it never was.

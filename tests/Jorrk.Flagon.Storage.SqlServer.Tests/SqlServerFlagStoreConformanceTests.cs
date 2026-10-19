@@ -1,4 +1,5 @@
 using Jorrk.Flagon.Storage.Conformance;
+using Xunit;
 
 namespace Jorrk.Flagon.Storage.SqlServer.Tests;
 

@@ -16,7 +16,13 @@
     <ProjectReference Include="..\Jorrk.Flagon\Jorrk.Flagon.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The notification payload parser is internal; its tests live in the Postgres test project. -->
+    <InternalsVisibleTo Include="Jorrk.Flagon.Storage.Postgres.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Connection-string-or-name resolution shared by every storage package. -->
     <Compile Include="..\Shared\ConnectionStringResolver.cs" Link="Internal\ConnectionStringResolver.cs" />
+    <Compile Include="..\Shared\ReconnectBackoff.cs" Link="Internal\ReconnectBackoff.cs" />
+    <Compile Include="..\Shared\ListenerRuns.cs" Link="Internal\ListenerRuns.cs" />
   </ItemGroup>
 </Project>

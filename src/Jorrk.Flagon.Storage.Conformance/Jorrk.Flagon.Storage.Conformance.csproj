@@ -8,6 +8,10 @@
   <ItemGroup>
     <PackageReference Include="xunit.assert" />
     <PackageReference Include="xunit.extensibility.core" />
+    <!-- Dynamic skips (xUnit 2 has none): the notification cases skip for stores without IFlagChangeNotifier. -->
+    <PackageReference Include="Xunit.SkippableFact" />
+    <!-- Lift SkippableFact's xunit.extensibility.execution (2.4.0) to the xunit version the suite is built against. -->
+    <PackageReference Include="xunit.extensibility.execution" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Jorrk.Flagon\Jorrk.Flagon.csproj" />

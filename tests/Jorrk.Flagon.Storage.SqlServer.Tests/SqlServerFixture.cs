@@ -10,10 +10,37 @@ public sealed class SqlServerFixture : IAsyncLifetime
 
     public string ConnectionString => _container.GetConnectionString();
 
+    /// <summary>A database with Service Broker on, shared by push tests that only need their own schema.</summary>
+    public string PushConnectionString { get; private set; } = "";
+
     /// <summary>A schema name no other test uses.</summary>
     public static string NewSchema() => $"t_{Guid.NewGuid():N}";
 
-    public Task InitializeAsync() => _container.StartAsync();
+    public async Task InitializeAsync()
+    {
+        await _container.StartAsync();
+        PushConnectionString = await CreateDatabaseAsync();
+    }
+
+    /// <summary>
+    /// Creates a database no other test uses and returns its connection string. <c>CREATE DATABASE</c> leaves Service
+    /// Broker on. Push tests that change database-wide state (offline, broker off) use their own.
+    /// </summary>
+    public async Task<string> CreateDatabaseAsync()
+    {
+        var name = $"d_{Guid.NewGuid():N}";
+        await ExecuteAsync($"CREATE DATABASE [{name}]");
+        return new SqlConnectionStringBuilder(ConnectionString) { InitialCatalog = name }.ConnectionString;
+    }
+
+    /// <summary>Runs a statement against the server (database-level changes such as taking a database offline).</summary>
+    public async Task ExecuteAsync(string sql)
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(sql, connection) { CommandTimeout = 120 };
+        await command.ExecuteNonQueryAsync();
+    }
 
     public Task DisposeAsync() => _container.DisposeAsync().AsTask();
 
