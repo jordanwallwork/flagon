@@ -7,6 +7,9 @@ public class PostgresFlagStoreConformanceTests(PostgresFixture db) : FlagStoreCo
     protected override Task<IFlagStore> CreateStoreAsync() =>
         Task.FromResult<IFlagStore>(new PostgresFlagStore(db.ConnectionString, PostgresFixture.NewSchema()));
 
+    protected override Task<IFlagStore?> CreateSecondInstanceAsync(IFlagStore store) =>
+        Task.FromResult<IFlagStore?>(new PostgresFlagStore(db.ConnectionString, ((PostgresFlagStore)store).Schema));
+
     protected override async ValueTask DisposeStoreAsync(IFlagStore store)
     {
         await base.DisposeStoreAsync(store);
