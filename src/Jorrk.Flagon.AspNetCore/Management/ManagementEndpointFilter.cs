@@ -35,9 +35,52 @@ internal static class ManagementEndpointFilter
                 ["path"] = ex.Path,
             });
         }
+        catch (SegmentRuleException ex)
+        {
+            return Problem(StatusCodes.Status400BadRequest, "Invalid segment rule", ex.Message, new Dictionary<string, object?>
+            {
+                ["key"] = ex.Key,
+                ["operator"] = ex.Operator,
+                ["path"] = ex.Path,
+            });
+        }
+        catch (SegmentArchivedException ex)
+        {
+            return Problem(StatusCodes.Status400BadRequest, "Segment archived", ex.Message, new Dictionary<string, object?>
+            {
+                ["key"] = ex.FlagKey,
+                ["segments"] = ex.SegmentKeys,
+            });
+        }
         catch (FlagValidationException ex)
         {
             return Problem(StatusCodes.Status400BadRequest, "Invalid request", ex.Message);
+        }
+        catch (SegmentNotFoundException ex)
+        {
+            return Problem(StatusCodes.Status404NotFound, "Segment not found", ex.Message);
+        }
+        catch (SegmentAlreadyExistsException ex)
+        {
+            return Problem(StatusCodes.Status409Conflict, "Segment already exists", ex.Message);
+        }
+        catch (SegmentVersionConflictException ex)
+        {
+            http.Response.Headers.ETag = ManagementEndpoints.FormatETag(ex.CurrentVersion);
+            return Problem(StatusCodes.Status409Conflict, "Version conflict", ex.Message, new Dictionary<string, object?>
+            {
+                ["key"] = ex.Key,
+                ["expectedVersion"] = ex.ExpectedVersion,
+                ["currentVersion"] = ex.CurrentVersion,
+            });
+        }
+        catch (SegmentInUseException ex)
+        {
+            return Problem(StatusCodes.Status409Conflict, "Segment in use", ex.Message, new Dictionary<string, object?>
+            {
+                ["key"] = ex.Key,
+                ["flags"] = ex.FlagKeys,
+            });
         }
         catch (FlagNotFoundException ex)
         {
