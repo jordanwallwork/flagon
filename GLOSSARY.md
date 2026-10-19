@@ -27,3 +27,11 @@ _Avoid_: Fallback, code value
 **Flag state**:
 ENABLED or DISABLED, for a flag of any type. A disabled flag serves no variant, so every caller gets the caller's default (reason `DISABLED`). Distinct from a boolean flag's on/off toggle, which switches its default variant.
 _Avoid_: Enabled (for the state of a non-boolean flag), active
+
+**Segment**:
+A named, reusable targeting condition referenced from flag targeting with `$ref`; inlined at compile time, as flagd's `$evaluators`. Its rule is any condition the targeting engine compiles on its own; a "list" segment is the rule matching a list of targeting keys.
+_Avoid_: Audience, cohort, group
+
+**Segment reference** (`$ref`):
+An object that is exactly `{"$ref": "<segment-key>"}` inside a flag's targeting rule, standing for that segment's rule. Segments may not contain references (no nesting).
+_Avoid_: Segment link, include

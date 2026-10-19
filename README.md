@@ -290,9 +290,8 @@ host starts, and one that does not compile fails startup with `FlagTargetingExce
 `Invalid targeting rule` with `key`, `operator` and `path` (e.g. `/if/0`) extensions.
 
 **`$ref` and `$evaluators`.** In flagd, `$evaluators` belong to a flag-set file and `{"$ref": "name"}` is replaced with
-the named rule when the file loads. Flagon stores each flag on its own and has no flag sets, so inline the shared rule
-where each `$ref` stands before writing the flag. A rule that still contains `$ref` is rejected on write (`400`); one
-written to the store by another tool evaluates to `PARSE_ERROR`, as an unresolved `$ref` does in flagd.
+the named rule when the file loads. Flagon stores each flag on its own, so the named rules live as
+[segments](#segments) instead, and `$ref` works exactly as in flagd.
 
 **flagd parity.** Flagon follows flagd 0.18 rather than generic JsonLogic: only the operators in flagd's targeting
 schema, Go JsonLogic's coercions and truthiness, `targetingKey`, `$flagd.flagKey` and `$flagd.timestamp` in the context,
@@ -300,6 +299,54 @@ and flagd's `fractional` (v3) bucketing. The vendored [flagd-testbed](https://gi
 evaluation suite passes in full, every flag type through its typed getter (TYPE_MISMATCH and zero values included).
 The flags Flagon creates have the variants `on` and `off`.
 See [ADR 0001](docs/adr/0001-targeting-engine.md) for the engine choice.
+
+### Segments
+
+A segment is a named, reusable targeting condition ("beta-testers", "internal-staff", "EU users"). Define the audience
+once and reference it from any flag's rule with flagd's own syntax, `{"$ref": "<segment-key>"}`; change the segment and
+every flag that uses it follows on its next refresh.
+
+```csharp
+// In code: seeded before flags, so a defined flag can reference it on an empty store.
+builder.Services.AddFlagon(opts => opts
+    .DefineSegment("internal-staff", """{"ends_with": [{"var": "email"}, "@example.com"]}""", description: "Employees")
+    .Define("new-checkout", targeting: """{"if": [{"$ref": "internal-staff"}, "on", null]}"""));
+
+// Or through IFlagonAdmin (and the management API and UI).
+await admin.CreateSegmentAsync(new CreateSegmentRequest("beta-testers",
+    JsonDocument.Parse("""{"in": [{"var": "targetingKey"}, ["user-1", "user-2"]]}""").RootElement));
+await admin.SetTargetingAsync("new-checkout",
+    JsonDocument.Parse("""{"if": [{"or": [{"$ref": "internal-staff"}, {"$ref": "beta-testers"}]}, "on", null]}""").RootElement, version);
+```
+
+- **flagd semantics.** Each `{"$ref": "k"}` object, at any depth, is replaced by segment `k`'s rule before the flag's rule
+  is compiled, as flagd substitutes `$evaluators`. A flag using a segment evaluates, and allocates, exactly like its
+  inlined equivalent; a match is reported as `TARGETING_MATCH`, and remote clients never see segments.
+- **Rules.** A segment's rule is any rule the engine compiles on its own, conventionally a boolean condition. It may not
+  contain `$ref` (segments don't nest; compose them in the flag's rule with `or`/`and`). Segment keys follow the flag key
+  rules in a namespace of their own. A **list** segment is just the rule `{"in": [{"var": "targetingKey"}, [...]]}`, which
+  the console edits as a list of keys (one per line); every evaluation scans the list, so prefer a rule on an attribute
+  for thousands of keys.
+- **Checked on write, against the store.** A reference to a segment that does not exist is a `FlagTargetingException`
+  (operator `$ref`, path to the reference; `400 Invalid targeting rule`). A flag cannot newly reference an archived
+  segment (`SegmentArchivedException`, `400 Segment archived`). A segment rule that is rejected, or that would stop a
+  flag referencing it from compiling, is a `SegmentRuleException` (`400 Invalid segment rule`).
+- **Archive and purge.** An archived segment keeps resolving, so archiving never changes evaluation, but it can't be
+  newly referenced or edited until restored. Archiving is refused while a non-archived flag references the segment, and
+  purging while any flag does, archived ones included (`SegmentInUseException`, `409 Segment in use` with the `flags`).
+  A flag whose rule references archived or missing segments can't be restored until they are.
+- **The purge race.** The in-use checks run just before the write and are not atomic with a concurrent flag write. In
+  the worst case a flag ends up referencing a purged segment: it serves the caller's default with `PARSE_ERROR`, logs
+  once per snapshot (event 1103) and shows as broken until it is edited.
+- **`DefineSegment`** follows `Define`: a missing segment is created with source `code`; an existing one gets its
+  description, tags and source synced but its rule is never overwritten. A defined segment whose rule does not compile,
+  or a defined flag referencing a segment that does not exist, fails startup.
+- **Stores.** Segments need a store implementing `ISegmentStore` (in-memory, PostgreSQL and SQL Server do). With any
+  other store the segment admin calls throw `NotSupportedException`, the management API answers `501` for its segment
+  routes, the console hides segments, and a `$ref` is rejected.
+- **Upgrading.** Segments arrive with schema migration 2, which only adds tables, so it is safe for a rolling deploy.
+  Upgrade every app before anyone writes a `$ref`: an instance still on the previous release can't resolve it and serves
+  that flag's callers their default with `PARSE_ERROR`.
 
 ## Storage
 
@@ -338,7 +385,9 @@ foreach (var script in PostgresFlagStore.GetMigrationScripts("flagon"))
 ```
 
 To write your own provider, implement `Jorrk.Flagon.Storage.IFlagStore` and run the `Jorrk.Flagon.Storage.Conformance` suite
-against it by deriving a test class from `FlagStoreConformanceTests`.
+against it by deriving a test class from `FlagStoreConformanceTests`. Optional capabilities are separate interfaces that
+the suite checks when a store implements them: `IFlagChangeNotifier` (push) and `ISegmentStore` (segments, on the same
+change sequence as flags, with a consistent `LoadAllWithSegmentsAsync`).
 
 ## Endpoints, UI and authorization
 
@@ -362,7 +411,8 @@ app.MapHealthChecks("/health");
 - **Management UI** (`MapFlagonUi(path)`, default `/flagon`): list, search and filter flags (including by type); create
   boolean, string, number and object flags; toggle, enable or disable, edit, archive, restore and purge them; edit a typed
   flag's variants and pick its default variant; split traffic across variants by percentage (or roll a boolean flag out
-  with a slider) without writing JsonLogic; view audit history (summarising variant, default, state and split changes),
+  with a slider) without writing JsonLogic; manage segments (a key list or a JSON rule, tested against a context, with
+  the flags that use each) and target them from a flag with a picker; view audit history (summarising variant, default, state and split changes),
   last-evaluated time and code default (as typed JSON) per app, and default-mismatch warnings. It is plain
   HTML/JavaScript embedded in the package and mounts a private instance of the management API for itself at
   `{path}/_api`, so it never collides with `MapFlagonApi()`.
@@ -378,7 +428,10 @@ app.MapHealthChecks("/health");
   (`{ "context": {...}, "document"?: {...} }`) previews the stored flag, or an unsaved flagd flag document, against a
   context without side effects (no usage, auto-create, metric or store write) and returns
   `{ value, variant, reason, errorCode?, errorMessage? }`, where `value` is the served variant's JSON value of any type
-  (`null` when no variant is served).
+  (`null` when no variant is served). Segments have their own routes (`GET/POST /segments`, `GET/PATCH/DELETE
+  /segments/{key}`, `PUT /segments/{key}/rule`, `POST /segments/{key}/archive|restore`, `GET /segments/{key}/audit`,
+  `POST /segments/{key}/evaluate`), answered with `501` when the store has none; flags carry the `segments` their rule
+  references, and `GET /flags?segment=beta-testers` filters by one.
 - **Safe by default:** the UI and the management API answer `404` outside the `Development` environment unless you add
   authorization to them. Changes made through them are recorded in the audit log under the signed-in user's name.
 - **OFREP** (`MapFlagonOfrep(prefix)`) is public unless you call `.RequireAuthorization(...)` on it. It evaluates with
@@ -574,7 +627,9 @@ flags.Flags.Reset();                                         // back to the seed
   and use its `ApplicationName`. Any storage choice in it (`UseSqlServerStorage`, ...) is ignored: no database is touched.
 - Test-safe defaults: auto-create and usage tracking are off, and startup fails fast. Change them with the second
   argument, e.g. `TestFlagon.Create(testing: t => t.SeedDefinitions = false)` to start empty.
-- `flags.Admin` is the `IFlagonAdmin` over the same store, for code under test that manages flags.
+- `flags.Admin` is the `IFlagonAdmin` over the same store, for code under test that manages flags (segments included). Segments
+  declared with `DefineSegment` are seeded like `Define`d flags, test flags may reference segments with `$ref`, and
+  `Reset()` removes every segment and reseeds the declared ones.
 
 `flags.Evaluations` records every evaluation, so a test can assert which flags the code evaluated, for whom, and what
 it got. Each entry has the key, requested type, value, variant, reason, error, effective context (explicit or ambient),
@@ -624,7 +679,7 @@ N-variant percentage splits. The flagd document format already accommodates what
 
 1. Redis store, cache decorator and push-based invalidation
 2. MongoDB, MySQL and SQLite stores
-3. Segments; scheduled changes and flag expiry
+3. Scheduled changes and flag expiry
 4. Kill-switch / prerequisite flags, approval workflows and webhooks
 5. Roslyn analyzer with source-generated keys; flagd-format import/export (GitOps)
 6. Direct-database clients for other languages; experimentation exposure events
