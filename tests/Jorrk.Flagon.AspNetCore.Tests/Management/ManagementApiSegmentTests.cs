@@ -147,6 +147,23 @@ public class ManagementApiSegmentTests
     }
 
     [Fact]
+    public async Task A_draft_flag_document_referencing_a_segment_is_evaluated_with_the_segments_rule()
+    {
+        await using var host = await StartAsync();
+        await CreateStaffAsync(host);
+        await host.Admin.CreateAsync(new CreateFlagRequest("beta"));
+        var document = Json("""{"state":"ENABLED","variants":{"on":true,"off":false},"defaultVariant":"off","targeting":{"if":[{"$ref":"staff"},"on",null]}}""");
+        var client = host.CreateClient();
+
+        var ada = await (await client.PostAsJsonAsync($"{Api}/flags/beta/evaluate", new { context = new { targetingKey = "ada" }, document })).Content.ReadFromJsonAsync<JsonElement>();
+        var bob = await (await client.PostAsJsonAsync($"{Api}/flags/beta/evaluate", new { context = new { targetingKey = "bob" }, document })).Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal("on", ada.GetProperty("variant").GetString());
+        Assert.Equal("TARGETING_MATCH", ada.GetProperty("reason").GetString());
+        Assert.Equal("off", bob.GetProperty("variant").GetString());
+    }
+
+    [Fact]
     public async Task Flags_report_the_segments_they_reference_and_can_be_filtered_by_segment()
     {
         await using var host = await StartAsync();

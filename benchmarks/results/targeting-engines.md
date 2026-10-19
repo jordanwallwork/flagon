@@ -20,7 +20,8 @@ The numbers below are historical: measured at commit `64a7588` and not re-run si
   [ADR 0001](../../docs/adr/0001-targeting-engine.md)).
 - **Engine size**: about 2,150 lines (about 1,780 non-blank, non-comment) in 5 files.
 - The **nested** scenario was renamed from "nested if/and/$ref" to "nested if/and (inlined $ref)": the rule has no
-  `$ref`, because Flagon requires evaluators to be inlined on write.
+  `$ref`, because Flagon required evaluators to be inlined on write at the time (segments, #39, now resolve `$ref` on
+  load; see [segments.md](segments.md)).
 
 ## How it was run
 

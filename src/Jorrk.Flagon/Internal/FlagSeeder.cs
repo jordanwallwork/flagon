@@ -94,7 +94,9 @@ internal sealed partial class FlagSeeder(
             // Segments first, so flags defined in code can reference them on an empty store.
             foreach (var definition in options.SegmentDefinitions)
             {
-                await SeedAsync((ISegmentStore)store, definition, audited, cancellationToken).ConfigureAwait(false);
+                var segments = store as ISegmentStore
+                    ?? throw new NotSupportedException("Segments are defined in code but the flag store does not support segments (it does not implement ISegmentStore).");
+                await SeedAsync(segments, definition, audited, cancellationToken).ConfigureAwait(false);
             }
 
             foreach (var definition in options.Definitions)
