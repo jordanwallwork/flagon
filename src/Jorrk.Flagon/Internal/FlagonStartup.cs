@@ -22,8 +22,10 @@ internal sealed partial class FlagonStartup(
     private volatile bool _seeded;
 
     /// <summary>Runs the startup sequence once.</summary>
-    /// <exception cref="FlagTargetingException">
-    /// A declared flag's targeting rule does not compile (whatever <see cref="FlagonOptions.FailFastOnStartup"/> says).
+    /// <exception cref="FlagValidationException">
+    /// A declared flag's targeting rule (<see cref="FlagTargetingException"/>) or segment's rule
+    /// (<see cref="SegmentRuleException"/>) does not compile, or a declared flag references a segment that does not exist or
+    /// is archived (whatever <see cref="FlagonOptions.FailFastOnStartup"/> says).
     /// </exception>
     /// <exception cref="FlagonException">
     /// A migration, seed or load failed and <see cref="FlagonOptions.FailFastOnStartup"/> is set.
@@ -44,6 +46,12 @@ internal sealed partial class FlagonStartup(
         try
         {
             await SeedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (FlagValidationException)
+        {
+            // The store answered, and a definition was refused (a flag referencing a segment that does not exist, or is
+            // archived): a bug in the app's code, like a rule that does not compile, so it fails startup.
+            throw;
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {

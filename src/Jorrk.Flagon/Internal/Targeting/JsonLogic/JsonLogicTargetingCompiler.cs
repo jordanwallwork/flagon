@@ -7,8 +7,9 @@ namespace Jorrk.Flagon.Internal.Targeting.JsonLogic;
 /// Flagon's targeting engine (the default <see cref="ITargetingCompiler"/>; ADR 0001): compiles flagd targeting into a tree of <see cref="Node"/>s once, evaluated per call without parsing
 /// and, for common rules, without allocating. Semantics follow flagd 0.18: diegoholiveira/jsonlogic v3.9.1 restricted to
 /// the operators flagd's targeting schema allows, plus <c>fractional</c> (v3), <c>sem_ver</c>, <c>starts_with</c> and
-/// <c>ends_with</c>. An unknown operator (including an unresolved <c>$ref</c>) or a rule the Go engine would reject
-/// for any data fails compilation.
+/// <c>ends_with</c>. An unknown operator or a rule the Go engine would reject for any data fails compilation. Segment
+/// references (<c>$ref</c>) are inlined before a rule gets here (<see cref="SegmentRefs"/>); one that is left, because the
+/// store has no segments, fails compilation.
 /// </summary>
 internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
 {
@@ -196,7 +197,7 @@ internal sealed class JsonLogicTargetingCompiler : ITargetingCompiler
         "missing" => Checked(Op.Missing, name, values, scalar: JsonValueKind.String),
         "merge" => Checked(Op.Merge, name, values, scalar: JsonValueKind.Number),
         "$ref" => throw new CompileException(
-            $"unresolved $ref {values.GetRawText()}: Flagon stores flags individually and has no flag-set $evaluators, so inline the evaluator's rule in place of the reference"),
+            $"unresolved $ref {values.GetRawText()}: segment references need a flag store that supports segments (ISegmentStore); use one, or inline the rule in place of the reference"),
         _ => throw new CompileException($"unsupported operator '{name}'"),
     };
 

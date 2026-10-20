@@ -45,12 +45,19 @@ internal static partial class FlagdTestbed
     public static RunnableCase Get(string id) => Loaded.Value.ById[id];
 
     /// <summary>
-    /// A fresh InMemory store holding the suite's flags as Flagon stores them, <c>$ref</c>s resolved (see
-    /// <see cref="FixtureFlag"/>). Flags Flagon cannot represent are left out.
+    /// A fresh InMemory store holding the suite's flag set as Flagon stores it: each <c>$evaluators</c> entry as a segment
+    /// and each flag with its <c>$ref</c>s kept verbatim, so references resolve through segments exactly as flagd resolves
+    /// them through the flag set (see <see cref="FixtureFlag"/>). Flags Flagon cannot represent are left out.
     /// </summary>
     public static InMemoryFlagStore SeedStore(FlagdSuite suite)
     {
         var store = new InMemoryFlagStore();
+        foreach (var (name, rule) in Loaded.Value.Evaluators[suite.Name])
+        {
+            using var parsed = JsonDocument.Parse(rule.ToJsonString());
+            store.TryCreateSegmentAsync(name, new SegmentDocument(parsed.RootElement.Clone(), new FlagMetadata())).GetAwaiter().GetResult();
+        }
+
         foreach (var flag in Loaded.Value.Flags[suite.Name].Values)
         {
             if (flag.Document is { } document)
@@ -64,6 +71,7 @@ internal static partial class FlagdTestbed
 
     private sealed record Catalogue(
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, FixtureFlag>> Flags,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, JsonNode>> Evaluators,
         IReadOnlyList<RunnableCase> Runnable,
         IReadOnlyDictionary<string, RunnableCase> ById,
         IReadOnlyList<(GherkinCase, string)> Excluded);
@@ -71,13 +79,15 @@ internal static partial class FlagdTestbed
     private static Catalogue Load()
     {
         var flags = new Dictionary<string, IReadOnlyDictionary<string, FixtureFlag>>(StringComparer.Ordinal);
+        var evaluators = new Dictionary<string, IReadOnlyDictionary<string, JsonNode>>(StringComparer.Ordinal);
         var runnable = new List<RunnableCase>();
         var excluded = new List<(GherkinCase, string)>();
 
         foreach (var suite in Suites)
         {
-            var suiteFlags = LoadFlags(suite);
+            var (suiteFlags, suiteEvaluators) = LoadFlags(suite);
             flags[suite.Name] = suiteFlags;
+            evaluators[suite.Name] = suiteEvaluators;
 
             var featureDirectory = Path.Combine(Root, suite.FeatureDirectory);
             foreach (var file in Directory.GetFiles(featureDirectory, suite.FeaturePattern).OrderBy(f => f, StringComparer.Ordinal))
@@ -98,23 +108,29 @@ internal static partial class FlagdTestbed
             }
         }
 
-        return new Catalogue(flags, runnable, runnable.ToDictionary(c => c.Id, StringComparer.Ordinal), excluded);
+        return new Catalogue(flags, evaluators, runnable, runnable.ToDictionary(c => c.Id, StringComparer.Ordinal), excluded);
     }
 
-    private static Dictionary<string, FixtureFlag> LoadFlags(FlagdSuite suite)
+    private static (Dictionary<string, FixtureFlag> Flags, Dictionary<string, JsonNode> Evaluators) LoadFlags(FlagdSuite suite)
     {
         var result = new Dictionary<string, FixtureFlag>(StringComparer.Ordinal);
+        var allEvaluators = new Dictionary<string, JsonNode>(StringComparer.Ordinal);
         foreach (var file in suite.FlagFiles)
         {
             var root = JsonNode.Parse(File.ReadAllText(Path.Combine(Root, file)))!.AsObject();
             var evaluators = root["$evaluators"]?.AsObject();
+            foreach (var (name, rule) in evaluators ?? [])
+            {
+                allEvaluators.Add(name, rule!.DeepClone());
+            }
+
             foreach (var (key, node) in root["flags"]!.AsObject())
             {
                 result.Add(key, FixtureFlag.Create(key, node!.AsObject(), evaluators));
             }
         }
 
-        return result;
+        return (result, allEvaluators);
     }
 
     private static (RunnableCase?, string?) Interpret(FlagdSuite suite, IReadOnlyDictionary<string, FixtureFlag> flags, GherkinCase c)
@@ -249,8 +265,9 @@ internal static partial class FlagdTestbed
 }
 
 /// <summary>
-/// A fixture flag as the testbed defines it (<c>$ref</c>s resolved), and the document Flagon stores for it: the same
-/// flag, typed values and all, so every case is evaluated through the typed getter its Gherkin names.
+/// A fixture flag as the testbed defines it (<c>$ref</c>s resolved, for working out expectations), and the document
+/// Flagon stores for it: the same flag, typed values, <c>$ref</c>s and all, so every case is evaluated through the typed
+/// getter its Gherkin names and every reference through a segment.
 /// </summary>
 internal sealed class FixtureFlag
 {
@@ -267,7 +284,9 @@ internal sealed class FixtureFlag
     /// <summary>The flag as the testbed defines it, <c>$ref</c>s resolved.</summary>
     public JsonObject Original { get; }
 
-    /// <summary>The stored document, or null if Flagon cannot store this flag (see <see cref="UnstorableReason"/>).</summary>
+    /// <summary>
+    /// The stored document, <c>$ref</c>s kept, or null if Flagon cannot store this flag (see <see cref="UnstorableReason"/>).
+    /// </summary>
     public FlagDocument? Document { get; }
 
     public string? UnstorableReason { get; }
@@ -284,7 +303,7 @@ internal sealed class FixtureFlag
 
         try
         {
-            return new FixtureFlag(key, original, FlagdJson.Deserialize(original.ToJsonString()), null);
+            return new FixtureFlag(key, original, FlagdJson.Deserialize(flag.ToJsonString()), null);
         }
         catch (FlagValidationException ex)
         {
@@ -292,9 +311,9 @@ internal sealed class FixtureFlag
         }
     }
 
-    // flagd's loader substitutes {"$ref": "<name>"} with the flag set's $evaluators entry before compiling. Flagon stores
-    // flags individually (no flag-set $evaluators), so the fixture loader does the same substitution on import.
-    // An unknown name is left in place: the rule then uses an unknown operator, which flagd reports as PARSE_ERROR.
+    // flagd's loader substitutes {"$ref": "<name>"} with the flag set's $evaluators entry before compiling. The resolved
+    // form is only used to work out each case's expectations; the stored flag keeps its references for Flagon's segments
+    // to resolve. An unknown name is left in place: flagd reports PARSE_ERROR, as Flagon does for a missing segment.
     private static JsonNode? ResolveRefs(JsonNode? node, JsonObject? evaluators)
     {
         switch (node)

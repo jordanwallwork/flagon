@@ -36,7 +36,14 @@ public static class FlagdJson
             root["targeting"] = JsonNode.Parse(targeting.GetRawText());
         }
 
-        var m = document.Metadata;
+        root["metadata"] = WriteMetadata(document.Metadata);
+
+        return root.ToJsonString();
+    }
+
+    /// <summary>Flagon metadata as a flagd <c>metadata</c> object (primitive values only). Shared with <see cref="SegmentJson"/>.</summary>
+    internal static JsonObject WriteMetadata(FlagMetadata m)
+    {
         var metadata = new JsonObject();
         if (m.Description is not null) metadata["description"] = m.Description;
         if (m.Tags.Count > 0) metadata["tags"] = string.Join(',', m.Tags);
@@ -45,9 +52,7 @@ public static class FlagdJson
         if (m.CreatedBy is not null) metadata["createdBy"] = m.CreatedBy;
         if (m.UpdatedAt is { } updatedAt) metadata["updatedAt"] = FormatDate(updatedAt);
         if (m.UpdatedBy is not null) metadata["updatedBy"] = m.UpdatedBy;
-        root["metadata"] = metadata;
-
-        return root.ToJsonString();
+        return metadata;
     }
 
     /// <summary>Parses flagd JSON into a flag.</summary>
@@ -97,7 +102,8 @@ public static class FlagdJson
     private static string FormatDate(DateTimeOffset value) =>
         value.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture);
 
-    private static FlagMetadata ReadMetadata(JsonElement root)
+    /// <summary>Reads the <c>metadata</c> object of <paramref name="root"/> (absent or not an object is empty metadata).</summary>
+    internal static FlagMetadata ReadMetadata(JsonElement root)
     {
         if (!root.TryGetProperty("metadata", out var m) || m.ValueKind != JsonValueKind.Object)
         {

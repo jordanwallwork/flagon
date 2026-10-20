@@ -31,7 +31,7 @@ internal sealed partial class FlagonAdmin(
         FlagKey.Validate(request.Key);
         FlagTags.Validate(request.Tags);
         var variants = ValidateVariants(request);
-        var targeting = TargetingRules.Validate(compiler, request.Key, request.Targeting);
+        var targeting = await ValidateTargetingAsync(request.Key, request.Targeting, cancellationToken).ConfigureAwait(false);
 
         var change = changes.Begin();
         var metadata = new FlagMetadata(
@@ -108,12 +108,67 @@ internal sealed partial class FlagonAdmin(
     public Task<FlagRecord> SetTargetingAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken = default) =>
         WriteAsync("set_targeting", key, () => SetTargetingCoreAsync(key, targeting, expectedVersion, cancellationToken));
 
-    private Task<FlagRecord> SetTargetingCoreAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken)
+    private async Task<FlagRecord> SetTargetingCoreAsync(string key, JsonElement? targeting, long expectedVersion, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(key);
-        var validated = TargetingRules.Validate(compiler, key, targeting);
-        return UpdateDocumentAsync(
-            key, expectedVersion, current => Unarchived(current, expectedVersion) with { Targeting = validated }, cancellationToken);
+        var validated = await ValidateTargetingAsync(key, targeting, cancellationToken).ConfigureAwait(false);
+        return await UpdateDocumentAsync(
+            key, expectedVersion, current => Unarchived(current, expectedVersion) with { Targeting = validated }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Validates a flag's targeting for a write and returns what to store (see <see cref="TargetingRules.Validate(ITargetingCompiler, string, JsonElement?)"/>).
+    /// Segment references are resolved against the store, not the snapshot, so a segment created a moment ago is usable;
+    /// each must exist and not be archived.
+    /// </summary>
+    /// <exception cref="FlagTargetingException">The rule does not compile, or references a segment that does not exist.</exception>
+    /// <exception cref="SegmentArchivedException">The rule references an archived segment.</exception>
+    private async Task<JsonElement?> ValidateTargetingAsync(string key, JsonElement? targeting, CancellationToken cancellationToken)
+    {
+        if (store is not ISegmentStore segmentStore || !TargetingRules.IsRule(targeting) || SegmentRefs.FindAny(targeting!.Value) is null)
+        {
+            // No references (or no segments, so a $ref is left for the compiler to reject).
+            return TargetingRules.Validate(compiler, key, targeting);
+        }
+
+        var segments = await segmentStore.LoadAllSegmentsAsync(cancellationToken).ConfigureAwait(false);
+        var validated = TargetingRules.Validate(compiler, key, targeting, TargetingRules.RulesOf(segments));
+        EnsureReferencesUnarchived(key, validated, segments);
+        return validated;
+    }
+
+    /// <exception cref="SegmentArchivedException"><paramref name="targeting"/> references an archived segment of <paramref name="segments"/>.</exception>
+    private static void EnsureReferencesUnarchived(string flagKey, JsonElement? targeting, IReadOnlyList<SegmentRecord> segments)
+    {
+        var archived = SegmentRefs.References(targeting)
+            .Where(reference => segments.Any(s => s.Archived && string.Equals(s.Key, reference, StringComparison.Ordinal)))
+            .ToArray();
+        if (archived.Length > 0)
+        {
+            throw new SegmentArchivedException(flagKey, archived);
+        }
+    }
+
+    /// <summary>
+    /// Refuses to restore <paramref name="key"/> while its targeting references segments that are missing or archived, or
+    /// no longer compiles with them inlined (segment edits don't check archived flags, so a restored flag would otherwise
+    /// serve PARSE_ERROR). Only checked when the flag is archived at <paramref name="expectedVersion"/>; otherwise the
+    /// store reports the problem.
+    /// </summary>
+    private async Task EnsureRestorableAsync(string key, long expectedVersion, CancellationToken cancellationToken)
+    {
+        if (store is not ISegmentStore segmentStore
+            || await store.GetAsync(key, cancellationToken).ConfigureAwait(false) is not { Archived: true } current
+            || current.Version != expectedVersion
+            || !TargetingRules.IsRule(current.Document.Targeting)
+            || SegmentRefs.FindAny(current.Document.Targeting!.Value) is null)
+        {
+            return;
+        }
+
+        var segments = await segmentStore.LoadAllSegmentsAsync(cancellationToken).ConfigureAwait(false);
+        TargetingRules.Validate(compiler, key, current.Document.Targeting, TargetingRules.RulesOf(segments));
+        EnsureReferencesUnarchived(key, current.Document.Targeting, segments);
     }
 
     /// <summary>
@@ -200,6 +255,7 @@ internal sealed partial class FlagonAdmin(
     public Task<FlagRecord> RestoreAsync(string key, long expectedVersion, CancellationToken cancellationToken = default) =>
         WriteAsync("restore", key, async () =>
         {
+            await EnsureRestorableAsync(key, expectedVersion, cancellationToken).ConfigureAwait(false);
             var record = await store.RestoreAsync(key, expectedVersion, changes.Begin(), cancellationToken).ConfigureAwait(false);
             await snapshots.RefreshAsync(cancellationToken).ConfigureAwait(false);
             return record;

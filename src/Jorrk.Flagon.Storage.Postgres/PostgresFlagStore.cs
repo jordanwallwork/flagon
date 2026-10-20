@@ -15,15 +15,15 @@ namespace Jorrk.Flagon.Storage.Postgres;
 /// </summary>
 /// <remarks>
 /// <para>Every write takes its version from one sequence while holding a transaction-scoped advisory lock, so versions
-/// commit in order and <see cref="GetChangeVersionAsync"/> (<c>MAX(version)</c> over flags and purges) never skips a
-/// write that commits late.</para>
+/// commit in order and <see cref="GetChangeVersionAsync"/> (<c>MAX(version)</c> over flags, segments and their purges)
+/// never skips a write that commits late. Segment writes (<see cref="ISegmentStore"/>) share the sequence.</para>
 /// <para><see cref="ApplyMigrationsAsync"/> runs the embedded scripts not yet recorded in <c>schema_version</c>,
 /// serialised across processes by <c>pg_advisory_lock</c>. Use <see cref="GetMigrationScripts"/> to export them instead.</para>
 /// <para>Every write that moves the change version also runs <c>pg_notify</c> on channel <c>flagon_{schema}</c> inside its
 /// transaction, so listeners hear about it at commit (see <see cref="StartAsync"/>). Usage writes and rejected writes do not notify.
 /// Writes made directly in SQL, outside this store, are not notified and are picked up by polling only.</para>
 /// </remarks>
-public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IFlagChangeNotifierTeardown, IAsyncDisposable, IDisposable
+public sealed partial class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IFlagChangeNotifierTeardown, ISegmentStore, IAsyncDisposable, IDisposable
 {
     /// <summary>The schema used when none is configured.</summary>
     public const string DefaultSchema = "flagon";
@@ -43,6 +43,9 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IFlagCh
     private readonly string _purges;
     private readonly string _audit;
     private readonly string _usage;
+    private readonly string _segments;
+    private readonly string _segmentPurges;
+    private readonly string _segmentAudit;
     private readonly string _nextVersion;
 
     /// <summary>Creates a store over the database at <paramref name="connectionString"/>.</summary>
@@ -75,6 +78,9 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IFlagCh
         _purges = $"\"{schema}\".purges";
         _audit = $"\"{schema}\".audit";
         _usage = $"\"{schema}\".usage";
+        _segments = $"\"{schema}\".segments";
+        _segmentPurges = $"\"{schema}\".segment_purges";
+        _segmentAudit = $"\"{schema}\".segment_audit";
         _nextVersion = $"nextval('\"{schema}\".change_sequence')";
     }
 
@@ -133,10 +139,17 @@ public sealed class PostgresFlagStore : IFlagStore, IFlagChangeNotifier, IFlagCh
     /// <inheritdoc />
     public async ValueTask<long> GetChangeVersionAsync(CancellationToken cancellationToken = default)
     {
-        await using var command = _dataSource.CreateCommand(
-            $"SELECT GREATEST((SELECT COALESCE(MAX(version), 0) FROM {_flags}), (SELECT COALESCE(MAX(version), 0) FROM {_purges}))");
+        await using var command = _dataSource.CreateCommand(ChangeVersionSql);
         return (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
+
+    private string ChangeVersionSql => $"""
+        SELECT GREATEST(
+            (SELECT COALESCE(MAX(version), 0) FROM {_flags}),
+            (SELECT COALESCE(MAX(version), 0) FROM {_purges}),
+            (SELECT COALESCE(MAX(version), 0) FROM {_segments}),
+            (SELECT COALESCE(MAX(version), 0) FROM {_segmentPurges}))
+        """;
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<FlagRecord>> LoadAllAsync(CancellationToken cancellationToken = default)

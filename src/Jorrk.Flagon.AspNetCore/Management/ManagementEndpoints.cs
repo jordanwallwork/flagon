@@ -22,6 +22,7 @@ internal static partial class ManagementEndpoints
         var type = ParseType(NonEmpty(query["type"]));
         var enabled = ParseBool(query, "enabled");
         var archived = ParseBool(query, "archived");
+        var segment = NonEmpty(query["segment"]);
 
         var records = await admin.ListAsync(http.RequestAborted).ConfigureAwait(false);
         var usage = (await admin.ListUsageAsync(http.RequestAborted).ConfigureAwait(false))
@@ -37,6 +38,7 @@ internal static partial class ManagementEndpoints
             .Where(f => type is null || f.Type == type)
             .Where(f => enabled is null || f.Enabled == enabled)
             .Where(f => archived is null || f.Archived == archived)
+            .Where(f => segment is null || f.Segments.Contains(segment, StringComparer.Ordinal))
             .OrderBy(f => f.Key, StringComparer.Ordinal)
             .ToArray();
 

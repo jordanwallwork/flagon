@@ -16,14 +16,17 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// <list type="bullet">
     /// <item><c>GET {path}/flags</c>: lists flags; optional filters <c>q</c> (key/description contains, case-insensitive),
     /// <c>tag</c>, <c>source</c> (<c>manual</c>|<c>auto</c>|<c>code</c>), <c>type</c>
-    /// (<c>boolean</c>|<c>string</c>|<c>number</c>|<c>object</c>), <c>enabled</c> and <c>archived</c> (<c>true</c>|<c>false</c>).</item>
+    /// (<c>boolean</c>|<c>string</c>|<c>number</c>|<c>object</c>), <c>enabled</c>, <c>archived</c> (<c>true</c>|<c>false</c>)
+    /// and <c>segment</c> (flags whose targeting references that segment).</item>
     /// <item><c>GET {path}/flags/{key}</c>: one flag (with an <c>ETag</c> of its version). Flags carry their <c>type</c>
     /// (derived from the variants; <c>null</c> if they are empty or mixed), <c>variants</c>, <c>value</c> (the default
     /// variant's value, or <c>null</c>), <c>enabled</c> (the on/off toggle; <c>null</c> for non-boolean flags), their raw
     /// <c>targeting</c> (or <c>null</c>) and a <c>rollout</c> summary, <c>{ buckets: [{ variant, percentage }], percentage? }</c>,
     /// when the rule is exactly a percentage split <c>{"fractional": [[v1, w1], …, [vn, wn]]}</c> (n ≥ 2; literal, distinct,
     /// defined variant names; integral weights summing to 100; default bucketing), otherwise <c>null</c>. <c>percentage</c>
-    /// is N only for the boolean on/off shape <c>[["on", N], ["off", 100 - N]]</c>.</item>
+    /// is N only for the boolean on/off shape <c>[["on", N], ["off", 100 - N]]</c>. <c>segments</c> lists the segment keys
+    /// the targeting references, and <c>segmentTargeting</c>, <c>{ segments, variant }</c>, is present when the rule is
+    /// exactly <c>{"if":[{"$ref":"a"},"&lt;variant&gt;",null]}</c> or <c>{"if":[{"or":[{"$ref":"a"},{"$ref":"b"},…]},"&lt;variant&gt;",null]}</c>.</item>
     /// <item><c>POST {path}/flags</c>: creates a flag from <c>{ key, enabled?, description?, tags?, targeting? }</c>, or a
     /// string, number or object flag from <c>{ key, variants, defaultVariant?, description?, tags?, targeting? }</c>
     /// (at least one variant; names non-empty, at most 128 characters and unique; values all of one type, no arrays or
@@ -47,12 +50,26 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
     /// usage, auto-create, evaluation metric or store write.</item>
     /// <item><c>POST {path}/flags/{key}/archive</c>, <c>POST {path}/flags/{key}/restore</c>, <c>DELETE {path}/flags/{key}</c> (purge).</item>
     /// <item><c>GET {path}/flags/{key}/audit</c>: audit history, newest first.</item>
+    /// <item>Segments, reusable conditions flags reference with <c>{"$ref": "&lt;segment-key&gt;"}</c> (<c>501</c> on every
+    /// route when the store does not support them): <c>GET {path}/segments</c> lists them (filters <c>q</c>, <c>tag</c>,
+    /// <c>archived</c>; <c>usedBy</c> is a count of referencing flags); <c>POST {path}/segments</c> creates one from
+    /// <c>{ key, rule, description?, tags? }</c>; <c>GET {path}/segments/{key}</c> gets one (with an <c>ETag</c>, and
+    /// <c>usedBy: [{ key, archived }]</c>); <c>PATCH {path}/segments/{key}</c> updates <c>{ description?, tags? }</c>;
+    /// <c>PUT {path}/segments/{key}/rule</c> replaces the rule from <c>{ rule }</c>; <c>POST {path}/segments/{key}/archive</c>,
+    /// <c>POST {path}/segments/{key}/restore</c> and <c>DELETE {path}/segments/{key}</c> (purge);
+    /// <c>GET {path}/segments/{key}/audit</c>; and <c>POST {path}/segments/{key}/evaluate</c>, which tests the stored rule,
+    /// or an unsaved <c>rule</c>, against <c>{ context? }</c> and returns <c>{ matches, result, error? }</c>. Segments carry
+    /// <c>keys</c> when the rule is exactly a targeting-key list, <c>{"in":[{"var":"targetingKey"},[…]]}</c>.</item>
     /// </list>
     /// Writes to an existing flag need the version the caller last saw, as an <c>If-Match</c> header (the flag's <c>ETag</c>)
     /// or a <c>version</c> body field; a stale version is answered with <c>409</c> problem details carrying <c>currentVersion</c>.
     /// Invalid requests get <c>400</c> problem details; a targeting rule that does not compile is one, titled
     /// <c>Invalid targeting rule</c> and carrying the flag <c>key</c>, the failing <c>operator</c> and a JSON Pointer
-    /// <c>path</c> to it within the rule.
+    /// <c>path</c> to it within the rule (a reference to a segment that does not exist is one, with operator <c>$ref</c>).
+    /// Segment errors: <c>404 Segment not found</c>; <c>409 Segment already exists</c>; <c>409 Version conflict</c> with
+    /// <c>currentVersion</c>; <c>409 Segment in use</c> with <c>flags</c> (archive with live flags referencing it, purge with
+    /// any); <c>400 Segment archived</c> with <c>segments</c> (a flag newly referencing archived segments); and
+    /// <c>400 Invalid segment rule</c> with <c>key</c>, <c>path</c> and <c>operator</c>.
     /// <para>
     /// Security: unless authorization is added to the returned builder (e.g. <c>.RequireAuthorization("flag-admins")</c>),
     /// the endpoints only serve in the <c>Development</c> environment and answer <c>404</c> elsewhere, so an unauthenticated
@@ -85,6 +102,19 @@ public static class FlagonManagementEndpointRouteBuilderExtensions
         group.MapPost("/flags/{key}/restore", ManagementEndpoints.RestoreAsync);
         group.MapDelete("/flags/{key}", ManagementEndpoints.PurgeAsync);
         group.MapGet("/flags/{key}/audit", ManagementEndpoints.GetAuditHistoryAsync);
+
+        var segments = group.MapGroup("/segments");
+        segments.AddEndpointFilter(ManagementEndpoints.SegmentsSupportedFilterAsync);
+        segments.MapGet("", ManagementEndpoints.ListSegmentsAsync);
+        segments.MapPost("", ManagementEndpoints.CreateSegmentAsync);
+        segments.MapGet("/{key}", ManagementEndpoints.GetSegmentAsync);
+        segments.MapPatch("/{key}", ManagementEndpoints.UpdateSegmentMetadataAsync);
+        segments.MapPut("/{key}/rule", ManagementEndpoints.SetSegmentRuleAsync);
+        segments.MapPost("/{key}/archive", ManagementEndpoints.ArchiveSegmentAsync);
+        segments.MapPost("/{key}/restore", ManagementEndpoints.RestoreSegmentAsync);
+        segments.MapDelete("/{key}", ManagementEndpoints.PurgeSegmentAsync);
+        segments.MapGet("/{key}/audit", ManagementEndpoints.GetSegmentAuditHistoryAsync);
+        segments.MapPost("/{key}/evaluate", ManagementEndpoints.EvaluateSegmentAsync);
 
         return group;
     }

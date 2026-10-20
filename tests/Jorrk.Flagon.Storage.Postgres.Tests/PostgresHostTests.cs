@@ -15,7 +15,7 @@ public class PostgresHostTests(PostgresFixture db) : IClassFixture<PostgresFixtu
         await using var host = await FlagonTestHost.StartAsync(o => o.Flagon = f => f.UsePostgresStorage(db.ConnectionString, schema));
 
         Assert.IsType<PostgresFlagStore>(host.Store);
-        Assert.Equal(1, await db.ScalarAsync($"SELECT MAX(version) FROM \"{schema}\".schema_version"));
+        Assert.Equal(PostgresFlagStore.GetMigrationScripts().Count, await db.ScalarAsync($"SELECT MAX(version) FROM \"{schema}\".schema_version"));
 
         var created = await host.Admin.CreateAsync(new CreateFlagRequest("new-checkout"));
         Assert.False(host.Flagon.IsEnabled("new-checkout", defaultValue: true));
@@ -127,7 +127,7 @@ public class PostgresHostTests(PostgresFixture db) : IClassFixture<PostgresFixtu
         Assert.True(host.Flagon.IsEnabled("dba-managed"));
 
         await host.Store.ApplyMigrationsAsync();
-        Assert.Equal(1L, await db.ScalarAsync($"SELECT COUNT(*) FROM \"{schema}\".schema_version"));
+        Assert.Equal((long)PostgresFlagStore.GetMigrationScripts().Count, await db.ScalarAsync($"SELECT COUNT(*) FROM \"{schema}\".schema_version"));
     }
 
     [Fact]

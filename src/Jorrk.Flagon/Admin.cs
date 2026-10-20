@@ -18,7 +18,8 @@ namespace Jorrk.Flagon;
 /// Optional flagd targeting rule (JsonLogic plus flagd's operators). A rule that matches serves the variant it names
 /// (<c>"on"</c> or <c>"off"</c> for a boolean flag); otherwise the flag serves <paramref name="Enabled"/> (or
 /// <paramref name="DefaultVariant"/>). Validated with Flagon's
-/// targeting engine before anything is written; <c>$ref</c> is not supported (inline the evaluator instead).
+/// targeting engine before anything is written. It may reference segments with <c>{"$ref": "&lt;segment-key&gt;"}</c>
+/// (each must exist and not be archived); they are inlined when the rule is compiled.
 /// </param>
 /// <param name="Variants">
 /// Optional named variants (name to JSON value): at least one; names non-empty, at most 128 characters and unique
@@ -66,7 +67,8 @@ public interface IFlagonAdmin
     /// (see <see cref="CreateFlagRequest"/>).
     /// </summary>
     /// <exception cref="FlagValidationException">The request is invalid.</exception>
-    /// <exception cref="FlagTargetingException">The request's targeting rule does not compile.</exception>
+    /// <exception cref="FlagTargetingException">The request's targeting rule does not compile, or references a segment that does not exist.</exception>
+    /// <exception cref="SegmentArchivedException">The request's targeting rule references an archived segment.</exception>
     /// <exception cref="FlagAlreadyExistsException">A flag with the key already exists.</exception>
     Task<FlagRecord> CreateAsync(CreateFlagRequest request, CancellationToken cancellationToken = default);
 
@@ -92,9 +94,13 @@ public interface IFlagonAdmin
     /// <summary>
     /// Replaces a flag's flagd targeting rule, or removes it when <paramref name="targeting"/> is null (or JSON
     /// <c>null</c>). Its state, variants, default variant and metadata are untouched. The rule is validated with Flagon's
-    /// targeting engine before anything is written; <c>$ref</c> is not supported (inline the evaluator instead).
+    /// targeting engine before anything is written. It may reference segments with <c>{"$ref": "&lt;segment-key&gt;"}</c>.
     /// </summary>
-    /// <exception cref="FlagTargetingException">The rule does not compile; the flag is unchanged.</exception>
+    /// <exception cref="FlagTargetingException">
+    /// The rule does not compile, or references a segment that does not exist (<see cref="FlagTargetingException.Operator"/>
+    /// <c>$ref</c>); the flag is unchanged.
+    /// </exception>
+    /// <exception cref="SegmentArchivedException">The rule references an archived segment; the flag is unchanged.</exception>
     /// <exception cref="FlagValidationException">The flag is archived (restore it first); the flag is unchanged.</exception>
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
@@ -157,10 +163,17 @@ public interface IFlagonAdmin
     /// <exception cref="FlagValidationException">The flag is already archived.</exception>
     Task<FlagRecord> ArchiveAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
 
-    /// <summary>Restores an archived flag so it evaluates normally again.</summary>
+    /// <summary>
+    /// Restores an archived flag so it evaluates normally again. A flag whose targeting references segments can only be
+    /// restored while they all exist and are not archived (restore the segments first).
+    /// </summary>
     /// <exception cref="FlagNotFoundException">No flag exists with the key.</exception>
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     /// <exception cref="FlagValidationException">The flag is not archived.</exception>
+    /// <exception cref="SegmentArchivedException">The flag's targeting references an archived segment.</exception>
+    /// <exception cref="FlagTargetingException">
+    /// The flag's targeting references a segment that does not exist, or no longer compiles with its segments inlined.
+    /// </exception>
     Task<FlagRecord> RestoreAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -181,4 +194,91 @@ public interface IFlagonAdmin
 
     /// <summary>Usage of every key that has been evaluated (one report per key, ordered by key), for flag-list views.</summary>
     Task<IReadOnlyList<FlagUsageReport>> ListUsageAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether the store supports segments (implements <see cref="ISegmentStore"/>). When it does not, every segment
+    /// method throws <see cref="NotSupportedException"/>.
+    /// </summary>
+    bool SupportsSegments { get; }
+
+    /// <summary>Lists all segments, archived ones included.</summary>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<IReadOnlyList<SegmentRecord>> ListSegmentsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Gets a segment, or null if none exists with <paramref name="key"/>.</summary>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<SegmentRecord?> GetSegmentAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates a segment with source <see cref="FlagSource.Manual"/>. Its rule must be a rule (not absent, <c>null</c> or
+    /// <c>{}</c>), contain no <c>$ref</c> and compile on its own. It can be referenced at once.
+    /// </summary>
+    /// <exception cref="FlagValidationException">The key or a tag is invalid.</exception>
+    /// <exception cref="SegmentRuleException">The rule is rejected.</exception>
+    /// <exception cref="SegmentAlreadyExistsException">A segment with the key already exists.</exception>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<SegmentRecord> CreateSegmentAsync(CreateSegmentRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces a segment's rule. The rule follows the create-time rules, and every non-archived flag that references the
+    /// segment must still compile with it inlined, so an edit can never break a flag. Flags referencing it serve the new
+    /// audience from the next refresh (this app's at once).
+    /// </summary>
+    /// <exception cref="SegmentRuleException">
+    /// The rule is rejected, or a flag referencing the segment would no longer compile (the message names it); the
+    /// segment is unchanged.
+    /// </exception>
+    /// <exception cref="FlagValidationException">The segment is archived (restore it first).</exception>
+    /// <exception cref="SegmentNotFoundException">No segment exists with the key.</exception>
+    /// <exception cref="SegmentVersionConflictException">The segment changed since <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<SegmentRecord> SetSegmentRuleAsync(string key, JsonElement rule, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>Changes a segment's description and/or tags; its rule is untouched.</summary>
+    /// <exception cref="FlagValidationException">A tag is invalid.</exception>
+    /// <exception cref="SegmentNotFoundException">No segment exists with the key.</exception>
+    /// <exception cref="SegmentVersionConflictException">The segment changed since <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<SegmentRecord> UpdateSegmentMetadataAsync(string key, UpdateSegmentMetadataRequest request, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Archives a segment. It keeps resolving for the (archived) flags that reference it, so evaluation never changes, but
+    /// it can no longer be newly referenced or edited. Refused while any non-archived flag references it.
+    /// </summary>
+    /// <exception cref="SegmentInUseException">A non-archived flag references the segment.</exception>
+    /// <exception cref="FlagValidationException">The segment is already archived.</exception>
+    /// <exception cref="SegmentNotFoundException">No segment exists with the key.</exception>
+    /// <exception cref="SegmentVersionConflictException">The segment changed since <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<SegmentRecord> ArchiveSegmentAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>Restores an archived segment so it can be referenced and edited again.</summary>
+    /// <exception cref="FlagValidationException">The segment is not archived.</exception>
+    /// <exception cref="SegmentNotFoundException">No segment exists with the key.</exception>
+    /// <exception cref="SegmentVersionConflictException">The segment changed since <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<SegmentRecord> RestoreSegmentAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Permanently deletes an archived segment (its audit history is kept). Refused while any flag, archived or not,
+    /// references it, since an archived flag can be restored.
+    /// </summary>
+    /// <remarks>
+    /// The check runs before the write and is not atomic with concurrent flag writes: a flag that starts referencing the
+    /// segment meanwhile serves PARSE_ERROR (logged once per snapshot) until it is edited.
+    /// </remarks>
+    /// <exception cref="SegmentInUseException">A flag references the segment.</exception>
+    /// <exception cref="FlagValidationException">The segment is not archived.</exception>
+    /// <exception cref="SegmentNotFoundException">No segment exists with the key.</exception>
+    /// <exception cref="SegmentVersionConflictException">The segment changed since <paramref name="expectedVersion"/>.</exception>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task PurgeSegmentAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>The audit history of the segment <paramref name="key"/>, newest first (empty if none). Survives purges.</summary>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<IReadOnlyList<SegmentAuditEntry>> GetSegmentAuditHistoryAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>The flags whose targeting references the segment <paramref name="key"/>, ordered by flag key, read from the store.</summary>
+    /// <exception cref="NotSupportedException">The store does not support segments.</exception>
+    Task<IReadOnlyList<SegmentReference>> GetSegmentUsageAsync(string key, CancellationToken cancellationToken = default);
 }

@@ -97,6 +97,17 @@ public abstract class FlagdParityTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task Flag_set_evaluators_are_stored_as_segments_and_flags_keep_their_references()
+    {
+        var store = FlagdTestbed.SeedStore(FlagdTestbed.Suites.Single(s => s.FlagFiles.Contains("flags/evaluator-refs.json")));
+
+        Assert.NotNull(await store.GetSegmentAsync("is_ballmer"));
+        var flag = await store.GetAsync("some-email-targeted-flag");
+        Assert.Equal(["is_ballmer"], SegmentRefs.References(flag!.Document.Targeting));
+        Assert.Contains(FlagdTestbed.Runnable, c => c.FlagKey == "ref-whitespace-compact-flag");
+    }
+
+    [Fact]
     public void Summary()
     {
         var expected = ExpectedFailures.For(CompilerName);

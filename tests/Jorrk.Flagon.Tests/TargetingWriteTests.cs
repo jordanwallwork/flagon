@@ -47,7 +47,7 @@ public class TargetingWriteTests
     }
 
     [Fact]
-    public async Task A_rule_with_an_unresolved_ref_is_rejected_because_flagon_has_no_flag_set_evaluators()
+    public async Task A_rule_referencing_a_segment_that_does_not_exist_is_rejected_at_the_reference()
     {
         await using var host = await FlagonTestHost.StartAsync();
 
@@ -56,8 +56,8 @@ public class TargetingWriteTests
 
         Assert.Equal("$ref", ex.Operator);
         Assert.Equal("/if/0", ex.Path);
-        Assert.Contains("is_staff", ex.Message);
-        Assert.Contains("$evaluators", ex.Message);
+        Assert.Equal("segment 'is_staff' does not exist", ex.Error);
+        Assert.Null(await host.Admin.GetAsync("ref"));
     }
 
     [Theory]

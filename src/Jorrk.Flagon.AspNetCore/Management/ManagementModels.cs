@@ -30,6 +30,8 @@ internal sealed record FlagResponse(
     string? UpdatedBy,
     JsonElement? Targeting,
     RolloutResponse? Rollout,
+    IReadOnlyList<string> Segments,
+    SegmentTargetingResponse? SegmentTargeting,
     FlagUsageResponse Usage)
 {
     public static FlagResponse From(FlagRecord record, FlagUsageReport? usage)
@@ -59,8 +61,19 @@ internal sealed record FlagResponse(
             metadata.UpdatedBy,
             document.Targeting,
             RolloutResponse.From(RolloutShape.Split(document.Targeting, document.Variants)),
+            SegmentRefs.References(document.Targeting),
+            SegmentTargetingResponse.From(SegmentShape.Match(document.Targeting, document.Variants)),
             FlagUsageResponse.From(usage));
     }
+}
+
+/// <summary>
+/// Present when the flag's targeting is exactly "serve a variant to segments" (see <see cref="SegmentShape"/>), so tooling
+/// can edit it as a segment picker instead of a rule.
+/// </summary>
+internal sealed record SegmentTargetingResponse(IReadOnlyList<string> Segments, string Variant)
+{
+    public static SegmentTargetingResponse? From(SegmentTargeting? shape) => shape is null ? null : new(shape.Segments, shape.Variant);
 }
 
 /// <summary>
@@ -165,3 +178,90 @@ internal sealed record EvaluateResponse(
         details.ErrorCode == Jorrk.Flagon.ErrorCode.None ? null : details.ErrorCode.ToWireName(),
         details.ErrorMessage);
 }
+
+/// <summary>
+/// A segment as returned by the management API. <c>keys</c> is present when the rule is exactly a list of targeting keys
+/// (see <see cref="SegmentListShape"/>). <c>usedBy</c> is the number of flags referencing it in a list, and those flags
+/// (with whether each is archived) for a single segment.
+/// </summary>
+internal sealed record SegmentResponse(
+    string Key,
+    long Version,
+    JsonElement Rule,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? Keys,
+    bool Archived,
+    string? Description,
+    IReadOnlyList<string> Tags,
+    string Source,
+    DateTimeOffset? CreatedAt,
+    string? CreatedBy,
+    DateTimeOffset? UpdatedAt,
+    string? UpdatedBy,
+    object UsedBy)
+{
+    public static SegmentResponse From(SegmentRecord record, object usedBy)
+    {
+        var metadata = record.Document.Metadata;
+        return new SegmentResponse(
+            record.Key,
+            record.Version,
+            record.Document.Rule,
+            SegmentListShape.Keys(record.Document.Rule),
+            record.Archived,
+            metadata.Description,
+            metadata.Tags,
+            ManagementEndpoints.SourceName(metadata.Source),
+            metadata.CreatedAt,
+            metadata.CreatedBy,
+            metadata.UpdatedAt,
+            metadata.UpdatedBy,
+            usedBy);
+    }
+}
+
+/// <summary>A flag referencing a segment.</summary>
+internal sealed record SegmentUserResponse(string Key, bool Archived);
+
+/// <summary>A segment audit entry as returned by the management API. Documents are <c>{ rule, metadata }</c>.</summary>
+internal sealed record SegmentAuditEntryResponse(
+    long Id,
+    string Key,
+    string Action,
+    long Version,
+    DateTimeOffset Timestamp,
+    string? Actor,
+    string? ApplicationName,
+    JsonElement? Before,
+    JsonElement? After)
+{
+    public static SegmentAuditEntryResponse From(SegmentAuditEntry entry) => new(
+        entry.Id,
+        entry.Key,
+        entry.Action.ToString().ToLowerInvariant(),
+        entry.Version,
+        entry.Timestamp,
+        entry.Actor,
+        entry.ApplicationName,
+        ToJson(entry.Before),
+        ToJson(entry.After));
+
+    private static JsonElement? ToJson(SegmentDocument? document) =>
+        document is null ? null : JsonDocument.Parse(SegmentJson.Serialize(document)).RootElement.Clone();
+}
+
+/// <summary><c>rule</c> is required.</summary>
+internal sealed record CreateSegmentBody(string? Key, JsonElement Rule = default, string? Description = null, IReadOnlyList<string>? Tags = null);
+
+internal sealed record SetSegmentRuleBody(JsonElement Rule = default, long? Version = null);
+
+/// <summary><c>context</c> is the evaluation context; <c>rule</c>, when present, is an unsaved rule to test instead of the stored one.</summary>
+internal sealed record EvaluateSegmentBody(JsonElement Context = default, JsonElement Rule = default);
+
+/// <summary>
+/// A segment rule run against a context: <c>matches</c> is whether its result is truthy (JsonLogic), <c>result</c> the
+/// result as flagd would name a variant (null when the rule returned null), <c>error</c> why the rule failed while running.
+/// </summary>
+internal sealed record EvaluateSegmentResponse(
+    bool Matches,
+    string? Result,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Error);

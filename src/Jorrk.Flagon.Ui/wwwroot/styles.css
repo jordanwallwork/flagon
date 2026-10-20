@@ -153,3 +153,5 @@ fieldset.variants-editor p { margin: 0; }
 .variant-row { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 2fr) auto; gap: .4rem; align-items: start; }
 .variant-rows:empty { display: none; }
 .inline-form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.segment-choices { display: flex; flex-wrap: wrap; gap: .4rem 1rem; }
+.segment-choices label { font-weight: normal; }

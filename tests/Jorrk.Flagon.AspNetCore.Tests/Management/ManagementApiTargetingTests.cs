@@ -81,7 +81,7 @@ public class ManagementApiTargetingTests
     }
 
     [Fact]
-    public async Task A_rule_with_an_unresolved_ref_is_a_bad_request_explaining_that_evaluators_must_be_inlined()
+    public async Task A_rule_referencing_a_segment_that_does_not_exist_is_a_bad_request_at_the_reference()
     {
         await using var host = await StartAsync();
 
@@ -93,8 +93,8 @@ public class ManagementApiTargetingTests
 
         var problem = await ProblemAsync(response, HttpStatusCode.BadRequest);
         Assert.Equal("$ref", problem.GetProperty("operator").GetString());
-        Assert.Contains("$evaluators", problem.GetProperty("detail").GetString());
-        Assert.Contains("is_staff", problem.GetProperty("detail").GetString());
+        Assert.Equal("/if/0", problem.GetProperty("path").GetString());
+        Assert.Contains("segment 'is_staff' does not exist", problem.GetProperty("detail").GetString());
     }
 
     [Fact]

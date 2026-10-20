@@ -32,10 +32,10 @@ Each suite runs against its own flag files, in its own store.
 - **Case id**: `<feature path>:<line>`, the line of the scenario or of its Examples row. Expected-failure lists use
   these ids.
 - **`$ref` / `$evaluators`**: flagd substitutes `{"$ref": "<name>"}` with the flag set's `$evaluators` entry when it
-  loads a file. Flagon stores flags one at a time and has no flag-set `$evaluators`, so the harness does the same
-  substitution before storing. A reference to an unknown evaluator stays in the rule, and the compiler must then
-  report PARSE_ERROR, as flagd does. Because the substitution works on parsed JSON, the "whitespace around the colon"
-  cases pass trivially.
+  loads a file. The harness loads each `$evaluators` entry as a Flagon segment and stores flags with their `$ref`s
+  verbatim, so references resolve through segments (inlined before compilation, as flagd does). A reference to an
+  unknown evaluator is a missing segment, which the snapshot reports as PARSE_ERROR, as flagd does. The "whitespace
+  around the colon" cases pass trivially because flags are stored as parsed JSON.
 - **Typed getters**: every fixture flag is stored as it is, typed variant values and all. Each case is evaluated
   through the `IFlagon` getter its `<type>-flag` step names (`Boolean` → `GetBooleanDetails`, `String` →
   `GetStringDetails`, `Integer` → `GetIntDetails`, `Float` → `GetDoubleDetails`, `Object` → `GetObjectDetails`),

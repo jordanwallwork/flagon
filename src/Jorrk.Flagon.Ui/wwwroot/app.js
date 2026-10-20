@@ -27,6 +27,33 @@ function h(tag, attrs = {}, ...children) {
 }
 
 const flagHref = (key) => `#/flags/${encodeURIComponent(key)}`;
+const segmentHref = (key) => `#/segments/${encodeURIComponent(key)}`;
+
+/** Links to each of `keys` (made with `href`), comma-separated. */
+const links = (keys, href) => keys.flatMap((k, i) => [i ? ", " : "", h("a", { href: href(k) }, k)]);
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+let segmentsSupport = null;
+
+/**
+ * Resolves to true unless the management API answers 501 for segments (the store does not support them); asked once.
+ * Segment pages, the Segments link and the targeting card's segment controls are hidden without them.
+ */
+function segmentsSupported() {
+  segmentsSupport ??= api.listSegments().then(() => true, (e) => {
+    if (e instanceof ApiError && e.status === 501) return false;
+    segmentsSupport = null; // a transient failure: ask again next time
+    return true;
+  });
+  return segmentsSupport;
+}
+
+/** The segments to offer on a flag page, or null when the store has none (or they could not be loaded). */
+async function segmentsForFlags() {
+  if (!await segmentsSupported()) return null;
+  try { return await api.listSegments(); } catch { return null; }
+}
 
 function formatTime(iso) {
   if (!iso) return "never";
@@ -104,12 +131,18 @@ function badges(flag) {
   );
 }
 
-/** "rollout N%" for a boolean percentage rollout, "split 34/33/33" for any other split, "targeted" for any other rule, nothing without one. */
+/**
+ * "rollout N%" for a boolean percentage rollout, "split 34/33/33" for any other split, "segment" for a rule that references
+ * segments, "targeted" for any other rule, nothing without one.
+ */
 function targetingBadge(flag) {
   if (flag.rollout?.percentage !== undefined) return h("span", { class: "badge targeting", title: "Percentage rollout: this share of users gets on" }, `rollout ${flag.rollout.percentage}%`);
   if (flag.rollout) {
     const title = `Percentage split: ${flag.rollout.buckets.map((b) => `${b.variant} ${b.percentage}%`).join(", ")}`;
     return h("span", { class: "badge targeting", title }, `split ${splitWeights(flag.rollout.buckets)}`);
+  }
+  if (flag.segments?.length) {
+    return h("span", { class: "badge targeting", title: `Targets ${flag.segments.length === 1 ? "segment" : "segments"} ${flag.segments.join(", ")}` }, "segment");
   }
   if (hasTargeting(flag)) return h("span", { class: "badge targeting", title: "Has a targeting rule" }, "targeted");
   return null;
@@ -213,14 +246,14 @@ function confirmDialog({ title, detail, ok = "Confirm", typed }) {
   });
 }
 
-function errorView(e) {
+function errorView(e, [href, label] = ["#/", "Back to flags"]) {
   const message = e instanceof ApiError && e.status === 404 ? "Not found." : e.message;
-  return h("div", { class: "empty" }, h("p", {}, message), h("p", {}, h("a", { href: "#/" }, "Back to flags")));
+  return h("div", { class: "empty" }, h("p", {}, message), h("p", {}, h("a", { href }, label)));
 }
 
 // ---------------------------------------------------------------- list
 
-const listState = { q: "", tag: "", type: "", state: "", source: "", archived: "active", hygiene: "", targeting: "" };
+const listState = { q: "", tag: "", type: "", state: "", source: "", archived: "active", hygiene: "", targeting: "", segment: "" };
 
 async function renderList() {
   let flags;
@@ -231,6 +264,7 @@ async function renderList() {
   }
 
   const tags = [...new Set(flags.flatMap((f) => f.tags))].sort();
+  const usedSegments = [...new Set([...flags.flatMap((f) => f.segments ?? []), listState.segment].filter(Boolean))].sort();
   const tbody = h("tbody");
   const count = h("span", { class: "muted" });
 
@@ -256,6 +290,7 @@ async function renderList() {
     if (listState.targeting === "targeted" && !hasTargeting(f)) return false;
     if (listState.targeting === "rollout" && !f.rollout) return false;
     if (listState.targeting === "none" && hasTargeting(f)) return false;
+    if (listState.segment && !(f.segments ?? []).includes(listState.segment)) return false;
     return true;
   }
 
@@ -310,6 +345,7 @@ async function renderList() {
     select("archived", "Show", [["active", "Active"], ["archived", "Archived"], ["all", "All"]]),
     select("hygiene", "Hygiene", [["", "Any"], ["stale", "Stale"], ["mismatch", "Default mismatch"]]),
     select("targeting", "Targeting", [["", "Any"], ["targeted", "Targeted"], ["rollout", "Rollout or split"], ["none", "None"]]),
+    usedSegments.length > 0 && select("segment", "Uses segment", [["", "Any"], ...usedSegments.map((k) => [k, k])]),
     h("label", {}, "Stale after",
       h("select", {
         onchange: (e) => { try { localStorage.setItem(STALE_DAYS_KEY, e.target.value); } catch { /* ignore */ } draw(); },
@@ -363,11 +399,12 @@ function ruleError(e) {
 }
 
 /**
- * The Targeting card. Returns the card and `draft`, the editor's unsaved state, for other cards on the detail view:
+ * The Targeting card. `segments` are the segments to offer (null when the store has none). Returns the card and
+ * `draft`, the editor's unsaved state, for other cards on the detail view:
  * `draft.editing`, `draft.dirty`, `draft.text`, `draft.document()` (the flagd document to evaluate; throws SyntaxError
  * for invalid JSON) and `draft.subscribe(fn)` (called whenever any of those change; returns an unsubscribe function).
  */
-function targetingCard(flag, reload) {
+function targetingCard(flag, reload, segments) {
   const saved = hasTargeting(flag) ? JSON.stringify(flag.targeting, null, 2) : "";
   const card = h("section", { class: "card stack targeting" });
   const listeners = new Set();
@@ -386,19 +423,25 @@ function targetingCard(flag, reload) {
 
   function show() {
     editor = null;
-    // Only the server's recogniser (flag.rollout) decides what is a split; any other rule is never rewritten by the
-    // slider or the split editor.
-    const custom = hasTargeting(flag) && !flag.rollout;
+    // Only the server's recognisers (flag.rollout, flag.segmentTargeting) decide what is a split or a segment rule; any
+    // other rule is never rewritten by the slider, the split editor or the segment picker.
+    const segmentShaped = Boolean(flag.segmentTargeting) && segments !== null;
+    const custom = hasTargeting(flag) && !flag.rollout && !segmentShaped;
     // The on/off slider is the boolean two-bucket special case; any other split (or a non-boolean flag) gets the split editor.
     const slider = isBoolean(flag) && (!flag.rollout || flag.rollout?.percentage !== undefined);
     const splittable = Object.keys(flag.variants ?? {}).length >= 2;
     // replaceChildren doesn't flatten like h() does, so flatten and drop the conditional falsy children here.
     card.replaceChildren(...[
       h("h2", {}, "Targeting"),
+      flag.segments?.length > 0 && h("p", { class: "small" }, flag.segments.length === 1 ? "Uses segment " : "Uses segments ",
+        links(flag.segments, segmentHref), "."),
       custom
         ? [h("p", { class: "small muted" }, "Custom rule: edit as JSON."), h("pre", { class: "rule" }, saved)]
-        : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."),
-          slider ? rolloutControl() : splittable && splitControl()],
+        : segmentShaped
+          ? segmentControl()
+          : [!flag.rollout && h("p", { class: "muted" }, "No targeting: everyone gets the default variant."),
+            slider ? rolloutControl() : splittable && splitControl(),
+            !flag.rollout && segments !== null && segmentControl()],
       h("div", { class: "actions" },
         h("button", { disabled: flag.archived, title: locked, onclick: () => edit(saved) }, hasTargeting(flag) ? "Edit JSON" : "Add rule"),
         custom && h("button", { class: "danger", disabled: flag.archived, title: locked, onclick: clear }, "Clear…")),
@@ -422,6 +465,20 @@ function targetingCard(flag, reload) {
     /** The parsed draft as `{ rule }`, or undefined after showing why it doesn't parse. */
     function parsed() {
       try { return { rule: parseRule(editor.value) }; } catch (e) { status(ruleError(e)); return undefined; }
+    }
+
+    /** Inserts {"$ref": key} at the cursor, so a custom rule can use a segment. */
+    function insertReference(e) {
+      const key = e.target.value;
+      if (!key) return;
+      const text = JSON.stringify({ $ref: key });
+      const { selectionStart: start, selectionEnd: end, value } = editor;
+      editor.value = value.slice(0, start) + text + value.slice(end);
+      editor.selectionStart = editor.selectionEnd = start + text.length;
+      e.target.value = "";
+      editor.focus();
+      status();
+      changed();
     }
 
     function format() {
@@ -473,7 +530,10 @@ function targetingCard(flag, reload) {
         h("button", { type: "submit", class: "primary" }, "Save"),
         h("button", { type: "button", onclick: format }, "Format"),
         h("button", { type: "button", onclick: validate }, "Validate"),
-        h("button", { type: "button", onclick: show }, "Cancel"))));
+        h("button", { type: "button", onclick: show }, "Cancel"),
+        segments?.some((sg) => !sg.archived) && h("select", { "aria-label": "Insert segment reference", onchange: insertReference },
+          h("option", { value: "" }, "Insert segment reference…"),
+          segments.filter((sg) => !sg.archived).map((sg) => h("option", { value: sg.key }, sg.key))))));
     changed();
     editor.focus();
   }
@@ -601,6 +661,58 @@ function targetingCard(flag, reload) {
         saveButton,
         h("button", { type: "button", disabled: flag.archived, title: locked, onclick: even }, "Even split"),
         current.length > 0 && h("button", { type: "button", class: "danger", disabled: flag.archived, title: locked, onclick: remove }, "Remove split…")));
+  }
+
+  /**
+   * "Serve a variant to segments": writes the canonical shape the server reports back as `flag.segmentTargeting`
+   * ({"if":[{"$ref":"a"},"v",null]}, or {"or":[…]} over several). Archived segments are offered only when already chosen.
+   */
+  function segmentControl() {
+    const current = flag.segmentTargeting;
+    const chosen = new Set(current?.segments ?? []);
+    const offered = segments.filter((sg) => !sg.archived || chosen.has(sg.key));
+    if (!current && offered.length === 0) {
+      return h("p", { class: "small muted" }, "No segments yet: ", h("a", { href: "#/segments/new" }, "create one"),
+        " to target a reusable audience from any flag.");
+    }
+
+    const boxes = offered.map((sg) => ({ key: sg.key, input: h("input", { type: "checkbox", checked: chosen.has(sg.key), disabled: flag.archived }) }));
+    const names = Object.keys(flag.variants ?? {});
+    const preferred = current?.variant ?? (isBoolean(flag) ? "on" : names[0]);
+    const variant = h("select", { disabled: flag.archived, "aria-label": "Variant to serve" },
+      names.map((n) => h("option", { value: n, selected: n === preferred }, n)));
+    const message = h("p", { role: "status", class: "small error-text", hidden: true });
+    const showError = (content) => { message.replaceChildren(h("span", {}, content)); message.hidden = false; };
+
+    async function save(e) {
+      e.preventDefault();
+      const keys = boxes.filter((b) => b.input.checked).map((b) => b.key);
+      if (keys.length === 0) { showError("Pick at least one segment."); return; }
+      const refs = keys.map((k) => ({ $ref: k }));
+      const rule = { if: [refs.length === 1 ? refs[0] : { or: refs }, variant.value, null] };
+      if (await saveInline(() => api.setTargeting(flag.key, flag.version, rule), { button: e.submitter, showError, reload })) {
+        showNotice("Segment targeting saved.", "success");
+        await reload();
+      }
+    }
+
+    const remove = () => confirmClearTargeting(flag, reload, {
+      title: `Stop targeting segments on ${flag.key}?`,
+      detail: "The rule is removed and everyone gets the default variant. The audit history keeps a copy.",
+      ok: "Remove",
+    }, "Segment targeting removed.");
+
+    return h("form", { class: "stack rollout", onsubmit: save },
+      h("h3", {}, "Segments"),
+      h("p", { class: "small muted" }, "Serve a variant to anyone in any of the chosen segments; everyone else gets the default variant."),
+      h("div", { class: "segment-choices" }, boxes.map((b) => h("label", { class: "inline" }, b.input,
+        h("a", { href: segmentHref(b.key) }, b.key),
+        segments.find((sg) => sg.key === b.key)?.archived && h("span", { class: "badge archived" }, "archived")))),
+      h("label", {}, "Serve", variant),
+      message,
+      h("div", { class: "actions" },
+        h("button", { type: "submit", class: "primary", disabled: flag.archived, title: locked }, current ? "Save segments" : "Target segments"),
+        current && h("button", { type: "button", class: "danger", disabled: flag.archived, title: locked, onclick: remove }, "Remove…")));
   }
 
   const clear = () => confirmClearTargeting(flag, reload, {
@@ -760,16 +872,16 @@ function tryItCard(flag, draft) {
 // ---------------------------------------------------------------- detail
 
 async function renderDetail(key) {
-  let flag, audit;
+  let flag, audit, segments;
   try {
-    [flag, audit] = await Promise.all([api.getFlag(key), api.audit(key)]);
+    [flag, audit, segments] = await Promise.all([api.getFlag(key), api.audit(key), segmentsForFlags()]);
   } catch (e) {
     return [h("p", {}, h("a", { href: "#/" }, "← Flags")), errorView(e)];
   }
 
   const reload = () => route();
   // targeting.draft is the editor's unsaved rule, for other cards on this view to read (see targetingCard).
-  const targeting = targetingCard(flag, reload);
+  const targeting = targetingCard(flag, reload, segments);
 
   const description = h("textarea", { rows: 2, maxlength: 2000 }, flag.description ?? "");
   const tags = h("input", { value: flag.tags.join(", "), placeholder: "comma, separated, tags", spellcheck: "false" });
@@ -1357,6 +1469,440 @@ async function renderCreate() {
   return [h("p", {}, h("a", { href: "#/" }, "← Flags")), h("h1", {}, "New flag"), form];
 }
 
+// ---------------------------------------------------------------- segments
+
+/** Above this many keys, a list segment's editor warns that each evaluation scans the list. */
+const LARGE_LIST = 1000;
+
+const BACK_TO_SEGMENTS = ["#/segments", "Back to segments"];
+
+/** Tooltip on controls disabled because the segment is archived. */
+const SEGMENT_ARCHIVED_LOCKED = "Restore the segment to change its rule";
+
+const segmentListState = { q: "", tag: "", archived: "active" };
+
+async function renderSegmentList() {
+  let segments;
+  try {
+    segments = await api.listSegments();
+  } catch (e) {
+    return [h("h1", {}, "Segments"), errorView(e)];
+  }
+
+  const tags = [...new Set(segments.flatMap((sg) => sg.tags))].sort();
+  const tbody = h("tbody");
+  const count = h("span", { class: "muted" });
+
+  const select = (name, label, options) => h("label", {}, label,
+    h("select", { onchange: (e) => { segmentListState[name] = e.target.value; draw(); } },
+      options.map(([value, text]) => h("option", { value, selected: value === segmentListState[name] }, text))));
+
+  function matches(sg) {
+    const q = segmentListState.q.trim().toLowerCase();
+    if (q && !sg.key.toLowerCase().includes(q) && !(sg.description ?? "").toLowerCase().includes(q)) return false;
+    if (segmentListState.tag && !sg.tags.includes(segmentListState.tag)) return false;
+    if (segmentListState.archived === "active" && sg.archived) return false;
+    if (segmentListState.archived === "archived" && !sg.archived) return false;
+    return true;
+  }
+
+  /** Opens the flag list filtered to the flags using `key`. */
+  const showUsers = (key) => { listState.segment = key; listState.archived = "all"; };
+
+  function row(sg) {
+    return h("tr", { class: sg.archived ? "is-archived" : undefined },
+      h("td", {}, h("a", { href: segmentHref(sg.key), class: "key" }, sg.key), " ",
+        h("span", { class: "badges" },
+          sg.archived && h("span", { class: "badge archived", title: "Archived: keeps resolving, but can't be newly referenced" }, "archived"),
+          sg.source === "code" && h("span", { class: "badge code", title: "Defined in code" }, "code")),
+        sg.description && h("div", { class: "muted small" }, sg.description)),
+      h("td", { class: "small" }, sg.keys ? plural(sg.keys.length, "key") : "rule"),
+      h("td", {}, sg.tags.map((t) => h("span", { class: "tag" }, t))),
+      h("td", {}, sg.usedBy === 0
+        ? h("span", { class: "muted" }, "no flags")
+        : h("a", { href: "#/", onclick: () => showUsers(sg.key) }, plural(sg.usedBy, "flag"))));
+  }
+
+  function draw() {
+    const shown = segments.filter(matches);
+    tbody.replaceChildren(...(shown.length
+      ? shown.map(row)
+      : [h("tr", {}, h("td", { colspan: 4, class: "empty" }, segments.length ? "No segments match these filters." : "No segments yet."))]));
+    count.textContent = `${shown.length} of ${plural(segments.length, "segment")}`;
+  }
+
+  const search = h("input", {
+    type: "search", placeholder: "Search keys and descriptions", value: segmentListState.q, "aria-label": "Search",
+    oninput: (e) => { segmentListState.q = e.target.value; draw(); },
+  });
+
+  draw();
+  setTimeout(() => search.focus());
+  return [
+    h("div", { class: "title-row" }, h("h1", {}, "Segments"), count, h("a", { href: "#/segments/new", class: "button primary" }, "New segment")),
+    h("p", { class: "muted small" }, "Reusable audiences: define one once and reference it from any flag's targeting with ",
+      h("code", {}, '{"$ref": "<segment>"}'), ". Editing a segment changes every flag that uses it."),
+    h("div", { class: "filters" },
+      search,
+      select("tag", "Tag", [["", "Any"], ...tags.map((t) => [t, t])]),
+      select("archived", "Show", [["active", "Active"], ["archived", "Archived"], ["all", "All"]])),
+    h("table", { class: "flags" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Segment"), h("th", {}, "Rule"), h("th", {}, "Tags"), h("th", {}, "Used by"))),
+      tbody),
+  ];
+}
+
+/**
+ * A segment rule editor with two modes. List: targeting keys one per line, saved as the canonical
+ * {"in":[{"var":"targetingKey"},[…]]} rule; offered only when the saved rule is exactly that shape (the server reports it
+ * as `keys`) or for a new segment. Rule: a JSON editor. Switching to Rule shows the list as JSON; switching back is
+ * allowed only while that JSON is untouched, so a hand-written rule is never reinterpreted. Returns `el`, `rule()` (throws
+ * SyntaxError for invalid JSON, Error for an empty rule) and `dirty()`.
+ */
+function segmentRuleEditor({ keys, rule, disabled, onChange }) {
+  const listable = Array.isArray(keys);
+  let mode = listable ? "list" : "rule";
+  let generated = null; // the JSON text a list switch produced, while untouched
+  const listKeys = () => [...new Set(list.value.split("\n").map((k) => k.trim()).filter(Boolean))];
+  const listRule = () => ({ in: [{ var: "targetingKey" }, listKeys()] });
+
+  const warning = h("p", { class: "warning", hidden: true });
+  const list = h("textarea", {
+    class: "code", rows: 10, spellcheck: "false", autocomplete: "off", disabled, "aria-label": "Targeting keys, one per line",
+    placeholder: "user-1\nuser-2", oninput: () => { warn(); onChange?.(); },
+  }, (keys ?? []).join("\n"));
+  const json = h("textarea", {
+    class: "code", rows: 10, spellcheck: "false", autocomplete: "off", disabled, "aria-label": "Segment rule (JSON Logic)",
+    placeholder: '{"in": [{"var": "country"}, ["FR", "DE"]]}', oninput: () => onChange?.(),
+  }, rule === undefined ? "" : JSON.stringify(rule, null, 2));
+  const initial = { list: list.value, json: json.value };
+
+  function warn() {
+    const n = listKeys().length;
+    warning.hidden = n <= LARGE_LIST;
+    warning.textContent = `${n} keys: every evaluation scans the list, so very long lists slow down the flags that use this segment. A rule on an attribute (such as a plan or a role) scales better.`;
+  }
+
+  const tabs = h("div", { class: "actions", role: "tablist" });
+  const body = h("div", { class: "stack" });
+
+  function draw() {
+    const canList = listable && (mode === "list" || json.value === generated);
+    tabs.replaceChildren(
+      h("button", { type: "button", role: "tab", class: mode === "list" ? "primary" : undefined, "aria-selected": String(mode === "list"),
+        disabled: !canList, title: canList ? undefined : "Only a rule that is exactly a list of targeting keys can be edited as a list",
+        onclick: () => switchTo("list") }, "List"),
+      h("button", { type: "button", role: "tab", class: mode === "rule" ? "primary" : undefined, "aria-selected": String(mode === "rule"),
+        onclick: () => switchTo("rule") }, "Rule"));
+    body.replaceChildren(...(mode === "list"
+      ? [h("p", { class: "small muted" }, "Targeting keys, one per line: a user is in the segment when their targeting key is listed."), list, warning]
+      : [h("p", { class: "small muted" }, "A JSON Logic condition using flagd's operators: a user is in the segment when it is truthy. It can't reference another segment."), json]));
+  }
+
+  function switchTo(next) {
+    if (next === mode) return;
+    if (next === "rule") {
+      json.value = generated = JSON.stringify(listRule(), null, 2);
+    }
+    mode = next;
+    draw();
+    onChange?.();
+  }
+  json.addEventListener("input", () => { if (generated !== null && json.value !== generated) { generated = null; draw(); } });
+
+  warn();
+  draw();
+  return {
+    el: h("div", { class: "stack" }, tabs, body),
+    rule() {
+      if (mode === "list") return listRule();
+      if (json.value.trim() === "") throw new Error("A segment needs a rule.");
+      return JSON.parse(json.value);
+    },
+    dirty: () => list.value !== initial.list || json.value !== initial.json,
+  };
+}
+
+/**
+ * The "Test against a context" card: runs the saved rule (when `segment` exists) or the editor's draft for a context
+ * typed here, through the side-effect-free evaluate endpoint.
+ */
+function segmentTestCard(key, editor, saved) {
+  const targetingKey = h("input", { placeholder: "e.g. user-123", spellcheck: "false", autocomplete: "off" });
+  const attributes = h("textarea", { class: "code", rows: 3, spellcheck: "false", autocomplete: "off", placeholder: '{ "country": "FR", "plan": "pro" }' });
+  const result = h("div", { class: "tryit-result", hidden: true });
+
+  function context() {
+    const ctx = attributes.value.trim() === "" ? {} : JSON.parse(attributes.value);
+    if (typeof ctx !== "object" || ctx === null || Array.isArray(ctx)) throw new Error("Attributes must be a JSON object.");
+    if (targetingKey.value.trim()) ctx.targetingKey = targetingKey.value.trim();
+    return ctx;
+  }
+
+  async function run(which, e) {
+    const button = e.currentTarget;
+    const show = (...content) => { result.replaceChildren(h("h3", {}, which === "draft" ? "Draft" : "Saved"), ...content); result.hidden = false; };
+    let ctx, rule;
+    try {
+      ctx = context();
+      rule = which === "draft" ? editor.rule() : undefined;
+    } catch (err) {
+      show(h("p", { class: "small error-text" }, ruleError(err)));
+      return;
+    }
+    button.disabled = true;
+    try {
+      const r = await api.evaluateSegment(key || "draft", ctx, rule);
+      show(
+        h("p", {}, r.error
+          ? h("span", { class: "error-text" }, `The rule failed: ${r.error}`)
+          : h("strong", { class: r.matches ? "ok-text" : undefined }, r.matches ? "In the segment" : "Not in the segment")),
+        h("p", { class: "small muted" }, "Result: ", r.result === null ? "null" : h("code", {}, r.result)));
+    } catch (err) {
+      show(h("p", { class: "small error-text" }, ruleError(err)));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  return h("section", { class: "card stack tryit" },
+    h("h2", {}, "Test against a context"),
+    h("p", { class: "small muted" }, "Check who is in the segment. Nothing is saved."),
+    h("label", {}, "Targeting key", targetingKey),
+    h("label", {}, "Attributes (JSON)", attributes),
+    h("div", { class: "actions" },
+      saved && h("button", { type: "button", class: "primary", onclick: (e) => run("saved", e) }, "Test saved"),
+      h("button", { type: "button", onclick: (e) => run("draft", e) }, saved ? "Test draft" : "Test")),
+    result);
+}
+
+/** An error to show inline: for a segment in use, the message with links to the flags that reference it. */
+function segmentError(e) {
+  const flags = e instanceof ApiError ? e.problem.flags : undefined;
+  return Array.isArray(flags) && flags.length > 0
+    ? [h("strong", {}, `${e.problem.title}: `), e.message, " ", h("span", {}, "Flags: ", links(flags, flagHref), ".")]
+    : ruleError(e);
+}
+
+/** A short summary of a segment audit entry, with the raw documents behind a disclosure. */
+function describeSegmentChange(entry) {
+  const before = entry.before, after = entry.after;
+  const changes = [];
+  if (before && after) {
+    if (JSON.stringify(before.rule) !== JSON.stringify(after.rule)) changes.push("rule changed");
+    const bm = before.metadata ?? {}, am = after.metadata ?? {};
+    if ((bm.description ?? "") !== (am.description ?? "")) changes.push("description");
+    if ((bm.tags ?? "") !== (am.tags ?? "")) changes.push(`tags → ${am.tags || "none"}`);
+  }
+  return h("details", {},
+    h("summary", {}, changes.join(", ") || "details"),
+    h("pre", {}, JSON.stringify({ before, after }, null, 2)));
+}
+
+async function renderSegmentDetail(key) {
+  let segment, audit;
+  try {
+    [segment, audit] = await Promise.all([api.getSegment(key), api.segmentAudit(key)]);
+  } catch (e) {
+    return [h("p", {}, h("a", { href: "#/segments" }, "← Segments")), errorView(e, BACK_TO_SEGMENTS)];
+  }
+
+  const reload = () => route();
+  const locked = segment.archived ? SEGMENT_ARCHIVED_LOCKED : undefined;
+
+  // Rule
+  const ruleMessage = h("p", { role: "status", class: "small error-text", hidden: true });
+  const showRuleError = (content) => { ruleMessage.replaceChildren(h("span", {}, content)); ruleMessage.hidden = false; };
+  const editor = segmentRuleEditor({ keys: segment.keys, rule: segment.rule, disabled: segment.archived, onChange: () => { ruleMessage.hidden = true; } });
+  const ruleCard = h("form", {
+    class: "card stack",
+    onsubmit: async (e) => {
+      e.preventDefault();
+      let rule;
+      try { rule = editor.rule(); } catch (err) { showRuleError(ruleError(err)); return; }
+      if (await saveInline(() => api.setSegmentRule(segment.key, segment.version, rule), { button: e.submitter, showError: showRuleError, reload })) {
+        showNotice(segment.usedBy.length ? `Rule saved: ${plural(segment.usedBy.length, "flag")} now use${segment.usedBy.length === 1 ? "s" : ""} it.` : "Rule saved.", "success");
+        await reload();
+      }
+    },
+  },
+  h("h2", {}, "Rule"),
+  segment.archived && h("p", { class: "small muted" }, "Archived: the rule keeps resolving for the flags that reference it, but can't be changed until the segment is restored."),
+  editor.el,
+  ruleMessage,
+  h("div", { class: "actions" }, h("button", { type: "submit", class: "primary", disabled: segment.archived, title: locked }, "Save rule")));
+
+  // Details
+  const description = h("textarea", { rows: 2, maxlength: 2000 }, segment.description ?? "");
+  const tags = h("input", { value: segment.tags.join(", "), placeholder: "comma, separated, tags", spellcheck: "false" });
+  const metadata = h("form", {
+    class: "card stack",
+    onsubmit: async (e) => {
+      e.preventDefault();
+      const result = await write(() => api.updateSegmentMetadata(segment.key, segment.version, {
+        description: description.value.trim(),
+        tags: parseTags(tags.value),
+      }), reload);
+      if (result) { showNotice("Saved.", "success"); await reload(); }
+    },
+  },
+  h("h2", {}, "Details"),
+  h("label", {}, "Description", description),
+  h("label", {}, "Tags", tags),
+  h("div", {}, h("button", { type: "submit", class: "primary" }, "Save")));
+
+  // Lifecycle: refusals (in use, …) are shown here, with links to the flags concerned.
+  const lifecycleMessage = h("p", { role: "status", class: "small error-text", hidden: true });
+  async function lifecycleAction(action, success, after) {
+    try {
+      await action();
+    } catch (e) {
+      if (e instanceof ApiError && e.isVersionConflict) await conflictPrompt(e, reload);
+      else { lifecycleMessage.replaceChildren(h("span", {}, segmentError(e))); lifecycleMessage.hidden = false; }
+      return;
+    }
+    showNotice(success, "success");
+    await (after ?? reload)();
+  }
+  const live = segment.usedBy.filter((u) => !u.archived);
+  const lifecycle = h("section", { class: "card stack" }, h("h2", {}, "Lifecycle"),
+    segment.archived
+      ? [
+        h("p", {}, "This segment is archived: it keeps resolving for archived flags that reference it, but can't be newly referenced. Restore it to use it again, or purge it to delete it permanently (its audit history is kept)."),
+        h("div", { class: "actions" },
+          h("button", { onclick: () => lifecycleAction(() => api.restoreSegment(segment.key, segment.version), "Restored.") }, "Restore"),
+          h("button", {
+            class: "danger",
+            onclick: async () => {
+              const ok = await confirmDialog({
+                title: `Purge ${segment.key}?`,
+                detail: segment.usedBy.length
+                  ? `It can't be purged while flags reference it (${segment.usedBy.map((u) => u.key).join(", ")}), archived ones included.`
+                  : "The segment is deleted permanently. Its audit history is kept.",
+                ok: "Purge",
+                typed: segment.key,
+              });
+              if (ok) await lifecycleAction(() => api.purgeSegment(segment.key, segment.version), `${segment.key} purged.`, () => { location.hash = "#/segments"; });
+            },
+          }, "Purge…")),
+      ]
+      : [
+        h("p", {}, "Archive a segment that is no longer needed: it keeps resolving for archived flags, but can't be newly referenced. A segment that live flags reference can't be archived."),
+        h("div", { class: "actions" },
+          h("button", {
+            onclick: async () => {
+              const ok = await confirmDialog({
+                title: `Archive ${segment.key}?`,
+                detail: live.length
+                  ? `Live flags reference it (${live.map((u) => u.key).join(", ")}); remove the references first.`
+                  : "It can't be newly referenced or edited until it is restored. Flags that reference it are unaffected.",
+                ok: "Archive",
+              });
+              if (ok) await lifecycleAction(() => api.archiveSegment(segment.key, segment.version), "Archived.");
+            },
+          }, "Archive…")),
+      ],
+    lifecycleMessage);
+
+  const usedBy = h("section", { class: "card" }, h("h2", {}, "Used by"),
+    segment.usedBy.length === 0
+      ? h("p", { class: "muted" }, "No flag references this segment.")
+      : h("ul", {}, segment.usedBy.map((u) => h("li", {}, h("a", { href: flagHref(u.key), class: "key" }, u.key),
+        u.archived && [" ", h("span", { class: "badge archived" }, "archived")]))));
+
+  const history = h("section", { class: "card" }, h("h2", {}, "Audit history"),
+    audit.length === 0
+      ? h("p", { class: "muted" }, "No recorded changes.")
+      : h("table", { class: "audit" },
+        h("thead", {}, h("tr", {}, h("th", {}, "When"), h("th", {}, "Action"), h("th", {}, "By"), h("th", {}, "Application"), h("th", {}, "Version"), h("th", {}, "Change"))),
+        h("tbody", {}, audit.map((entry) => h("tr", {},
+          h("td", {}, time(entry.timestamp)),
+          h("td", {}, h("span", { class: `badge action-${entry.action}` }, entry.action)),
+          h("td", {}, entry.actor ?? h("span", { class: "muted" }, "system")),
+          h("td", {}, entry.applicationName ?? ""),
+          h("td", {}, String(entry.version)),
+          h("td", {}, describeSegmentChange(entry)))))));
+
+  return [
+    h("p", {}, h("a", { href: "#/segments" }, "← Segments")),
+    h("div", { class: "title-row" }, h("h1", { class: "key" }, segment.key),
+      h("span", { class: "badges" },
+        segment.archived && h("span", { class: "badge archived" }, "archived"),
+        segment.source === "code" && h("span", { class: "badge code", title: "Defined in code" }, "code"))),
+    h("p", { class: "muted small" },
+      `Version ${segment.version} · source ${segment.source} · created `, time(segment.createdAt), segment.createdBy ? ` by ${segment.createdBy}` : "",
+      " · updated ", time(segment.updatedAt), segment.updatedBy ? ` by ${segment.updatedBy}` : ""),
+    h("p", { class: "small" }, "Reference it from a flag's targeting with ", h("code", {}, JSON.stringify({ $ref: segment.key })), "."),
+    ruleCard,
+    segmentTestCard(segment.key, editor, true),
+    h("div", { class: "grid" }, metadata, lifecycle),
+    usedBy,
+    history,
+  ];
+}
+
+async function renderSegmentCreate() {
+  let existing = [];
+  try {
+    existing = (await api.listSegments()).map((sg) => sg.key);
+  } catch (e) {
+    showNotice(`Could not load existing segments to check for near-duplicates: ${e.message}`);
+  }
+
+  const key = h("input", { required: true, maxlength: 128, autocomplete: "off", spellcheck: "false", placeholder: "e.g. beta-testers" });
+  const keyHelp = h("p", { class: "small muted" }, "Letters, digits, '.', '_' and '-'; case-sensitive.");
+  const duplicateWarning = h("p", { class: "warning", hidden: true });
+  const description = h("textarea", { rows: 2, maxlength: 2000 });
+  const tags = h("input", { placeholder: "comma, separated, tags", spellcheck: "false" });
+  const submit = h("button", { type: "submit", class: "primary" }, "Create segment");
+  const editor = segmentRuleEditor({ keys: [] });
+
+  function check() {
+    const problem = key.value ? keyProblem(key.value) : null;
+    keyHelp.textContent = problem ?? "Letters, digits, '.', '_' and '-'; case-sensitive.";
+    keyHelp.className = problem ? "small error-text" : "small muted";
+    key.setCustomValidity(problem ?? "");
+
+    const exact = existing.includes(key.value);
+    const similar = key.value ? nearDuplicates(key.value, existing) : [];
+    duplicateWarning.hidden = !exact && similar.length === 0;
+    duplicateWarning.replaceChildren(
+      ...(exact
+        ? ["A segment with this key already exists: ", h("a", { href: segmentHref(key.value) }, key.value)]
+        : ["Similar keys already exist (they differ only by case or separators): ", ...links(similar, segmentHref), ". Check you are not creating a near-duplicate."]));
+    submit.disabled = Boolean(problem) || exact;
+  }
+  key.addEventListener("input", check);
+
+  const form = h("form", {
+    class: "card stack narrow-form",
+    onsubmit: async (e) => {
+      e.preventDefault();
+      const problem = keyProblem(key.value);
+      if (problem) { showNotice(problem); return; }
+      let rule;
+      try { rule = editor.rule(); } catch (err) { showNotice(err.message); return; }
+      submit.disabled = true;
+      try {
+        const created = await api.createSegment({ key: key.value, rule, description: description.value.trim() || undefined, tags: parseTags(tags.value) });
+        showNotice(`${created.key} created.`, "success");
+        location.hash = segmentHref(created.key);
+      } catch (err) {
+        showNotice(err.message);
+        submit.disabled = false;
+      }
+    },
+  },
+  h("label", {}, "Key", key), keyHelp, duplicateWarning,
+  h("div", { class: "stack" }, h("strong", {}, "Rule"), editor.el),
+  h("label", {}, "Description", description),
+  h("label", {}, "Tags", tags),
+  h("div", { class: "actions" }, submit, h("a", { href: "#/segments", class: "button" }, "Cancel")));
+
+  setTimeout(() => key.focus());
+  return [h("p", {}, h("a", { href: "#/segments" }, "← Segments")), h("h1", {}, "New segment"), form, segmentTestCard(null, editor, false)];
+}
+
 // ---------------------------------------------------------------- router
 
 let generation = 0;
@@ -1366,19 +1912,31 @@ async function route() {
   const hash = location.hash.replace(/^#/, "") || "/";
   let content;
   let section = "list";
+  const segments = await segmentsSupported();
   if (hash === "/new") {
     section = "new";
     content = await renderCreate();
+  } else if (segments && hash === "/segments") {
+    section = "segments";
+    content = await renderSegmentList();
+  } else if (segments && hash === "/segments/new") {
+    section = "segments";
+    content = await renderSegmentCreate();
+  } else if (segments && hash.startsWith("/segments/")) {
+    section = "segments";
+    content = await renderSegmentDetail(decodeURIComponent(hash.slice("/segments/".length)));
   } else if (hash.startsWith("/flags/")) {
     content = await renderDetail(decodeURIComponent(hash.slice("/flags/".length)));
   } else {
     content = await renderList();
   }
   if (current !== generation) return; // a newer navigation won
+  document.getElementById("segments-nav").hidden = !segments;
   for (const link of document.querySelectorAll("[data-nav]")) {
     link.toggleAttribute("aria-current", link.dataset.nav === section);
   }
-  view.replaceChildren(...content);
+  // Views return conditional children (false when absent); replaceChildren doesn't drop them as h() does.
+  view.replaceChildren(...content.flat().filter(Boolean));
 }
 
 window.addEventListener("hashchange", () => {
