@@ -249,14 +249,20 @@ internal sealed partial class FlagonEvaluator(
     {
         var validated = TargetingRules.ValidateSegmentRule(compiler, key, rule);
         var result = TargetingRules.Compile(compiler, key, validated).Rule!;
-        // JsonLogic truthiness of the result, through the registered engine: "!!" is part of flagd's operator set.
-        using var truthiness = JsonDocument.Parse($"{{\"!!\":[{validated.GetRawText()}]}}");
-        var matches = TargetingRules.Compile(compiler, key, truthiness.RootElement.Clone()).Rule;
-
         var target = new TargetingContext(key, context, time.GetUtcNow().ToUnixTimeSeconds());
         try
         {
-            return new SegmentPreview(matches?.Invoke(target) == "true", result(target), Error: null);
+            // JsonLogic truthiness of the result, through the registered engine: "!!" is part of flagd's operator set. The
+            // wrapper is a bigger rule than the segment's, so the engine may refuse it (a length or depth limit) even
+            // though it accepted the segment.
+            using var truthiness = JsonDocument.Parse($"{{\"!!\":[{validated.GetRawText()}]}}");
+            var matches = TargetingRules.Compile(compiler, key, truthiness.RootElement.Clone());
+            if (matches.Rule is not { } matchesRule)
+            {
+                return new SegmentPreview(false, result(target), $"whether the result counts as a match could not be worked out: {matches.Error?.Message}");
+            }
+
+            return new SegmentPreview(matchesRule(target) == "true", result(target), Error: null);
         }
         catch (Exception ex) when (!TargetingRules.IsFatal(ex))
         {
@@ -452,6 +458,6 @@ internal sealed partial class FlagonEvaluator(
 
 /// <summary>
 /// A segment rule run against a context: whether it matches (its result is JsonLogic-truthy), its result as flagd would
-/// name a variant (null when the rule returns null), or why the rule failed while running.
+/// name a variant (null when the rule returns null), and, when either could not be worked out, why.
 /// </summary>
 internal sealed record SegmentPreview(bool Matches, string? Result, string? Error);

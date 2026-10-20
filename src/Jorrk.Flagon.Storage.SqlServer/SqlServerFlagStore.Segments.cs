@@ -8,10 +8,10 @@ public partial class SqlServerFlagStore
 {
     /// <inheritdoc />
     /// <remarks>
-    /// One transaction first reads the change counter <c>WITH (HOLDLOCK)</c>: that waits for an in-flight write (which holds
-    /// the counter exclusively from the moment it takes its version) and blocks later writes from taking a version until
-    /// the load ends. Flags and segments are then read in the same transaction, so they hold exactly the writes up to the
-    /// version read.
+    /// One transaction first reads the change counter <c>WITH (UPDLOCK, HOLDLOCK)</c>, the same lock every write takes
+    /// first: the load waits for any in-flight write to commit and blocks later writes until it ends, so the flags and
+    /// segments it then reads hold exactly the writes up to the version read. Taking the writers' own lock (not a shared
+    /// one) also serialises loads with writers from earlier releases, which change rows before they increment the counter.
     /// </remarks>
     public async Task<FlagStoreContents> LoadAllWithSegmentsAsync(CancellationToken cancellationToken = default)
     {
@@ -19,7 +19,7 @@ public partial class SqlServerFlagStore
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
 
         long version;
-        await using (var command = Command(connection, transaction, $"SELECT [value] FROM {T("change_sequence")} WITH (HOLDLOCK) WHERE [id] = 1"))
+        await using (var command = Command(connection, transaction, $"SELECT [value] FROM {T("change_sequence")} WITH (UPDLOCK, HOLDLOCK) WHERE [id] = 1"))
         {
             version = (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
         }

@@ -285,9 +285,17 @@ public abstract partial class FlagStoreConformanceTests
             }
         })).ToArray();
 
-        await Task.WhenAll(writers);
-        await stop.CancelAsync();
-        await Task.WhenAll(loaders);
+        try
+        {
+            await Task.WhenAll(writers);
+        }
+        finally
+        {
+            // Also on a failed write, so no loader outlives the test and races the store's disposal.
+            await stop.CancelAsync();
+            await Task.WhenAll(loaders);
+        }
+
         loads.Add((writes.Max(w => w.Version), await segments.LoadAllWithSegmentsAsync()));
 
         var all = writes.ToArray();

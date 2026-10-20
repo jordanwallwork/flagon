@@ -259,6 +259,37 @@ public class SegmentTests
     }
 
     [Fact]
+    public async Task A_flag_that_no_longer_compiles_with_its_segments_cannot_be_restored()
+    {
+        var (host, staff) = await HostWithStaffAsync(o => o.Services = s => s.AddSingleton<ITargetingCompiler>(new LimitedCompiler(maxLength: 120)));
+        await using var _ = host;
+        var beta = await host.Admin.CreateAsync(new CreateFlagRequest("beta", Targeting: Json("""{"if":[{"and":[{"$ref":"staff"},true]},"on",null]}""")));
+        beta = await host.Admin.ArchiveAsync("beta", beta.Version);
+        // Archived dependents are not checked by a segment edit.
+        await host.Admin.SetSegmentRuleAsync("staff",
+            Json("""{"ends_with":[{"var":"email"},"@a-much-much-much-much-much-much-much-much-longer-domain.example.com"]}"""), staff.Version);
+
+        var ex = await Assert.ThrowsAsync<FlagTargetingException>(() => host.Admin.RestoreAsync("beta", beta.Version));
+
+        Assert.Contains("rule too long", ex.Error);
+        Assert.True((await host.Admin.GetAsync("beta"))!.Archived);
+    }
+
+    [Fact]
+    public async Task A_segment_preview_says_so_when_the_engine_refuses_the_truthiness_check()
+    {
+        // The segment (47 characters) fits the limit; the "!!" wrapper around it (56) does not.
+        await using var host = await FlagonTestHost.StartAsync(o => o.Services = s => s.AddSingleton<ITargetingCompiler>(new LimitedCompiler(maxLength: 50)));
+        var evaluator = host.Services.GetRequiredService<Internal.FlagonEvaluator>();
+
+        var preview = evaluator.PreviewSegment("staff", Json(StaffRule), Ada);
+
+        Assert.False(preview.Matches);
+        Assert.Equal("true", preview.Result);
+        Assert.Contains("rule too long", preview.Error);
+    }
+
+    [Fact]
     public async Task A_flag_referencing_a_purged_segment_cannot_be_restored()
     {
         var store = new InMemoryFlagStore();

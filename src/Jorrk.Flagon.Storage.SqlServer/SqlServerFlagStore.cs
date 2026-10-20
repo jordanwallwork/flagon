@@ -12,8 +12,8 @@ namespace Jorrk.Flagon.Storage.SqlServer;
 /// Flag writes run in a transaction that first locks the single-row change sequence, so writes are serialised, versions
 /// are committed in order (a refresher that reads version N never misses a later-committed lower version) and
 /// create-if-absent is race-free. Flag writes are rare, so the serialisation costs nothing in practice. Every write
-/// increments the sequence before it changes any row, which lets <see cref="LoadAllWithSegmentsAsync"/> read a consistent
-/// view by holding a shared lock on it. Segment writes (<see cref="ISegmentStore"/>) share the sequence.
+/// increments the sequence before it changes any row, and <see cref="LoadAllWithSegmentsAsync"/> reads a consistent view
+/// by taking the same lock on it. Segment writes (<see cref="ISegmentStore"/>) share the sequence.
 /// <para>This store is polled. <see cref="SqlServerPushFlagStore"/> adds push notifications.</para>
 /// </remarks>
 public partial class SqlServerFlagStore : IFlagStore, ISegmentStore

@@ -150,8 +150,10 @@ internal sealed partial class FlagonAdmin(
     }
 
     /// <summary>
-    /// Refuses to restore <paramref name="key"/> while its targeting references segments that are missing or archived. Only
-    /// checked when the flag is archived at <paramref name="expectedVersion"/>; otherwise the store reports the problem.
+    /// Refuses to restore <paramref name="key"/> while its targeting references segments that are missing or archived, or
+    /// no longer compiles with them inlined (segment edits don't check archived flags, so a restored flag would otherwise
+    /// serve PARSE_ERROR). Only checked when the flag is archived at <paramref name="expectedVersion"/>; otherwise the
+    /// store reports the problem.
     /// </summary>
     private async Task EnsureRestorableAsync(string key, long expectedVersion, CancellationToken cancellationToken)
     {
@@ -165,11 +167,7 @@ internal sealed partial class FlagonAdmin(
         }
 
         var segments = await segmentStore.LoadAllSegmentsAsync(cancellationToken).ConfigureAwait(false);
-        if (SegmentRefs.Inline(current.Document.Targeting!.Value, TargetingRules.RulesOf(segments)).Error is { } error)
-        {
-            throw new FlagTargetingException(key, error);
-        }
-
+        TargetingRules.Validate(compiler, key, current.Document.Targeting, TargetingRules.RulesOf(segments));
         EnsureReferencesUnarchived(key, current.Document.Targeting, segments);
     }
 

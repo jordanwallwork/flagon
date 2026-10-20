@@ -103,6 +103,21 @@ public class SegmentRefsTests
     }
 
     [Fact]
+    public void A_combination_too_deep_to_inline_is_a_compile_failure_not_a_crash()
+    {
+        // Each is within JSON's default depth limit (64); the inlined rule is not.
+        const int depth = 20; // each {"!":[ is two levels
+        var segment = Json(string.Concat(Enumerable.Repeat("{\"!\":[", depth)) + "true" + string.Concat(Enumerable.Repeat("]}", depth)));
+        var flag = Json(string.Concat(Enumerable.Repeat("{\"!\":[", depth)) + "{\"$ref\":\"deep\"}" + string.Concat(Enumerable.Repeat("]}", depth)));
+
+        var compilation = TargetingRules.Compile(new JsonLogicTargetingCompiler(), "my-flag", flag,
+            new Dictionary<string, JsonElement>(StringComparer.Ordinal) { ["deep"] = segment });
+
+        Assert.False(compilation.Succeeded);
+        Assert.Contains("could not be inlined", compilation.Error!.Message);
+    }
+
+    [Fact]
     public void Without_segments_a_reference_reaches_the_compiler_which_says_the_store_has_none()
     {
         var compilation = TargetingRules.Compile(new JsonLogicTargetingCompiler(), "my-flag", Json("""{"if":[{"$ref":"staff"},"on",null]}"""), segments: null);

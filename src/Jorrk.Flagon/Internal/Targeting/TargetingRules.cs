@@ -45,7 +45,17 @@ internal static class TargetingRules
             return Compile(compiler, key, targeting);
         }
 
-        var inlined = SegmentRefs.Inline(targeting, segments);
+        InlinedRule inlined;
+        try
+        {
+            inlined = SegmentRefs.Inline(targeting, segments);
+        }
+        catch (Exception ex) when (!IsFatal(ex))
+        {
+            // E.g. a flag and a segment each within JSON's depth limit whose combination is not: only this flag is broken.
+            return TargetingCompilation.Failure($"its segments could not be inlined: {ex.Message}");
+        }
+
         if (inlined.Error is { } refError)
         {
             return TargetingCompilation.Failure(refError.Message, refError.Path, refError.Operator);

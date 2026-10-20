@@ -171,7 +171,9 @@ public interface IFlagonAdmin
     /// <exception cref="FlagVersionConflictException">The flag changed since <paramref name="expectedVersion"/>.</exception>
     /// <exception cref="FlagValidationException">The flag is not archived.</exception>
     /// <exception cref="SegmentArchivedException">The flag's targeting references an archived segment.</exception>
-    /// <exception cref="FlagTargetingException">The flag's targeting references a segment that does not exist.</exception>
+    /// <exception cref="FlagTargetingException">
+    /// The flag's targeting references a segment that does not exist, or no longer compiles with its segments inlined.
+    /// </exception>
     Task<FlagRecord> RestoreAsync(string key, long expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
